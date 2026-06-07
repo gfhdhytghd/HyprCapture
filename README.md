@@ -32,6 +32,17 @@ https://github.com/user-attachments/assets/2c986639-7a3d-44ee-9f33-1b9b79ad9f1d
 
 
 ## Installation
+### Dependencies
+
+- Hyprland development headers for the exact Hyprland build you are running
+- `cmake`
+- `pkg-config`
+- a C++23-capable compiler
+- nlohmann-json
+- Qt 6 Core, Gui, and Widgets
+- LayerShellQt `layer-shell-qt`
+- FFmpeg for recording output
+- `wl-clipboard` for persistent Wayland clipboard ownership
 
 ### Install with `hyprpm`
 
@@ -86,17 +97,7 @@ plugin {
 
 ### Manual helper install
 
-Requirements:
-
-- Hyprland development headers for the exact Hyprland build you are running
-- `cmake`
-- `pkg-config`
-- a C++23-capable compiler
-- nlohmann-json
-- Qt 6 Core, Gui, and Widgets
-- LayerShellQt
-- FFmpeg for recording output
-- `wl-clipboard` for persistent Wayland clipboard ownership
+Install the Dependencies
 
 Build and install the helper:
 
