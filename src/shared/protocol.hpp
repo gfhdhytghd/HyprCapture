@@ -26,6 +26,7 @@ struct MonitorInfo {
     Rect        logicalGeometry;
     double      scale = 1.0;
     int         transform = 0;
+    bool        focused = false;
     std::string artifactPath;
     int         artifactWidth = 0;
     int         artifactHeight = 0;

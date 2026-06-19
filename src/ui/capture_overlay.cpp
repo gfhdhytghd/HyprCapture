@@ -46,6 +46,7 @@
 #include <QTemporaryDir>
 #include <QVBoxLayout>
 #include <QTimer>
+#include <QTransform>
 
 #include <algorithm>
 #include <cmath>
@@ -929,6 +930,50 @@ QImage loadRawRgba(const QString& path, int width, int height, bool topDown, qin
     return topDown ? copy : copy.flipped(Qt::Vertical);
 }
 
+bool monitorTransformSwapsAxes(int transform) {
+    return transform == 1 || transform == 3 || transform == 5 || transform == 7;
+}
+
+double aspectError(const QSize& size, const QSize& expected) {
+    if (size.isEmpty() || expected.isEmpty())
+        return std::numeric_limits<double>::infinity();
+    const double actualRatio = static_cast<double>(size.width()) / std::max(1, size.height());
+    const double expectedRatio = static_cast<double>(expected.width()) / std::max(1, expected.height());
+    if (actualRatio <= 0.0 || expectedRatio <= 0.0)
+        return std::numeric_limits<double>::infinity();
+    return std::abs(std::log(actualRatio / expectedRatio));
+}
+
+int inverseRotationDegreesForMonitorTransform(int transform) {
+    switch (transform) {
+        case 1:
+        case 5: return -90;
+        case 2:
+        case 6: return 180;
+        case 3:
+        case 7: return 90;
+        default: return 0;
+    }
+}
+
+QImage rotateMonitorArtifactToLogicalOrientation(const QImage& image, int transform) {
+    QTransform imageTransform;
+    imageTransform.rotate(inverseRotationDegreesForMonitorTransform(transform));
+    return image.transformed(imageTransform, Qt::FastTransformation).convertToFormat(QImage::Format_RGBA8888);
+}
+
+QImage normalizeMonitorArtifactImage(const QImage& image, int transform, const QRect& logicalGeometry) {
+    if (image.isNull() || !logicalGeometry.isValid() || !monitorTransformSwapsAxes(transform))
+        return image;
+
+    const QSize expected = logicalGeometry.size();
+    const QSize rotatedSize(image.height(), image.width());
+    if (aspectError(image.size(), expected) <= aspectError(rotatedSize, expected))
+        return image;
+
+    return rotateMonitorArtifactToLogicalOrientation(image, transform);
+}
+
 QRect projectedImageRect(const QRect& logicalRect, const QRect& fullGeometry, const QSize& imageSize) {
     if (!logicalRect.isValid() || !fullGeometry.isValid() || imageSize.isEmpty())
         return {};
@@ -1404,7 +1449,8 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     captureScreensBeforeOverlay();
     traceTiming(QStringLiteral("prepare_desktop"), preCaptureTimer.elapsed());
 
-    setGeometry(m_desktopGeometry.isValid() ? m_desktopGeometry : QRect(0, 0, 1280, 720));
+    m_overlayLogicalGeometry = preferredOverlayLogicalGeometry();
+    setGeometry(m_overlayLogicalGeometry.isValid() ? m_overlayLogicalGeometry : QRect(0, 0, 1280, 720));
 
     QElapsedTimer toolbarTimer;
     toolbarTimer.start();
@@ -1412,9 +1458,14 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     traceTiming(QStringLiteral("build_toolbar"), toolbarTimer.elapsed());
 
     winId();
+    QScreen* overlayScreen = screenForOverlayGeometry(m_overlayLogicalGeometry);
+    if (overlayScreen && windowHandle())
+        windowHandle()->setScreen(overlayScreen);
     if (auto* layerWindow = LayerShellQt::Window::get(windowHandle())) {
         layerWindow->setScope("hyprcapture-ui");
         layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
+        if (overlayScreen)
+            layerWindow->setScreen(overlayScreen);
         layerWindow->setAnchors(LayerShellQt::Window::Anchors{LayerShellQt::Window::AnchorTop} | LayerShellQt::Window::AnchorBottom |
                                 LayerShellQt::Window::AnchorLeft | LayerShellQt::Window::AnchorRight);
         layerWindow->setExclusiveZone(-1);
@@ -1454,8 +1505,11 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         MonitorArtifact artifact;
         artifact.name = qString(info.name);
         artifact.logicalGeometry = protocolRect(info.logicalGeometry);
+        artifact.transform = info.transform;
+        artifact.focused = info.focused;
         const QString artifactPath = qString(info.artifactPath);
         artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes);
+        artifact.image = normalizeMonitorArtifactImage(artifact.image, artifact.transform, artifact.logicalGeometry);
         artifactFiles.push_back(artifactPath);
         if (!artifact.logicalGeometry.isValid())
             continue;
@@ -1556,6 +1610,52 @@ void CaptureOverlay::captureScreensBeforeOverlay() {
         if (target.isValid())
             painter.drawPixmap(target, pixmap);
     }
+}
+
+QRect CaptureOverlay::preferredOverlayLogicalGeometry() const {
+    if (m_hasCursorLogicalPosition) {
+        for (const auto& artifact : m_monitorArtifacts) {
+            if (artifact.logicalGeometry.contains(m_cursorLogicalPosition))
+                return artifact.logicalGeometry;
+        }
+
+        if (QScreen* screen = QGuiApplication::screenAt(m_cursorLogicalPosition))
+            return screen->geometry();
+    }
+
+    for (const auto& artifact : m_monitorArtifacts) {
+        if (artifact.focused && artifact.logicalGeometry.isValid())
+            return artifact.logicalGeometry;
+    }
+
+    if (QScreen* screen = QGuiApplication::screenAt(QCursor::pos()))
+        return screen->geometry();
+    if (QScreen* screen = QGuiApplication::primaryScreen())
+        return screen->geometry();
+    return m_desktopGeometry.isValid() ? m_desktopGeometry : QRect(0, 0, 1280, 720);
+}
+
+QScreen* CaptureOverlay::screenForOverlayGeometry(const QRect& logicalGeometry) const {
+    QScreen* bestScreen = nullptr;
+    int      bestArea = 0;
+    for (QScreen* screen : QGuiApplication::screens()) {
+        if (!screen)
+            continue;
+        const QRect intersection = logicalGeometry.intersected(screen->geometry());
+        const int area = intersection.isValid() ? intersection.width() * intersection.height() : 0;
+        if (area > bestArea) {
+            bestScreen = screen;
+            bestArea = area;
+        }
+    }
+
+    if (bestScreen)
+        return bestScreen;
+    if (m_hasCursorLogicalPosition)
+        bestScreen = QGuiApplication::screenAt(m_cursorLogicalPosition);
+    if (!bestScreen)
+        bestScreen = QGuiApplication::screenAt(QCursor::pos());
+    return bestScreen ? bestScreen : QGuiApplication::primaryScreen();
 }
 
 void CaptureOverlay::buildToolbar() {
@@ -2649,6 +2749,8 @@ QRect CaptureOverlay::captureRectForMode() const {
 QRect CaptureOverlay::fullscreenCaptureRect() const {
     if (currentFullscreenScope() == hyprcapture::FullscreenScope::Current)
         return localScreenRectAt(globalToLocalRect(QRect(cursorLogicalPosition(), QSize(1, 1))).topLeft());
+    if (m_desktopGeometry.isValid())
+        return globalToLocalRect(m_desktopGeometry);
     return rect();
 }
 
@@ -2680,20 +2782,20 @@ QPoint CaptureOverlay::clampedToRect(const QPoint& point, const QRect& bounds) c
 }
 
 QRect CaptureOverlay::globalToLocalRect(const QRect& rect) const {
-    if (m_desktopGeometry.isValid())
-        return QRect(rect.topLeft() - m_desktopGeometry.topLeft(), rect.size());
+    if (m_overlayLogicalGeometry.isValid())
+        return QRect(rect.topLeft() - m_overlayLogicalGeometry.topLeft(), rect.size());
     return QRect(mapFromGlobal(rect.topLeft()), rect.size());
 }
 
 QRect CaptureOverlay::localToDesktopLogicalRect(const QRect& rect) const {
-    if (m_desktopGeometry.isValid())
-        return QRect(m_desktopGeometry.topLeft() + rect.topLeft(), rect.size());
+    if (m_overlayLogicalGeometry.isValid())
+        return QRect(m_overlayLogicalGeometry.topLeft() + rect.topLeft(), rect.size());
     return QRect(QPoint(mapToGlobal(rect.topLeft())), rect.size());
 }
 
 QPoint CaptureOverlay::localToDesktopLogicalPoint(const QPoint& point) const {
-    if (m_desktopGeometry.isValid())
-        return m_desktopGeometry.topLeft() + point;
+    if (m_overlayLogicalGeometry.isValid())
+        return m_overlayLogicalGeometry.topLeft() + point;
     return mapToGlobal(point);
 }
 

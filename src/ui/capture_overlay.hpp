@@ -48,6 +48,8 @@ class CaptureOverlay final : public QMainWindow {
         QRect   logicalGeometry;
         QImage  image;
         QString name;
+        int     transform = 0;
+        bool    focused = false;
     };
 
     struct WindowArtifact {
@@ -66,6 +68,8 @@ class CaptureOverlay final : public QMainWindow {
     void buildToolbar();
     void parseSessionJson(const QString& json);
     void captureScreensBeforeOverlay();
+    QRect preferredOverlayLogicalGeometry() const;
+    QScreen* screenForOverlayGeometry(const QRect& logicalGeometry) const;
     void setMode(hyprcapture::CaptureMode mode);
     void updateToolbarControlsForMode();
     void beginPendingConfirm(hyprcapture::CaptureMode mode);
@@ -183,6 +187,7 @@ class CaptureOverlay final : public QMainWindow {
     QLabel*      m_status = nullptr;
     QImage       m_desktopImage;
     QRect        m_desktopGeometry;
+    QRect        m_overlayLogicalGeometry;
     int          m_sessionMonitorCount = 0;
     int          m_sessionWindowCount = 0;
     int          m_selectedWindowIndex = -1;

@@ -254,6 +254,7 @@ bool monitorValue(const Json& obj, MonitorInfo& out) {
     MonitorInfo monitor;
     if (!stringValue(obj, "name", monitor.name, MAX_METADATA_STRING_BYTES) || !rectValue(obj, "geometry", monitor.logicalGeometry) ||
         !doubleValue(obj, "scale", monitor.scale, 0.01, 100.0) || !intValue(obj, "transform", monitor.transform, 0, 7) ||
+        !boolValue(obj, "focused", monitor.focused, false) ||
         !stringValue(obj, "artifactPath", monitor.artifactPath, MAX_PATH_BYTES, false) ||
         !intValue(obj, "artifactWidth", monitor.artifactWidth, 0, MAX_ARTIFACT_DIMENSION, false) ||
         !intValue(obj, "artifactHeight", monitor.artifactHeight, 0, MAX_ARTIFACT_DIMENSION, false) ||
@@ -322,6 +323,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"geometry", rectJson(mon.logicalGeometry)},
             {"scale", boundedDouble(mon.scale, 0.01, 100.0, 1.0)},
             {"transform", std::clamp(mon.transform, 0, 7)},
+            {"focused", mon.focused},
             {"artifactPath", boundedString(mon.artifactPath, MAX_PATH_BYTES)},
             {"artifactWidth", boundedDimension(mon.artifactWidth)},
             {"artifactHeight", boundedDimension(mon.artifactHeight)},

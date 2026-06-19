@@ -81,7 +81,7 @@ int main() {
     session.defaults.watermarkWidth = "18%";
     session.defaults.watermarkOffset = "-2% 24px";
     session.cursorPosition = Point{.x = 120, .y = 240};
-    session.monitors.push_back({.name = "eDP-1", .logicalGeometry = {.x = 0, .y = 0, .width = 1920, .height = 1080}, .scale = 2.0, .transform = 0});
+    session.monitors.push_back({.name = "eDP-1", .logicalGeometry = {.x = 0, .y = 0, .width = 1920, .height = 1080}, .scale = 2.0, .transform = 0, .focused = true});
     session.monitors.back().artifactPath = "/tmp/monitor.rgba";
     session.monitors.back().artifactWidth = 3840;
     session.monitors.back().artifactHeight = 2160;
@@ -121,6 +121,7 @@ int main() {
     require(json.find("\"roundingPower\":2.5") != std::string::npos, "rounding power json");
     require(json.find("\"borderSize\":2") != std::string::npos, "border size json");
     require(json.find("\"artifactPath\":\"/tmp/window.rgba\"") != std::string::npos, "artifact path json");
+    require(json.find("\"focused\":true") != std::string::npos, "focused monitor json");
     require(json.find("\"artifactTopDown\":true") != std::string::npos, "artifact orientation json");
     require(json.find("\"realBackgroundPath\":\"/tmp/window-real.rgba\"") != std::string::npos, "real background path json");
     require(json.find("\"realBackgroundWidth\":200") != std::string::npos, "real background width json");
@@ -138,6 +139,7 @@ int main() {
     require(decoded->defaults.recordSaveDir == "$XDG_VIDEOS_DIR/Screenrecords", "decoded record save dir");
     require(decoded->cursorPosition.has_value() && decoded->cursorPosition->x == 120 && decoded->cursorPosition->y == 240, "decoded cursor position");
     require(decoded->monitors.size() == 1 && decoded->windows.size() == 1, "decoded object counts");
+    require(decoded->monitors.front().focused, "decoded focused monitor");
     require(decoded->windows.front().artifactPath == "/tmp/window.rgba", "decoded artifact path");
 
     RecordingRequest recording;

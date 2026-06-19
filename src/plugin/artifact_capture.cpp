@@ -2536,6 +2536,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.logicalGeometry = monitorRect(monitor);
         info.scale = monitor->m_scale;
         info.transform = static_cast<int>(monitor->m_transform);
+        info.focused = monitor == Desktop::focusState()->monitor();
         const auto path = root / ("monitor-" + std::to_string(monitorIndex++) + ".rgba");
         if (captureMonitorArtifacts && renderMonitorArtifact(monitor, frozenTime, path, info.artifactWidth, info.artifactHeight, artifactBudget))
             info.artifactPath = path.string();
