@@ -39,6 +39,7 @@ constexpr std::array  kLuaFunctionNames = {
     "record_stop",
     "record_start",
     "window_capture",
+    "export_pipe",
     "record_start_dispatcher",
     "window_capture_dispatcher",
     "record_stop_dispatcher",
@@ -295,6 +296,13 @@ SDispatchResult dispatchWindowCapture(const std::string& args) {
     return dispatchResult(result);
 }
 
+SDispatchResult dispatchExportPipe(const std::string& args) {
+    const auto result = hyprcapture::captureExportPipeFromRequestFile(args);
+    if (!result.success)
+        HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] " + result.error, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+    return dispatchResult(result);
+}
+
 SDispatchResult dispatchCancel(const std::string&) {
     return {.success = true};
 }
@@ -333,6 +341,8 @@ std::string normalizeHyprcaptureDispatcher(std::string dispatcher) {
     if (dispatcher == "window_capture" || dispatcher == "windowCapture" || dispatcher == "hyprcapture.window_capture" ||
         dispatcher == "hyprcapture.windowCapture")
         return "hyprcapture:window-capture";
+    if (dispatcher == "export_pipe" || dispatcher == "exportPipe" || dispatcher == "hyprcapture.export_pipe" || dispatcher == "hyprcapture.exportPipe")
+        return "hyprcapture:export-pipe";
     if (dispatcher == "cancel" || dispatcher == "hyprcapture.cancel")
         return "hyprcapture:cancel";
     return dispatcher;
@@ -364,6 +374,10 @@ int luaRecordStart(lua_State* L) {
 
 int luaWindowCapture(lua_State* L) {
     return luaDispatchResult(L, dispatchWindowCapture(luaOptionalString(L, 1)));
+}
+
+int luaExportPipe(lua_State* L) {
+    return luaDispatchResult(L, dispatchExportPipe(luaOptionalString(L, 1)));
 }
 
 int luaRecordStartDispatcherCallback(lua_State* L) {
@@ -421,6 +435,8 @@ int luaDispatch(lua_State* L) {
         return luaDispatchResult(L, dispatchRecordStart(args));
     if (dispatcher == "hyprcapture:window-capture")
         return luaDispatchResult(L, dispatchWindowCapture(args));
+    if (dispatcher == "hyprcapture:export-pipe")
+        return luaDispatchResult(L, dispatchExportPipe(args));
     if (dispatcher == "hyprcapture:cancel")
         return luaDispatchResult(L, dispatchCancel(args));
 
@@ -464,6 +480,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     registerDispatcher("hyprcapture:record-stop", dispatchRecordStop);
     registerDispatcher("hyprcapture:record-start", dispatchRecordStart);
     registerDispatcher("hyprcapture:window-capture", dispatchWindowCapture);
+    registerDispatcher("hyprcapture:export-pipe", dispatchExportPipe);
     registerDispatcher("hyprcapture:cancel", dispatchCancel);
 
     if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
@@ -478,6 +495,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         registerLuaFunction("record_stop", luaRecordStop);
         registerLuaFunction("record_start", luaRecordStart);
         registerLuaFunction("window_capture", luaWindowCapture);
+        registerLuaFunction("export_pipe", luaExportPipe);
         registerLuaFunction("record_start_dispatcher", luaRecordStartDispatcher);
         registerLuaFunction("window_capture_dispatcher", luaWindowCaptureDispatcher);
         registerLuaFunction("record_stop_dispatcher", luaRecordStopDispatcher);

@@ -165,6 +165,7 @@ bind = SUPER SHIFT, F, hyprcapture:open,fullscreen
 | `hyprcapture:open,<mode>` | Open the overlay in `region`, `fullscreen`, or `window` mode. |
 | `hyprcapture:quick` | Capture immediately using `default_mode`; disabled unless `allow_quick = 1`. |
 | `hyprcapture:quick,<mode>` | Capture immediately in `region`, `fullscreen`, or `window` mode; disabled unless `allow_quick = 1`. |
+| `hyprcapture:export-pipe,<fifo>` | Export fullscreen compositor RGBA frames to a trusted private FIFO client. Intended for tools such as screenland. |
 | `hyprcapture:cancel` | Reserved dispatcher; currently returns success without changing an active helper. |
 
 When Hyprland is running with Lua config, the plugin also exposes matching functions under `hl.plugin.hyprcapture`:
@@ -179,7 +180,7 @@ hl.bind("SUPER + SHIFT + S", function()
 end)
 ```
 
-Available Lua functions are `open`, `quick`, `record`, `record_toggle`, `record_stop`, `record_start`, `cancel`, and `dispatch`.
+Available Lua functions are `open`, `quick`, `record`, `record_toggle`, `record_stop`, `record_start`, `window_capture`, `export_pipe`, `cancel`, and `dispatch`.
 `dispatch` accepts the dispatcher name plus an optional argument, for example `hl.plugin.hyprcapture.dispatch("open", "fullscreen")`.
 The internal helper uses `record_start_dispatcher` and `record_stop_dispatcher` so `hyprctl dispatch` can call back into the plugin under Lua config.
 
@@ -193,6 +194,22 @@ Use lowercase `s` for `SUPER + s`. In Lua config key strings, uppercase `S` mean
 - Fusion mode: the toolbar keeps the fullscreen action and configuration controls; drag anywhere to capture a region, or single-click a window to capture that window.
 - Esc cancels the helper.
 - The toolbar is anchored near the bottom of the screen and only shows controls relevant to the active mode.
+
+### External FIFO capture backend
+
+HyprCapture can act as a fullscreen compositor capture backend for another local tool. The client creates a private request FIFO and response FIFO under the per-user HyprCapture runtime root, writes a newline-terminated JSON request to the request FIFO, then calls:
+
+```sh
+hyprctl dispatch hyprcapture:export-pipe /dev/shm/hyprcapture-$UID/<client>/request.fifo
+```
+
+Request JSON v1:
+
+```json
+{"version":1,"responseFifo":"/dev/shm/hyprcapture-1000/<client>/response.fifo","mode":"fullscreen","fullscreenScope":"all"}
+```
+
+The response FIFO starts with `HYPRCAP_PIPE_V1`, a decimal JSON header length, the JSON header, and then the raw `rgba8888` monitor payloads in header order. FIFO paths must be absolute, owned by the current user, not group/other writable, and inside the private `hyprcapture-$UID` runtime root. Large payload writes happen from a managed writer thread so the compositor dispatcher does not block on FIFO backpressure.
 
 ### Recording
 

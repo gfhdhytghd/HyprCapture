@@ -26,8 +26,10 @@
 
 #include <GLES3/gl3.h>
 #include <drm_fourcc.h>
+#include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <cerrno>
 #include <cctype>
@@ -40,9 +42,15 @@
 #include <fcntl.h>
 #include <fstream>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <poll.h>
+#include <pthread.h>
+#include <signal.h>
 #include <sstream>
 #include <system_error>
 #include <sys/stat.h>
+#include <thread>
 #include <utility>
 #include <unistd.h>
 #include <vector>
@@ -59,6 +67,7 @@ using Render::GL::g_pHyprOpenGL;
 using Render::RENDER_MODE_FULL_FAKE;
 using Render::RENDER_PASS_ALL;
 using Render::eRenderPassMode;
+using Json = nlohmann::ordered_json;
 
 struct RgbaReadback {
     std::vector<unsigned char> pixels;
@@ -98,6 +107,22 @@ struct PendingRealBackgroundCapture {
     std::size_t           windowIndex = 0;
 };
 
+struct ExportPipeMonitorPayload {
+    MonitorInfo                info;
+    std::vector<unsigned char> rgba;
+};
+
+struct ExportPipePayload {
+    std::string                           responseFifo;
+    std::string                           headerJson;
+    std::vector<ExportPipeMonitorPayload> monitors;
+};
+
+struct ExportPipeWriter {
+    std::jthread                  thread;
+    std::shared_ptr<std::atomic_bool> done;
+};
+
 struct RealBackgroundCaptureTarget {
     PHLWINDOW window;
     CBox      artifactBox;
@@ -108,12 +133,17 @@ constexpr std::size_t MAX_SESSION_MONITORS = 64;
 constexpr std::size_t MAX_SESSION_WINDOWS = 512;
 constexpr std::size_t MAX_WINDOW_METADATA_BYTES = 4096;
 constexpr std::size_t MAX_WINDOW_CAPTURE_REQUEST_BYTES = 64 * 1024;
+constexpr std::size_t MAX_EXPORT_PIPE_REQUEST_BYTES = 64 * 1024;
 constexpr std::size_t MAX_SESSION_JSON_BYTES = 8 * 1024 * 1024;
 constexpr int         MAX_RGBA_READBACK_DIMENSION = 32768;
 constexpr std::size_t MAX_RGBA_READBACK_BYTES = 512ULL * 1024ULL * 1024ULL;
 constexpr std::size_t MAX_SESSION_ARTIFACT_BYTES = 768ULL * 1024ULL * 1024ULL;
 constexpr std::size_t RGBA_BYTES_PER_PIXEL = 4;
 constexpr auto        STALE_ARTIFACT_MAX_AGE = std::chrono::minutes(10);
+constexpr auto        EXPORT_PIPE_REQUEST_TIMEOUT = std::chrono::seconds(2);
+constexpr auto        EXPORT_PIPE_OPEN_TIMEOUT = std::chrono::seconds(5);
+constexpr auto        EXPORT_PIPE_WRITE_TIMEOUT = std::chrono::seconds(30);
+constexpr std::string_view EXPORT_PIPE_MAGIC = "HYPRCAP_PIPE_V1\n";
 constexpr int         WINDOW_BACKGROUND_MIN_ALPHA = 32;
 constexpr int         WINDOW_SHADOW_MAX_RGB = 32;
 constexpr int         WINDOW_SHADOW_MAX_ALPHA = 223;
@@ -199,6 +229,8 @@ struct AsyncPboReadbackState {
 };
 
 AsyncPboReadbackState g_windowRecordingPboReadback;
+std::mutex            g_exportPipeWritersMutex;
+std::vector<ExportPipeWriter> g_exportPipeWriters;
 
 Rect toRect(const CBox& box) {
     return {.x = box.x, .y = box.y, .width = box.w, .height = box.h};
@@ -297,6 +329,106 @@ std::optional<std::string> readPrivateRequestFile(const std::string& rawPath) {
     if (value.empty() || value.size() > MAX_WINDOW_CAPTURE_REQUEST_BYTES)
         return std::nullopt;
     return value;
+}
+
+bool trustedPrivateFifoPath(const std::string& rawPath) {
+    const std::filesystem::path path(rawPath);
+    if (rawPath.empty() || !path.is_absolute() || !pathIsInPrivateRuntimeRoot(path))
+        return false;
+
+    const auto native = path.string();
+    struct stat st {};
+    if (lstat(native.c_str(), &st) != 0 || !S_ISFIFO(st.st_mode) || st.st_uid != geteuid() || hasWritableGroupOrOther(st.st_mode))
+        return false;
+
+    return true;
+}
+
+int timeoutUntil(const std::chrono::steady_clock::time_point& deadline) {
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
+    return remaining.count() <= 0 ? 0 : static_cast<int>(std::min<std::int64_t>(remaining.count(), 250));
+}
+
+std::optional<std::string> readPrivateFifoLine(const std::string& rawPath) {
+    if (!trustedPrivateFifoPath(rawPath))
+        return std::nullopt;
+
+    const auto native = std::filesystem::path(rawPath).string();
+    const int  fd = open(native.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0)
+        return std::nullopt;
+
+    const auto deadline = std::chrono::steady_clock::now() + EXPORT_PIPE_REQUEST_TIMEOUT;
+    std::string value;
+    std::array<char, 4096> buffer {};
+
+    while (std::chrono::steady_clock::now() < deadline) {
+        const ssize_t chunk = read(fd, buffer.data(), buffer.size());
+        if (chunk > 0) {
+            value.append(buffer.data(), static_cast<std::size_t>(chunk));
+            if (value.size() > MAX_EXPORT_PIPE_REQUEST_BYTES) {
+                close(fd);
+                return std::nullopt;
+            }
+            if (const auto newline = value.find('\n'); newline != std::string::npos) {
+                value.resize(newline);
+                close(fd);
+                return value.empty() ? std::nullopt : std::optional<std::string>{value};
+            }
+            continue;
+        }
+
+        if (chunk < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR) {
+            close(fd);
+            return std::nullopt;
+        }
+
+        pollfd pfd{.fd = fd, .events = POLLIN | POLLHUP | POLLERR, .revents = 0};
+        const int ready = poll(&pfd, 1, timeoutUntil(deadline));
+        if (ready < 0 && errno != EINTR) {
+            close(fd);
+            return std::nullopt;
+        }
+    }
+
+    close(fd);
+    return std::nullopt;
+}
+
+std::string jsonStringValue(const Json& obj, const char* key) {
+    const auto it = obj.find(key);
+    return it != obj.end() && it->is_string() ? it->get<std::string>() : std::string {};
+}
+
+std::string validateExportPipeRequest(const std::string& requestJson, std::string& responseFifo) {
+    const auto root = Json::parse(requestJson, nullptr, false);
+    if (root.is_discarded() || !root.is_object())
+        return "invalid export pipe request json";
+
+    const auto versionIt = root.find("version");
+    if (versionIt != root.end() && (!versionIt->is_number_integer() || versionIt->get<int>() != 1))
+        return "unsupported export pipe protocol version";
+
+    responseFifo = jsonStringValue(root, "responseFifo");
+    if (!trustedPrivateFifoPath(responseFifo)) {
+        responseFifo.clear();
+        return "invalid export pipe response fifo";
+    }
+
+    const auto mode = jsonStringValue(root, "mode");
+    if (!mode.empty() && parseCaptureMode(mode, CaptureMode::Fullscreen) != CaptureMode::Fullscreen)
+        return "export pipe only supports fullscreen mode";
+
+    const auto scope = jsonStringValue(root, "fullscreenScope");
+    if (!scope.empty() && parseFullscreenScope(scope, FullscreenScope::All) != FullscreenScope::All)
+        return "export pipe only supports fullscreenScope=all";
+
+    return {};
+}
+
+std::string exportPipeErrorHeader(const std::string& error) {
+    const auto safeError = error.size() <= MAX_WINDOW_METADATA_BYTES ? error : error.substr(0, MAX_WINDOW_METADATA_BYTES);
+    return Json{{"ok", false}, {"version", 1}, {"error", safeError}}.dump(-1, ' ', false, Json::error_handler_t::replace);
 }
 
 bool writePrivateResponseFile(const std::string& rawPath, std::string_view bytes) {
@@ -399,6 +531,182 @@ std::string boundedString(const std::string& value, std::size_t maxBytes) {
     if (value.size() <= maxBytes)
         return value;
     return value.substr(0, maxBytes);
+}
+
+Json exportPipeRectJson(const Rect& rect) {
+    return Json{
+        {"x", rect.x},
+        {"y", rect.y},
+        {"width", rect.width},
+        {"height", rect.height},
+    };
+}
+
+std::string exportPipeOkHeader(const std::vector<ExportPipeMonitorPayload>& monitors) {
+    Json root{
+        {"ok", true},
+        {"version", 1},
+        {"format", "rgba8888"},
+        {"topDown", true},
+    };
+
+    root["monitors"] = Json::array();
+    for (const auto& monitor : monitors) {
+        root["monitors"].push_back(Json{
+            {"name", boundedString(monitor.info.name, MAX_WINDOW_METADATA_BYTES)},
+            {"geometry", exportPipeRectJson(monitor.info.logicalGeometry)},
+            {"scale", monitor.info.scale},
+            {"transform", monitor.info.transform},
+            {"artifactWidth", monitor.info.artifactWidth},
+            {"artifactHeight", monitor.info.artifactHeight},
+            {"byteLength", monitor.rgba.size()},
+        });
+    }
+
+    return root.dump(-1, ' ', false, Json::error_handler_t::replace);
+}
+
+void blockSigpipeForCurrentThread() {
+    sigset_t signals;
+    sigemptyset(&signals);
+    sigaddset(&signals, SIGPIPE);
+    pthread_sigmask(SIG_BLOCK, &signals, nullptr);
+}
+
+std::optional<int> openExportPipeWriter(const std::string& rawPath, std::stop_token stopToken) {
+    if (!trustedPrivateFifoPath(rawPath))
+        return std::nullopt;
+
+    const auto native = std::filesystem::path(rawPath).string();
+    const auto deadline = std::chrono::steady_clock::now() + EXPORT_PIPE_OPEN_TIMEOUT;
+    while (!stopToken.stop_requested() && std::chrono::steady_clock::now() < deadline) {
+        const int fd = open(native.c_str(), O_WRONLY | O_NONBLOCK | O_CLOEXEC | O_NOFOLLOW);
+        if (fd >= 0)
+            return fd;
+
+        if (errno != ENXIO && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)
+            return std::nullopt;
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+
+    return std::nullopt;
+}
+
+bool waitForExportPipeWritable(int fd, const std::chrono::steady_clock::time_point& deadline, std::stop_token stopToken) {
+    while (!stopToken.stop_requested() && std::chrono::steady_clock::now() < deadline) {
+        pollfd pfd{.fd = fd, .events = POLLOUT | POLLHUP | POLLERR, .revents = 0};
+        const int ready = poll(&pfd, 1, timeoutUntil(deadline));
+        if (ready > 0)
+            return (pfd.revents & POLLOUT) != 0;
+        if (ready < 0 && errno != EINTR)
+            return false;
+    }
+
+    return false;
+}
+
+bool writeExportPipeBytes(int fd, const unsigned char* data, std::size_t size, const std::chrono::steady_clock::time_point& deadline, std::stop_token stopToken) {
+    std::size_t written = 0;
+    while (written < size && !stopToken.stop_requested() && std::chrono::steady_clock::now() < deadline) {
+        const auto remaining = size - written;
+        const auto chunkSize = std::min<std::size_t>(remaining, static_cast<std::size_t>(std::numeric_limits<ssize_t>::max()));
+        const ssize_t chunk = write(fd, data + written, chunkSize);
+        if (chunk > 0) {
+            written += static_cast<std::size_t>(chunk);
+            continue;
+        }
+
+        if (chunk < 0 && errno == EINTR)
+            continue;
+        if (chunk < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            if (waitForExportPipeWritable(fd, deadline, stopToken))
+                continue;
+        }
+        return false;
+    }
+
+    return written == size;
+}
+
+bool writeExportPipeString(int fd, const std::string& value, const std::chrono::steady_clock::time_point& deadline, std::stop_token stopToken) {
+    return writeExportPipeBytes(fd, reinterpret_cast<const unsigned char*>(value.data()), value.size(), deadline, stopToken);
+}
+
+void exportPipeWriterMain(std::stop_token stopToken, ExportPipePayload payload, std::shared_ptr<std::atomic_bool> done) {
+    blockSigpipeForCurrentThread();
+    const auto markDone = [&]() {
+        if (done)
+            done->store(true, std::memory_order_release);
+    };
+
+    const auto fd = openExportPipeWriter(payload.responseFifo, stopToken);
+    if (!fd) {
+        markDone();
+        return;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + EXPORT_PIPE_WRITE_TIMEOUT;
+    const std::string prefix = std::string(EXPORT_PIPE_MAGIC) + std::to_string(payload.headerJson.size()) + "\n" + payload.headerJson;
+    bool ok = writeExportPipeString(*fd, prefix, deadline, stopToken);
+    for (const auto& monitor : payload.monitors) {
+        if (!ok)
+            break;
+        ok = writeExportPipeBytes(*fd, monitor.rgba.data(), monitor.rgba.size(), deadline, stopToken);
+    }
+
+    close(*fd);
+    markDone();
+}
+
+void reapExportPipeWritersLocked() {
+    for (auto it = g_exportPipeWriters.begin(); it != g_exportPipeWriters.end();) {
+        if (!it->done || !it->done->load(std::memory_order_acquire)) {
+            ++it;
+            continue;
+        }
+
+        if (it->thread.joinable())
+            it->thread.join();
+        it = g_exportPipeWriters.erase(it);
+    }
+}
+
+void startExportPipeWriter(ExportPipePayload payload) {
+    auto done = std::make_shared<std::atomic_bool>(false);
+    ExportPipeWriter writer{
+        .thread = std::jthread(exportPipeWriterMain, std::move(payload), done),
+        .done = done,
+    };
+
+    std::lock_guard lock(g_exportPipeWritersMutex);
+    reapExportPipeWritersLocked();
+    g_exportPipeWriters.push_back(std::move(writer));
+}
+
+void startExportPipeErrorWriter(const std::string& responseFifo, const std::string& error) {
+    if (responseFifo.empty())
+        return;
+    startExportPipeWriter({
+        .responseFifo = responseFifo,
+        .headerJson = exportPipeErrorHeader(error),
+    });
+}
+
+void shutdownExportPipeWriters() {
+    std::vector<ExportPipeWriter> writers;
+    {
+        std::lock_guard lock(g_exportPipeWritersMutex);
+        writers = std::move(g_exportPipeWriters);
+        g_exportPipeWriters.clear();
+    }
+
+    for (auto& writer : writers)
+        writer.thread.request_stop();
+    for (auto& writer : writers) {
+        if (writer.thread.joinable())
+            writer.thread.join();
+    }
 }
 
 bool containsPath(const std::vector<std::filesystem::path>& paths, const std::filesystem::path& path) {
@@ -1237,6 +1545,55 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     if (budget && !readback.pixels.empty() && !budget->consume(readback.pixels.size()))
         return {};
     return readback;
+}
+
+std::optional<ExportPipePayload> captureExportPipePayload(const std::string& responseFifo, std::string& error) {
+    if (!g_pCompositor || !g_pHyprRenderer || !g_pHyprOpenGL) {
+        error = "Hyprland renderer unavailable";
+        return std::nullopt;
+    }
+
+    ExportPipePayload payload;
+    payload.responseFifo = responseFifo;
+
+    const auto frozenTime = Time::steadyNow();
+    ArtifactBudget artifactBudget;
+    int monitorIndex = 0;
+    for (const auto& monitor : g_pCompositor->m_monitors) {
+        if (!monitor)
+            continue;
+
+        const int width = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
+        const int height = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+        auto readback = renderMonitorReadback(monitor, frozenTime, 0, 0, width, height, &artifactBudget);
+        if (readback.pixels.empty()) {
+            error = "monitor export readback failed";
+            return std::nullopt;
+        }
+
+        MonitorInfo info;
+        info.name = monitor->m_name.empty() ? "monitor-" + std::to_string(monitorIndex) : monitor->m_name;
+        info.logicalGeometry = monitorRect(monitor);
+        info.scale = monitor->m_scale;
+        info.transform = static_cast<int>(monitor->m_transform);
+        info.focused = monitor == Desktop::focusState()->monitor();
+        info.artifactWidth = readback.width;
+        info.artifactHeight = readback.height;
+        info.artifactTopDown = true;
+        payload.monitors.push_back({
+            .info = std::move(info),
+            .rgba = std::move(readback.pixels),
+        });
+        ++monitorIndex;
+    }
+
+    if (payload.monitors.empty()) {
+        error = "no active monitors to export";
+        return std::nullopt;
+    }
+
+    payload.headerJson = exportPipeOkHeader(payload.monitors);
+    return payload;
 }
 
 bool renderMonitorArtifact(const PHLMONITOR& monitor, const Time::steady_tp& frozenTime, const std::filesystem::path& path, int& width, int& height, ArtifactBudget& budget) {
@@ -2669,6 +3026,28 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     return {.success = true};
 }
 
+LaunchResult captureExportPipeFromRequestFile(const std::string& path) {
+    const auto requestJson = readPrivateFifoLine(path);
+    if (!requestJson)
+        return {.success = false, .error = "invalid export pipe request fifo"};
+
+    std::string responseFifo;
+    if (const auto validationError = validateExportPipeRequest(*requestJson, responseFifo); !validationError.empty()) {
+        startExportPipeErrorWriter(responseFifo, validationError);
+        return responseFifo.empty() ? LaunchResult{.success = false, .error = validationError} : LaunchResult{.success = true};
+    }
+
+    std::string error;
+    auto payload = captureExportPipePayload(responseFifo, error);
+    if (!payload) {
+        startExportPipeErrorWriter(responseFifo, error.empty() ? "export pipe capture failed" : error);
+        return {.success = true};
+    }
+
+    startExportPipeWriter(std::move(*payload));
+    return {.success = true};
+}
+
 std::optional<RecordingFrame> captureRecordingFrame(const RecordingFrameRequest& request) {
     if (request.mode == CaptureMode::Window)
         return captureWindowRecordingFrame(request);
@@ -2738,6 +3117,7 @@ void cleanupCompositorArtifacts(const CaptureSession& session) {
 }
 
 void shutdownArtifactCapture() {
+    shutdownExportPipeWriters();
     if (g_pHyprOpenGL)
         g_pHyprOpenGL->makeEGLCurrent();
     resetAsyncPboReadback(g_windowRecordingPboReadback);

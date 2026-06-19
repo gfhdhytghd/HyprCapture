@@ -31,6 +31,7 @@ struct RecordingFrame {
 
 CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool quick);
 LaunchResult captureWindowArtifactFromRequestFile(const std::string& path);
+LaunchResult captureExportPipeFromRequestFile(const std::string& path);
 std::optional<RecordingFrame> captureRecordingFrame(const RecordingFrameRequest& request);
 void resetRecordingCaptureState();
 std::string writeCompositorSessionJsonFile(const CaptureSession& session, std::string_view json);
