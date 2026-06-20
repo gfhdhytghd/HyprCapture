@@ -601,6 +601,34 @@ DispatchCommandResult evalHyprcaptureExpression(const QString& expression) {
     return {.success = false, .error = compactProcessErrorText(stderrData, stdoutData, QStringLiteral("eval failed"))};
 }
 
+DispatchCommandResult runHymissionCaptureInputCommand(const QString& action, const QString& token) {
+    const QString hyprctl = hyprcapture::ui::trustedSystemProgram(QStringLiteral("hyprctl"));
+    if (hyprctl.isEmpty() || action.isEmpty() || token.isEmpty())
+        return {.success = false, .error = QStringLiteral("hyprctl unavailable")};
+
+    QProcess process;
+    process.setProgram(hyprctl);
+    process.setArguments(QStringList{QStringLiteral("hymission-capture-input"), action, token});
+    process.setProcessEnvironment(hyprcapture::ui::trustedProcessEnvironment());
+    process.start();
+    if (!process.waitForStarted(1000))
+        return {.success = false, .error = QStringLiteral("hyprctl start failed")};
+    if (!process.waitForFinished(1000)) {
+        process.kill();
+        process.waitForFinished(500);
+        return {.success = false, .error = QStringLiteral("hyprctl timeout")};
+    }
+
+    const QByteArray stderrData = process.readAllStandardError();
+    const QByteArray stdoutData = process.readAllStandardOutput();
+    const QString    stdoutText = QString::fromUtf8(stdoutData).trimmed();
+    if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && stdoutText.startsWith(QStringLiteral("ok")) &&
+        !hyprctlDispatchOutputHasError(stderrData, stdoutData))
+        return {.success = true};
+
+    return {.success = false, .error = compactProcessErrorText(stderrData, stdoutData, QStringLiteral("hymission capture input failed"))};
+}
+
 QString luaStringLiteral(const QString& value) {
     const QJsonArray array{value};
     const QString json = QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
@@ -1442,6 +1470,7 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     parseTimer.start();
     parseSessionJson(sessionJson);
     m_confirmBeforeCapture = m_defaults.confirmBeforeCapture && !m_quick && !m_record && !m_recordActive;
+    beginHymissionCaptureInputSuppression();
     traceTiming(QStringLiteral("parse_session"), parseTimer.elapsed());
 
     QElapsedTimer preCaptureTimer;
@@ -1476,6 +1505,10 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     traceTiming(QStringLiteral("overlay_construct"), constructorTimer.elapsed());
     if (m_quick)
         QTimer::singleShot(0, this, &CaptureOverlay::finishCapture);
+}
+
+CaptureOverlay::~CaptureOverlay() {
+    endHymissionCaptureInputSuppression();
 }
 
 void CaptureOverlay::parseSessionJson(const QString& json) {
@@ -1526,8 +1559,11 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.appClass = qString(info.appClass);
         artifact.visibleGeometry = protocolRect(info.visibleGeometry);
         artifact.fullGeometry = protocolRect(info.fullGeometry);
-        if (info.selectionGeometry)
+        if (info.selectionGeometry) {
             artifact.selectionGeometry = protocolRect(*info.selectionGeometry);
+            if (artifact.selectionGeometry.isValid())
+                m_hymissionOverviewSession = true;
+        }
         artifact.rounding = info.rounding;
         artifact.roundingPower = info.roundingPower;
         artifact.borderSize = info.borderSize;
@@ -1748,7 +1784,10 @@ void CaptureOverlay::buildToolbar() {
         if (m_recordActive) {
             m_recordToggle->setChecked(true);
             if (stopRecording())
-                fadeOutThen([] { qApp->quit(); });
+                fadeOutThen([this] {
+                    endHymissionCaptureInputSuppression();
+                    qApp->quit();
+                });
             return;
         }
 
@@ -2621,6 +2660,11 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
             const int index = hoveredWindowIndex();
             if (index >= 0)
                 m_selectedWindowIndex = index;
+            if (selectedWindowUsesOverviewSelection()) {
+                m_pendingConfirm = false;
+                finishCapture();
+                return;
+            }
             updateStatus();
             update();
             return;
@@ -2649,7 +2693,7 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         if (windowIndex >= 0) {
             m_mode = hyprcapture::CaptureMode::Window;
             m_selectedWindowIndex = windowIndex;
-            if (confirmBeforeCaptureEnabled())
+            if (confirmBeforeCaptureEnabled() && !selectedWindowUsesOverviewSelection())
                 beginPendingConfirm(hyprcapture::CaptureMode::Window);
             else
                 finishCapture();
@@ -2665,7 +2709,7 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         const int windowIndex = hoveredWindowIndex();
         if (windowIndex >= 0)
             m_selectedWindowIndex = windowIndex;
-        if (confirmBeforeCaptureEnabled()) {
+        if (confirmBeforeCaptureEnabled() && !selectedWindowUsesOverviewSelection()) {
             if (m_selectedWindowIndex >= 0)
                 beginPendingConfirm(hyprcapture::CaptureMode::Window);
         } else {
@@ -2868,6 +2912,36 @@ QRect CaptureOverlay::windowSelectionGeometry(const WindowArtifact& window) cons
 
 bool CaptureOverlay::hasOverviewSelectionGeometry(const WindowArtifact& window) const {
     return window.selectionGeometry.isValid() && window.selectionGeometry != windowFrameGeometry(window);
+}
+
+bool CaptureOverlay::selectedWindowUsesOverviewSelection() const {
+    const auto* window = selectedWindow();
+    return window && hasOverviewSelectionGeometry(*window);
+}
+
+void CaptureOverlay::beginHymissionCaptureInputSuppression() {
+    if (!m_hymissionOverviewSession || m_hymissionCaptureInputSuppressed || !m_hymissionCaptureInputToken.isEmpty())
+        return;
+
+    m_hymissionCaptureInputToken =
+        QStringLiteral("hyprcapture-%1-%2").arg(QCoreApplication::applicationPid()).arg(QDateTime::currentMSecsSinceEpoch());
+    const auto result = runHymissionCaptureInputCommand(QStringLiteral("begin"), m_hymissionCaptureInputToken);
+    if (result.success) {
+        m_hymissionCaptureInputSuppressed = true;
+        return;
+    }
+
+    m_hymissionCaptureInputToken.clear();
+}
+
+void CaptureOverlay::endHymissionCaptureInputSuppression() {
+    if (!m_hymissionCaptureInputSuppressed || m_hymissionCaptureInputToken.isEmpty())
+        return;
+
+    const QString token = m_hymissionCaptureInputToken;
+    m_hymissionCaptureInputSuppressed = false;
+    m_hymissionCaptureInputToken.clear();
+    (void)runHymissionCaptureInputCommand(QStringLiteral("end"), token);
 }
 
 double CaptureOverlay::windowFrameRadius(const WindowArtifact& window) const {
@@ -3332,6 +3406,7 @@ void CaptureOverlay::startPreparedRecording(const QString& requestPath) {
             return;
         }
         traceTiming(QStringLiteral("record_start"));
+        endHymissionCaptureInputSuppression();
         qApp->quit();
     });
 }
@@ -3357,6 +3432,7 @@ void CaptureOverlay::launchRecordingCountdown(const QString& requestPath) {
     }
 
     traceTiming(QStringLiteral("record_countdown_start"));
+    endHymissionCaptureInputSuppression();
     qApp->quit();
 }
 
@@ -3396,6 +3472,7 @@ void CaptureOverlay::renderAndSaveCapture() {
     traceTiming(QStringLiteral("render_result"), renderTimer.elapsed());
     if (image.isNull()) {
         m_finishing = false;
+        endHymissionCaptureInputSuppression();
         if (isVisible())
             updateStatus();
         else
@@ -3434,6 +3511,7 @@ void CaptureOverlay::saveImage(const QImage& image, hyprcapture::ui::ClipboardSn
             this,
             [this, image, result] {
                 traceTiming(QStringLiteral("output_ready"));
+                endHymissionCaptureInputSuppression();
                 if (result.clipboardRequested && !result.clipboardCopied)
                     hyprcapture::ui::copyImageToClipboard(image);
                 if (result.showThumbnail) {
@@ -3472,5 +3550,8 @@ void CaptureOverlay::showThumbnail(const QImage& image, const QString& path, con
 }
 
 void CaptureOverlay::cancelCapture() {
-    fadeOutThen([] { qApp->quit(); });
+    fadeOutThen([this] {
+        endHymissionCaptureInputSuppression();
+        qApp->quit();
+    });
 }

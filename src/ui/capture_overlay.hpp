@@ -31,6 +31,7 @@ class CaptureOverlay final : public QMainWindow {
 
   public:
     explicit CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick, bool record, bool recordActive, QString sessionJson, QWidget* parent = nullptr);
+    ~CaptureOverlay() override;
 
   protected:
     void showEvent(QShowEvent* event) override;
@@ -133,6 +134,9 @@ class CaptureOverlay final : public QMainWindow {
     QRect windowFrameGeometry(const WindowArtifact& window) const;
     QRect windowSelectionGeometry(const WindowArtifact& window) const;
     bool hasOverviewSelectionGeometry(const WindowArtifact& window) const;
+    bool selectedWindowUsesOverviewSelection() const;
+    void beginHymissionCaptureInputSuppression();
+    void endHymissionCaptureInputSuppression();
     double windowFrameRadius(const WindowArtifact& window) const;
     bool hydrateWindowArtifact(WindowArtifact& window);
     int hoveredWindowIndex() const;
@@ -157,6 +161,8 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_recordActive = false;
     QString                   m_recordError;
     bool                      m_sessionDecoded = false;
+    bool                      m_hymissionOverviewSession = false;
+    bool                      m_hymissionCaptureInputSuppressed = false;
     bool                      m_confirmBeforeCapture = false;
     bool                      m_pendingConfirm = false;
     ConfirmDragMode           m_confirmDragMode = ConfirmDragMode::None;
@@ -172,6 +178,7 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_hasCursorLogicalPosition = false;
     bool                      m_recordFormatAuto = true;
     bool                      m_recordCodecAuto = true;
+    QString                   m_hymissionCaptureInputToken;
 
     QWidget*     m_toolbar = nullptr;
     QGraphicsOpacityEffect* m_toolbarOpacity = nullptr;
