@@ -10,6 +10,7 @@
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusUnixFileDescriptor>
+#include <QCursor>
 #include <QDrag>
 #include <QEasingCurve>
 #include <QFile>
@@ -27,6 +28,7 @@
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QPushButton>
+#include <QScreen>
 #include <QStyleHints>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -47,6 +49,7 @@ namespace {
 
 constexpr int kThumbnailMaxWidth = 180;
 constexpr int kThumbnailMaxHeight = 120;
+constexpr qreal kThumbnailMaxDevicePixelRatio = 4.0;
 constexpr int kThumbnailScreenMargin = 24;
 constexpr int kTranscodeProgressRingSize = 64;
 constexpr double kSwipeCloseThreshold = 120.0;
@@ -65,6 +68,43 @@ QColor interpolateColor(const QColor& from, const QColor& to, double amount) {
         return static_cast<int>(std::round(a * (1.0 - amount) + b * amount));
     };
     return QColor(mix(from.red(), to.red()), mix(from.green(), to.green()), mix(from.blue(), to.blue()), mix(from.alpha(), to.alpha()));
+}
+
+qreal thumbnailTargetDevicePixelRatio(const QPixmap& pixmap) {
+    qreal dpr = std::max<qreal>(1.0, pixmap.devicePixelRatio());
+    const QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+    if (!screen)
+        screen = QGuiApplication::primaryScreen();
+    if (screen)
+        dpr = std::max(dpr, screen->devicePixelRatio());
+    return std::clamp(dpr, qreal{1.0}, kThumbnailMaxDevicePixelRatio);
+}
+
+QPixmap scaledThumbnailPixmap(const QPixmap& pixmap) {
+    if (pixmap.isNull())
+        return {};
+
+    const QSizeF logicalPixmapSize = pixmap.deviceIndependentSize();
+    QSize targetLogicalSize(std::max(1, static_cast<int>(std::ceil(logicalPixmapSize.width()))),
+                            std::max(1, static_cast<int>(std::ceil(logicalPixmapSize.height()))));
+    if (logicalPixmapSize.width() > kThumbnailMaxWidth || logicalPixmapSize.height() > kThumbnailMaxHeight)
+        targetLogicalSize = targetLogicalSize.scaled(kThumbnailMaxWidth, kThumbnailMaxHeight, Qt::KeepAspectRatio);
+    targetLogicalSize = targetLogicalSize.expandedTo(QSize(1, 1));
+
+    qreal dpr = thumbnailTargetDevicePixelRatio(pixmap);
+    dpr = std::min(dpr, static_cast<qreal>(pixmap.width()) / targetLogicalSize.width());
+    dpr = std::min(dpr, static_cast<qreal>(pixmap.height()) / targetLogicalSize.height());
+    dpr = std::clamp(dpr, qreal{1.0}, kThumbnailMaxDevicePixelRatio);
+
+    const QSize targetPhysicalSize(std::max(1, static_cast<int>(std::ceil(targetLogicalSize.width() * dpr))),
+                                   std::max(1, static_cast<int>(std::ceil(targetLogicalSize.height() * dpr))));
+
+    QPixmap scaledPixmap = pixmap;
+    if (scaledPixmap.size() != targetPhysicalSize || !qFuzzyCompare(scaledPixmap.devicePixelRatio(), dpr)) {
+        scaledPixmap = scaledPixmap.scaled(targetPhysicalSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        scaledPixmap.setDevicePixelRatio(dpr);
+    }
+    return scaledPixmap;
 }
 
 } // namespace
@@ -398,17 +438,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap, QString path, QString re
     m_menuShell->hide();
     layout->addWidget(m_menuShell, 0, Qt::AlignRight);
 
-    QPixmap scaledPixmap = pixmap;
-    const QSizeF logicalPixmapSize = scaledPixmap.deviceIndependentSize();
-    if (logicalPixmapSize.width() > kThumbnailMaxWidth || logicalPixmapSize.height() > kThumbnailMaxHeight) {
-        const QSize targetLogicalSize = logicalPixmapSize.toSize().scaled(kThumbnailMaxWidth, kThumbnailMaxHeight, Qt::KeepAspectRatio);
-        const qreal dpr = std::max<qreal>(1.0, scaledPixmap.devicePixelRatio());
-        scaledPixmap = scaledPixmap.scaled(QSize(static_cast<int>(std::ceil(targetLogicalSize.width() * dpr)),
-                                                static_cast<int>(std::ceil(targetLogicalSize.height() * dpr))),
-                                           Qt::KeepAspectRatio,
-                                           Qt::SmoothTransformation);
-        scaledPixmap.setDevicePixelRatio(dpr);
-    }
+    QPixmap scaledPixmap = scaledThumbnailPixmap(pixmap);
     const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize();
     m_card = new QWidget(this);
     m_card->setObjectName("thumbnailImageCard");
