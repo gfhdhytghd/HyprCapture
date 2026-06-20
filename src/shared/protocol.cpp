@@ -292,6 +292,12 @@ bool windowValue(const Json& obj, WindowInfo& out) {
         return false;
     if (!window.realBackgroundPath.empty() && (window.realBackgroundWidth <= 0 || window.realBackgroundHeight <= 0))
         return false;
+    if (obj.contains("selectionGeometry")) {
+        Rect selection;
+        if (!rectValue(obj, "selectionGeometry", selection))
+            return false;
+        window.selectionGeometry = selection;
+    }
     out = std::move(window);
     return true;
 }
@@ -335,7 +341,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
     for (const auto& win : session.windows) {
         if (root["windows"].size() >= MAX_SESSION_WINDOWS)
             break;
-        root["windows"].push_back(Json{
+        Json windowJson{
             {"address", boundedString(win.address, MAX_METADATA_STRING_BYTES)},
             {"title", boundedString(win.title, MAX_METADATA_STRING_BYTES)},
             {"class", boundedString(win.appClass, MAX_METADATA_STRING_BYTES)},
@@ -354,7 +360,10 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"realBackgroundTopDown", win.realBackgroundTopDown},
             {"zIndex", std::clamp(win.zIndex, 0, static_cast<int>(MAX_SESSION_WINDOWS))},
             {"selectable", win.selectable},
-        });
+        };
+        if (win.selectionGeometry)
+            windowJson["selectionGeometry"] = rectJson(*win.selectionGeometry);
+        root["windows"].push_back(std::move(windowJson));
     }
 
     return root.dump(-1, ' ', false, Json::error_handler_t::replace);

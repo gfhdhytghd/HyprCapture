@@ -39,6 +39,7 @@ struct WindowInfo {
     std::string appClass;
     Rect        visibleGeometry;
     Rect        fullGeometry;
+    std::optional<Rect> selectionGeometry;
     double      rounding = 0.0;
     double      roundingPower = 2.0;
     double      borderSize = 0.0;

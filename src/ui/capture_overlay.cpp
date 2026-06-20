@@ -1526,6 +1526,8 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.appClass = qString(info.appClass);
         artifact.visibleGeometry = protocolRect(info.visibleGeometry);
         artifact.fullGeometry = protocolRect(info.fullGeometry);
+        if (info.selectionGeometry)
+            artifact.selectionGeometry = protocolRect(*info.selectionGeometry);
         artifact.rounding = info.rounding;
         artifact.roundingPower = info.roundingPower;
         artifact.borderSize = info.borderSize;
@@ -2450,7 +2452,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
         const auto* window = hoveredWindow();
         const auto* selected = selectedWindow();
         for (const auto& candidate : m_windowArtifacts) {
-            const QRect target = globalToLocalRect(windowFrameGeometry(candidate));
+            const QRect target = globalToLocalRect(windowSelectionGeometry(candidate));
             const bool isSelected = &candidate == selected;
             const bool isHovered = &candidate == window;
             const int penWidth = isSelected ? 3 : (isHovered ? 2 : 1);
@@ -2860,6 +2862,14 @@ QRect CaptureOverlay::windowFrameGeometry(const WindowArtifact& window) const {
     return frame;
 }
 
+QRect CaptureOverlay::windowSelectionGeometry(const WindowArtifact& window) const {
+    return window.selectionGeometry.isValid() ? window.selectionGeometry : windowFrameGeometry(window);
+}
+
+bool CaptureOverlay::hasOverviewSelectionGeometry(const WindowArtifact& window) const {
+    return window.selectionGeometry.isValid() && window.selectionGeometry != windowFrameGeometry(window);
+}
+
 double CaptureOverlay::windowFrameRadius(const WindowArtifact& window) const {
     if (window.rounding <= 0.0)
         return 0.0;
@@ -2873,7 +2883,7 @@ double CaptureOverlay::windowFrameRadius(const WindowArtifact& window) const {
 int CaptureOverlay::hoveredWindowIndex() const {
     const QPoint global = cursorLogicalPosition();
     for (int i = static_cast<int>(m_windowArtifacts.size()) - 1; i >= 0; --i) {
-        if (windowFrameGeometry(m_windowArtifacts[static_cast<std::size_t>(i)]).contains(global))
+        if (windowSelectionGeometry(m_windowArtifacts[static_cast<std::size_t>(i)]).contains(global))
             return i;
     }
     return -1;
@@ -2962,6 +2972,7 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         capturedWindow.appClass = qString(info.appClass);
         capturedWindow.visibleGeometry = protocolRect(info.visibleGeometry);
         capturedWindow.fullGeometry = protocolRect(info.fullGeometry);
+        capturedWindow.selectionGeometry = window.selectionGeometry;
         capturedWindow.rounding = info.rounding;
         capturedWindow.roundingPower = info.roundingPower;
         capturedWindow.borderSize = info.borderSize;
@@ -3132,8 +3143,11 @@ QImage CaptureOverlay::renderResultImage() {
         auto* windowArtifact = selectedWindow() ? selectedWindow() : hoveredWindow();
         if (!windowArtifact)
             return {};
-        if (windowArtifact->image.isNull() && !hydrateWindowArtifact(*windowArtifact))
+        if (windowArtifact->image.isNull() && !hydrateWindowArtifact(*windowArtifact)) {
+            if (hasOverviewSelectionGeometry(*windowArtifact))
+                return {};
             return renderDesktopRectAtDisplayResolution(windowFrameGeometry(*windowArtifact));
+        }
 
         QRect artifactSource = windowArtifact->image.rect();
         const bool cropDecorations = currentWindowBorder() == hyprcapture::DecorationPolicy::Remove || currentWindowShadow() == hyprcapture::DecorationPolicy::Remove;

@@ -55,6 +55,7 @@ class CaptureOverlay final : public QMainWindow {
     struct WindowArtifact {
         QRect   fullGeometry;
         QRect   visibleGeometry;
+        QRect   selectionGeometry;
         double  rounding = 0.0;
         double  roundingPower = 2.0;
         double  borderSize = 0.0;
@@ -130,6 +131,8 @@ class CaptureOverlay final : public QMainWindow {
     hyprcapture::DecorationPolicy currentWindowBorder() const;
     hyprcapture::DecorationPolicy currentWindowShadow() const;
     QRect windowFrameGeometry(const WindowArtifact& window) const;
+    QRect windowSelectionGeometry(const WindowArtifact& window) const;
+    bool hasOverviewSelectionGeometry(const WindowArtifact& window) const;
     double windowFrameRadius(const WindowArtifact& window) const;
     bool hydrateWindowArtifact(WindowArtifact& window);
     int hoveredWindowIndex() const;

@@ -51,6 +51,7 @@
 #include <system_error>
 #include <sys/stat.h>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 #include <unistd.h>
 #include <vector>
@@ -136,6 +137,7 @@ constexpr std::size_t MAX_WINDOW_CAPTURE_REQUEST_BYTES = 64 * 1024;
 constexpr std::size_t MAX_EXPORT_PIPE_REQUEST_BYTES = 64 * 1024;
 constexpr std::size_t MAX_SESSION_JSON_BYTES = 8 * 1024 * 1024;
 constexpr int         MAX_RGBA_READBACK_DIMENSION = 32768;
+constexpr double      MAX_OVERVIEW_LOGICAL_COORDINATE = 1'000'000.0;
 constexpr std::size_t MAX_RGBA_READBACK_BYTES = 512ULL * 1024ULL * 1024ULL;
 constexpr std::size_t MAX_SESSION_ARTIFACT_BYTES = 768ULL * 1024ULL * 1024ULL;
 constexpr std::size_t RGBA_BYTES_PER_PIXEL = 4;
@@ -1457,6 +1459,100 @@ std::string pointerId(const void* ptr) {
     return out.str();
 }
 
+bool overviewJsonDoubleValue(const Json& obj, const char* key, double& out, double minimum, double maximum) {
+    const auto it = obj.find(key);
+    if (it == obj.end() || !it->is_number())
+        return false;
+
+    const double value = it->get<double>();
+    if (!std::isfinite(value) || value < minimum || value > maximum)
+        return false;
+
+    out = value;
+    return true;
+}
+
+bool overviewJsonRectValue(const Json& obj, Rect& out) {
+    if (!obj.is_object())
+        return false;
+
+    Rect rect;
+    if (!overviewJsonDoubleValue(obj, "x", rect.x, -MAX_OVERVIEW_LOGICAL_COORDINATE, MAX_OVERVIEW_LOGICAL_COORDINATE) ||
+        !overviewJsonDoubleValue(obj, "y", rect.y, -MAX_OVERVIEW_LOGICAL_COORDINATE, MAX_OVERVIEW_LOGICAL_COORDINATE) ||
+        !overviewJsonDoubleValue(obj, "width", rect.width, 1.0, MAX_OVERVIEW_LOGICAL_COORDINATE) ||
+        !overviewJsonDoubleValue(obj, "height", rect.height, 1.0, MAX_OVERVIEW_LOGICAL_COORDINATE))
+        return false;
+
+    out = rect;
+    return true;
+}
+
+std::unordered_map<std::string, Rect> fetchHymissionOverviewSelectionGeometry() {
+    std::unordered_map<std::string, Rect> result;
+    const std::string response = HyprlandAPI::invokeHyprctlCommand("hymission-overview-state", "", "json");
+    if (response.empty() || response.front() != '{')
+        return result;
+
+    const auto root = Json::parse(response, nullptr, false);
+    if (root.is_discarded() || !root.is_object())
+        return result;
+
+    const auto active = root.find("active");
+    if (active == root.end() || !active->is_boolean() || !active->get<bool>())
+        return result;
+
+    const auto windows = root.find("windows");
+    if (windows == root.end() || !windows->is_array() || windows->size() > MAX_SESSION_WINDOWS)
+        return result;
+
+    for (const auto& item : *windows) {
+        if (!item.is_object())
+            continue;
+
+        const auto addressIt = item.find("address");
+        const auto selectionIt = item.find("selectionGeometry");
+        if (addressIt == item.end() || selectionIt == item.end() || !addressIt->is_string())
+            continue;
+
+        const std::string address = addressIt->get<std::string>();
+        if (address.empty() || address.size() > MAX_WINDOW_METADATA_BYTES)
+            continue;
+
+        Rect selection;
+        if (!overviewJsonRectValue(*selectionIt, selection))
+            continue;
+
+        result[address] = selection;
+    }
+
+    return result;
+}
+
+bool hyprctlOk(const std::string& response) {
+    auto it = std::find_if_not(response.begin(), response.end(), [](unsigned char ch) { return std::isspace(ch) != 0; });
+    return it != response.end() && std::string_view(&*it, static_cast<std::size_t>(std::distance(it, response.end()))).starts_with("ok");
+}
+
+class HymissionRawWindowRenderScope {
+  public:
+    HymissionRawWindowRenderScope() {
+        m_token = "hyprcapture-" + makeSessionId();
+        m_active = hyprctlOk(HyprlandAPI::invokeHyprctlCommand("hymission-raw-window-render", "begin " + m_token));
+    }
+
+    ~HymissionRawWindowRenderScope() {
+        if (m_active)
+            (void)HyprlandAPI::invokeHyprctlCommand("hymission-raw-window-render", "end " + m_token);
+    }
+
+    HymissionRawWindowRenderScope(const HymissionRawWindowRenderScope&) = delete;
+    HymissionRawWindowRenderScope& operator=(const HymissionRawWindowRenderScope&) = delete;
+
+  private:
+    std::string m_token;
+    bool        m_active = false;
+};
+
 class WindowAnimationGoalOverride {
   public:
     explicit WindowAnimationGoalOverride(const PHLWINDOW& window) : m_window(window) {
@@ -1616,6 +1712,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     if (!window || !monitor || !g_pHyprRenderer || !g_pHyprOpenGL)
         return {};
 
+    HymissionRawWindowRenderScope rawWindowRenderScope;
     WindowAnimationGoalOverride windowGoal(window);
     const CBox fullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
     CBox sourceCropBox = fullBox.copy().translate(-monitor->m_position).scale(monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale).round();
@@ -1876,6 +1973,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
     if (!monitor || !monitor->m_activeWorkspace || targets.empty() || !g_pHyprRenderer || !g_pHyprOpenGL)
         return readbacks;
 
+    HymissionRawWindowRenderScope rawWindowRenderScope;
     const int framebufferWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
     const int framebufferHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
     std::size_t framebufferBytes = 0;
@@ -1958,6 +2056,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
     if (!monitor || !monitor->m_activeWorkspace || !target.window || !targetFramebuffer.isAllocated() || !g_pHyprRenderer || !g_pHyprOpenGL)
         return false;
 
+    HymissionRawWindowRenderScope rawWindowRenderScope;
     const int framebufferWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
     const int framebufferHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
     std::size_t framebufferBytes = 0;
@@ -2903,6 +3002,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     if (!captureWindowMetadata)
         return session;
 
+    const auto overviewSelectionGeometry = fetchHymissionOverviewSelectionGeometry();
     int z = 0;
     std::vector<PendingRealBackgroundCapture> pendingRealBackgrounds;
     for (const auto& window : windowsInRenderOrder()) {
@@ -2914,14 +3014,19 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         if (!monitor)
             continue;
 
-        bool visible = false;
+        const std::string address = "0x" + pointerId(window.get());
+        const auto overviewSelectionIt = overviewSelectionGeometry.find(address);
+
+        bool visible = overviewSelectionIt != overviewSelectionGeometry.end();
         for (const auto& mon : session.monitors)
             visible = visible || intersects(full, mon.logicalGeometry);
         if (!visible)
             continue;
 
         WindowInfo info;
-        info.address = "0x" + pointerId(window.get());
+        info.address = address;
+        if (overviewSelectionIt != overviewSelectionGeometry.end())
+            info.selectionGeometry = overviewSelectionIt->second;
         info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
         info.zIndex = z++;
