@@ -29,6 +29,7 @@ bool isPrivateRuntimeFile(const QString& path, qint64 maxSize);
 bool savePrivatePng(const QImage& image, const QString& path);
 ClipboardSnapshotData captureClipboardSnapshotData();
 QString saveClipboardSnapshotData(const ClipboardSnapshotData& snapshot);
+bool saveClipboardSnapshotDataToPath(const ClipboardSnapshotData& snapshot, const QString& path);
 QString saveClipboardSnapshot();
 bool copyImageToClipboard(const QImage& image);
 bool copyImageToClipboardDetached(const QImage& image);

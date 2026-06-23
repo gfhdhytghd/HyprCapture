@@ -581,6 +581,7 @@ int main(int argc, char** argv) {
         {"session-json", "Compositor session metadata.", "json", "{}"},
         {"session-json-file", "Private compositor session metadata file.", "path"},
         {"thumbnail-window", "Show a normal thumbnail window for an image path.", "path"},
+        {"thumbnail-target", "Path opened or deleted by a thumbnail preview.", "path"},
         {"record-countdown-request", "Show an input-transparent recording countdown for a private request file.", "path"},
         {"recording-result", "Handle a completed recording result.", "path"},
         {"recording-transcode-input", "Transcode an intermediate recording input.", "path"},
@@ -597,11 +598,12 @@ int main(int argc, char** argv) {
 
     if (hasArgument(argc, argv, "--thumbnail-window")) {
         const QString thumbnailPath = parser.value("thumbnail-window");
+        const QString thumbnailTarget = parser.value("thumbnail-target").isEmpty() ? thumbnailPath : parser.value("thumbnail-target");
         const QPixmap pixmap = loadThumbnailPixmap(thumbnailPath);
         if (pixmap.isNull())
             return 1;
         ResultThumbnail thumbnail(pixmap,
-                                  thumbnailPath,
+                                  thumbnailTarget,
                                   parser.value("restore-clipboard"),
                                   parser.value("thumbnail-delete-root"),
                                   boundedInt(parser.value("thumbnail-timeout-ms"), 5000, 0, MAX_THUMBNAIL_TIMEOUT_MS));

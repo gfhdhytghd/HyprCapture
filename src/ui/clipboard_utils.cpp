@@ -518,30 +518,30 @@ ClipboardSnapshotData captureClipboardSnapshotData() {
     return snapshot;
 }
 
-QString saveClipboardSnapshotData(const ClipboardSnapshotData& snapshot) {
+bool saveClipboardSnapshotDataToPath(const ClipboardSnapshotData& snapshot, const QString& path) {
     if (!snapshot.valid)
-        return {};
+        return false;
 
     QJsonObject root;
     root.insert("empty", snapshot.empty);
     bool wroteContent = false;
     if (!snapshot.text.isEmpty()) {
         if (!utf8WithinLimit(snapshot.text, kMaxClipboardTextBytes))
-            return {};
+            return false;
         root.insert("text", snapshot.text);
         root.insert("empty", false);
         wroteContent = true;
     }
     if (!snapshot.html.isEmpty()) {
         if (!utf8WithinLimit(snapshot.html, kMaxClipboardTextBytes))
-            return {};
+            return false;
         root.insert("html", snapshot.html);
         root.insert("empty", false);
         wroteContent = true;
     }
     if (!snapshot.urls.isEmpty()) {
         if (!urlsWithinLimit(snapshot.urls))
-            return {};
+            return false;
         QJsonArray urls;
         for (const auto& url : snapshot.urls)
             urls.append(url.toString());
@@ -557,7 +557,7 @@ QString saveClipboardSnapshotData(const ClipboardSnapshotData& snapshot) {
     QString imagePath;
     if (!snapshot.image.isNull()) {
         if (!imageWithinLimit(snapshot.image, kMaxClipboardImageBytes))
-            return {};
+            return false;
         imagePath = runtimeFile("clipboard-image", ".png");
         if (savePng(snapshot.image, imagePath) && savedFileWithinLimit(imagePath, kMaxClipboardImageBytes)) {
             root.insert("image", imagePath);
@@ -569,17 +569,21 @@ QString saveClipboardSnapshotData(const ClipboardSnapshotData& snapshot) {
     if (!snapshot.empty && !wroteContent) {
         if (!imagePath.isEmpty())
             QFile::remove(imagePath);
-        return {};
+        return false;
     }
 
-    const QString path = runtimeFile("clipboard", ".json");
     const QByteArray json = QJsonDocument(root).toJson(QJsonDocument::Compact);
     if (json.size() > kMaxClipboardSnapshotBytes || !writePrivateFile(path, json)) {
         if (!imagePath.isEmpty())
             QFile::remove(imagePath);
-        return {};
+        return false;
     }
-    return path;
+    return true;
+}
+
+QString saveClipboardSnapshotData(const ClipboardSnapshotData& snapshot) {
+    const QString path = runtimeFile("clipboard", ".json");
+    return saveClipboardSnapshotDataToPath(snapshot, path) ? path : QString{};
 }
 
 QString saveClipboardSnapshot() {

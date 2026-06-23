@@ -109,6 +109,8 @@ constexpr int kMaxLogicalCoordinate = 1'000'000;
 constexpr int kMaxSessionMonitors = 64;
 constexpr int kMaxSessionWindows = 512;
 constexpr int kMaxRecordCountdownSeconds = 60;
+constexpr int kThumbnailPreviewMaxWidth = 720;
+constexpr int kThumbnailPreviewMaxHeight = 480;
 
 struct CaptureOutputResult {
     QString savedPath;
@@ -713,28 +715,26 @@ void cleanupArtifactFiles(const QStringList& paths) {
 
 CaptureOutputResult writeCaptureOutput(const QImage& image,
                                         const hyprcapture::CaptureDefaults& defaults,
-                                        const hyprcapture::ui::ClipboardSnapshotData& clipboardSnapshot) {
+                                        const hyprcapture::ui::ClipboardSnapshotData& clipboardSnapshot,
+                                        const QString& outputPath,
+                                        const QString& restoreClipboardPath) {
     CaptureOutputResult result;
     result.showThumbnail = defaults.showThumbnail;
 
-    if (defaults.clipboard && defaults.showThumbnail) {
+    if (defaults.clipboard && defaults.showThumbnail && !restoreClipboardPath.isEmpty()) {
         QElapsedTimer timer;
         timer.start();
-        result.restoreClipboardPath = hyprcapture::ui::saveClipboardSnapshotData(clipboardSnapshot);
+        if (hyprcapture::ui::saveClipboardSnapshotDataToPath(clipboardSnapshot, restoreClipboardPath))
+            result.restoreClipboardPath = restoreClipboardPath;
         traceTiming(QStringLiteral("clipboard_snapshot_save"), timer.elapsed());
     }
 
-    if (defaults.save) {
+    if (!outputPath.isEmpty()) {
         QElapsedTimer timer;
         timer.start();
-        const auto dirPath = hyprcapture::expandUserPath(defaults.saveDir);
-        QDir       dir(QString::fromStdString(dirPath.string()));
-        if (!dir.exists())
-            dir.mkpath(".");
-        const QString path = uniqueOutputPath(dir, QString::fromStdString(hyprcapture::makeTimestampedFilename(defaults.filenameTemplate)));
-        if (savePng(image, path))
-            result.savedPath = path;
-        traceTiming(QStringLiteral("image_save"), timer.elapsed());
+        if (savePng(image, outputPath))
+            result.savedPath = outputPath;
+        traceTiming(defaults.save ? QStringLiteral("image_save") : QStringLiteral("thumbnail_full_temp_save"), timer.elapsed());
     }
 
     if (result.showThumbnail && result.savedPath.isEmpty()) {
@@ -758,6 +758,49 @@ CaptureOutputResult writeCaptureOutput(const QImage& image,
     }
 
     return result;
+}
+
+QString plannedCaptureOutputPath(const hyprcapture::CaptureDefaults& defaults) {
+    if (!defaults.save)
+        return {};
+
+    const auto dirPath = hyprcapture::expandUserPath(defaults.saveDir);
+    QDir       dir(QString::fromStdString(dirPath.string()));
+    if (!dir.exists())
+        dir.mkpath(".");
+    return uniqueOutputPath(dir, QString::fromStdString(hyprcapture::makeTimestampedFilename(defaults.filenameTemplate)));
+}
+
+QString thumbnailTargetPath(const hyprcapture::CaptureDefaults& defaults, const QString& plannedOutputPath) {
+    if (defaults.save)
+        return plannedOutputPath;
+    if (!defaults.showThumbnail)
+        return {};
+    return hyprcapture::ui::runtimeFile("thumbnail-full", ".png");
+}
+
+QString thumbnailDeleteRoot(const hyprcapture::CaptureDefaults& defaults) {
+    if (!defaults.save)
+        return {};
+    return QString::fromStdString(hyprcapture::expandUserPath(defaults.saveDir).string());
+}
+
+QString saveThumbnailPreview(const QImage& image) {
+    if (image.isNull())
+        return {};
+
+    QElapsedTimer timer;
+    timer.start();
+    const QSize maxSize(kThumbnailPreviewMaxWidth, kThumbnailPreviewMaxHeight);
+    QImage preview = image;
+    if (preview.width() > maxSize.width() || preview.height() > maxSize.height())
+        preview = preview.scaled(maxSize, Qt::KeepAspectRatio, Qt::FastTransformation);
+
+    const QString path = hyprcapture::ui::runtimeFile("thumbnail-preview", ".png");
+    if (!hyprcapture::ui::savePrivatePng(preview, path))
+        return {};
+    traceTiming(QStringLiteral("thumbnail_preview_save"), timer.elapsed());
+    return path;
 }
 
 double maxScreenDevicePixelRatio() {
@@ -3533,37 +3576,56 @@ void CaptureOverlay::renderAndSaveCapture() {
     hyprcapture::ui::applyWatermark(image, m_defaults);
     traceTiming(QStringLiteral("apply_watermark"), watermarkTimer.elapsed());
 
+    const QString plannedOutputPath = plannedCaptureOutputPath(m_defaults);
+    const QString targetPath = thumbnailTargetPath(m_defaults, plannedOutputPath);
+    const QString restoreClipboardPath =
+        (m_defaults.clipboard && m_defaults.showThumbnail) ? hyprcapture::ui::runtimeFile("clipboard", ".json") : QString{};
+    bool thumbnailStarted = false;
+    if (m_defaults.showThumbnail) {
+        const QString previewPath = saveThumbnailPreview(image);
+        if (!previewPath.isEmpty()) {
+            showThumbnail(previewPath, targetPath, restoreClipboardPath);
+            thumbnailStarted = true;
+        }
+    }
+
+    if (!m_fadeOutStarted) {
+        traceTiming(QStringLiteral("fade_start"));
+        fadeOutThen({});
+    }
+
     hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot;
-    if (m_defaults.clipboard && m_defaults.showThumbnail) {
+    if (m_defaults.clipboard && m_defaults.showThumbnail && !restoreClipboardPath.isEmpty()) {
         QElapsedTimer snapshotTimer;
         snapshotTimer.start();
         clipboardSnapshot = hyprcapture::ui::captureClipboardSnapshotData();
         traceTiming(QStringLiteral("clipboard_snapshot_collect"), snapshotTimer.elapsed());
     }
 
-    saveImage(image, clipboardSnapshot);
-    if (!m_fadeOutStarted) {
-        traceTiming(QStringLiteral("fade_start"));
-        fadeOutThen({});
-    }
+    saveImage(image, clipboardSnapshot, m_defaults.save ? plannedOutputPath : targetPath, restoreClipboardPath, thumbnailStarted);
 }
 
-void CaptureOverlay::saveImage(const QImage& image, hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot) {
+void CaptureOverlay::saveImage(const QImage& image,
+                               hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot,
+                               const QString& outputPath,
+                               const QString& restoreClipboardPath,
+                               bool thumbnailStarted) {
     const auto defaults = m_defaults;
-    auto*      worker = QThread::create([this, image, defaults, clipboardSnapshot = std::move(clipboardSnapshot)] {
+    auto*      worker = QThread::create([this, image, defaults, outputPath, restoreClipboardPath, thumbnailStarted, clipboardSnapshot = std::move(clipboardSnapshot)] {
         QElapsedTimer totalTimer;
         totalTimer.start();
-        const CaptureOutputResult result = writeCaptureOutput(image, defaults, clipboardSnapshot);
+        const CaptureOutputResult result = writeCaptureOutput(image, defaults, clipboardSnapshot, outputPath, restoreClipboardPath);
         traceTiming(QStringLiteral("output_worker_total"), totalTimer.elapsed());
         QMetaObject::invokeMethod(
             this,
-            [this, image, result] {
+            [this, image, result, thumbnailStarted] {
                 traceTiming(QStringLiteral("output_ready"));
                 endHymissionCaptureInputSuppression();
                 if (result.clipboardRequested && !result.clipboardCopied)
                     hyprcapture::ui::copyImageToClipboard(image);
-                if (result.showThumbnail) {
-                    showThumbnail(image, result.savedPath, result.restoreClipboardPath);
+                if (result.showThumbnail && !thumbnailStarted) {
+                    showThumbnail(result.savedPath, result.savedPath, result.restoreClipboardPath);
+                    qApp->quit();
                     return;
                 }
                 qApp->quit();
@@ -3574,27 +3636,21 @@ void CaptureOverlay::saveImage(const QImage& image, hyprcapture::ui::ClipboardSn
     worker->start();
 }
 
-void CaptureOverlay::showThumbnail(const QImage& image, const QString& path, const QString& restoreClipboardPath) {
-    QString thumbPath = path;
-    if (thumbPath.isEmpty()) {
-        QElapsedTimer timer;
-        timer.start();
-        thumbPath = hyprcapture::ui::runtimeFile("thumbnail", ".png");
-        hyprcapture::ui::savePrivatePng(image, thumbPath);
-        traceTiming(QStringLiteral("thumbnail_late_save"), timer.elapsed());
-    }
+void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath) {
+    if (previewPath.isEmpty())
+        return;
 
-    QStringList args{"--thumbnail-window", thumbPath, "--thumbnail-timeout-ms", QString::number(m_defaults.thumbnailTimeoutMs)};
-    if (m_defaults.save) {
-        const QString deleteRoot = QString::fromStdString(hyprcapture::expandUserPath(m_defaults.saveDir).string());
-        if (!deleteRoot.isEmpty())
-            args << "--thumbnail-delete-root" << deleteRoot;
-    }
+    QStringList args{"--thumbnail-window", previewPath, "--thumbnail-timeout-ms", QString::number(m_defaults.thumbnailTimeoutMs)};
+    if (!targetPath.isEmpty())
+        args << "--thumbnail-target" << targetPath;
+    const QString deleteRoot = thumbnailDeleteRoot(m_defaults);
+    if (!deleteRoot.isEmpty())
+        args << "--thumbnail-delete-root" << deleteRoot;
     if (!restoreClipboardPath.isEmpty())
         args << "--restore-clipboard" << restoreClipboardPath;
     QProcess::startDetached(QCoreApplication::applicationFilePath(), args);
     traceTiming(QStringLiteral("thumbnail_started"));
-    qApp->quit();
+    endHymissionCaptureInputSuppression();
 }
 
 void CaptureOverlay::cancelCapture() {

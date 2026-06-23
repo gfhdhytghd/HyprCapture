@@ -94,7 +94,11 @@ class CaptureOverlay final : public QMainWindow {
     bool startRecording(const QString& requestPath);
     bool stopRecording();
     void renderAndSaveCapture();
-    void saveImage(const QImage& image, hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot);
+    void saveImage(const QImage& image,
+                   hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot,
+                   const QString& outputPath,
+                   const QString& restoreClipboardPath,
+                   bool thumbnailStarted);
     QImage renderResultImage();
     QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect) const;
     void paintDesktop(QPainter& painter, const QRect& target) const;
@@ -147,7 +151,7 @@ class CaptureOverlay final : public QMainWindow {
     bool windowCaptureAvailable() const;
     void updateStatus();
     void relayoutToolbar();
-    void showThumbnail(const QImage& image, const QString& path, const QString& restoreClipboardPath);
+    void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath);
     double overlayOpacity() const;
     void setOverlayOpacity(double opacity);
     void startFadeIn();
