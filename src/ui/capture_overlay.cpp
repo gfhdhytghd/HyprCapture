@@ -958,45 +958,30 @@ QImage loadRawRgba(const QString& path, int width, int height, bool topDown, qin
     return topDown ? copy : copy.flipped(Qt::Vertical);
 }
 
-bool monitorTransformSwapsAxes(int transform) {
-    return transform == 1 || transform == 3 || transform == 5 || transform == 7;
-}
-
-double aspectError(const QSize& size, const QSize& expected) {
-    if (size.isEmpty() || expected.isEmpty())
-        return std::numeric_limits<double>::infinity();
-    const double actualRatio = static_cast<double>(size.width()) / std::max(1, size.height());
-    const double expectedRatio = static_cast<double>(expected.width()) / std::max(1, expected.height());
-    if (actualRatio <= 0.0 || expectedRatio <= 0.0)
-        return std::numeric_limits<double>::infinity();
-    return std::abs(std::log(actualRatio / expectedRatio));
-}
-
 int inverseRotationDegreesForMonitorTransform(int transform) {
     switch (transform) {
         case 1:
-        case 5: return -90;
+        case 5: return 90;
         case 2:
         case 6: return 180;
         case 3:
-        case 7: return 90;
+        case 7: return -90;
         default: return 0;
     }
 }
 
 QImage rotateMonitorArtifactToLogicalOrientation(const QImage& image, int transform) {
+    if (transform == 0 || image.isNull())
+        return image;
+
     QTransform imageTransform;
     imageTransform.rotate(inverseRotationDegreesForMonitorTransform(transform));
     return image.transformed(imageTransform, Qt::FastTransformation).convertToFormat(QImage::Format_RGBA8888);
 }
 
 QImage normalizeMonitorArtifactImage(const QImage& image, int transform, const QRect& logicalGeometry) {
-    if (image.isNull() || !logicalGeometry.isValid() || !monitorTransformSwapsAxes(transform))
-        return image;
-
-    const QSize expected = logicalGeometry.size();
-    const QSize rotatedSize(image.height(), image.width());
-    if (aspectError(image.size(), expected) <= aspectError(rotatedSize, expected))
+    Q_UNUSED(logicalGeometry)
+    if (image.isNull() || transform == 0)
         return image;
 
     return rotateMonitorArtifactToLogicalOrientation(image, transform);
@@ -3174,26 +3159,69 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
     if (!globalRect.isValid() || m_monitorArtifacts.empty())
         return {};
 
-    double scaleX = 0.0;
-    double scaleY = 0.0;
-    for (const auto& artifact : m_monitorArtifacts) {
-        if (artifact.image.isNull() || !artifact.logicalGeometry.isValid() || !artifact.logicalGeometry.intersects(globalRect))
-            continue;
+    struct DrawPart {
+        const MonitorArtifact* artifact = nullptr;
+        QRect                  source;
+        QRect                  target;
+    };
 
-        scaleX = std::max(scaleX, static_cast<double>(artifact.image.width()) / std::max(1, artifact.logicalGeometry.width()));
-        scaleY = std::max(scaleY, static_cast<double>(artifact.image.height()) / std::max(1, artifact.logicalGeometry.height()));
-    }
-    if (scaleX <= 0.0 || scaleY <= 0.0)
-        return {};
+    std::vector<DrawPart> drawParts;
+    QRect                 outputBounds;
+    const auto artifactAxisScale = [](const MonitorArtifact& artifact, bool horizontal) {
+        if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
+            return 0.0;
+        const int logicalSize = horizontal ? artifact.logicalGeometry.width() : artifact.logicalGeometry.height();
+        const int imageSize = horizontal ? artifact.image.width() : artifact.image.height();
+        return logicalSize > 0 ? static_cast<double>(imageSize) / logicalSize : 0.0;
+    };
+    const auto nativeAxisOffsetForLogicalPosition = [this, &artifactAxisScale](int axisStart, int logicalPosition, bool horizontal) {
+        if (logicalPosition <= axisStart)
+            return 0;
 
-    const QSize outputSize = boundedScaledSize(globalRect.width(), globalRect.height(), scaleX, scaleY);
-    QImage image = boundedImage(outputSize, QImage::Format_ARGB32_Premultiplied);
-    if (image.isNull())
-        return {};
-    image.fill(QColor(30, 34, 38));
+        std::vector<int> points{axisStart, logicalPosition};
+        for (const auto& artifact : m_monitorArtifacts) {
+            if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
+                continue;
+            const int start = horizontal ? artifact.logicalGeometry.left() : artifact.logicalGeometry.top();
+            const int end = horizontal ? artifact.logicalGeometry.right() + 1 : artifact.logicalGeometry.bottom() + 1;
+            if (start > axisStart && start < logicalPosition)
+                points.push_back(start);
+            if (end > axisStart && end < logicalPosition)
+                points.push_back(end);
+        }
 
-    QPainter painter(&image);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+        std::sort(points.begin(), points.end());
+        points.erase(std::unique(points.begin(), points.end()), points.end());
+
+        double offset = 0.0;
+        for (std::size_t i = 0; i + 1 < points.size(); ++i) {
+            const int begin = points[i];
+            const int end = points[i + 1];
+            if (end <= begin)
+                continue;
+
+            const double midpoint = (static_cast<double>(begin) + static_cast<double>(end)) / 2.0;
+            double scale = 1.0;
+            bool covered = false;
+            for (const auto& artifact : m_monitorArtifacts) {
+                if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
+                    continue;
+                const int artifactStart = horizontal ? artifact.logicalGeometry.left() : artifact.logicalGeometry.top();
+                const int artifactEnd = horizontal ? artifact.logicalGeometry.right() + 1 : artifact.logicalGeometry.bottom() + 1;
+                if (midpoint < artifactStart || midpoint >= artifactEnd)
+                    continue;
+
+                const double axisScale = artifactAxisScale(artifact, horizontal);
+                if (axisScale <= 0.0)
+                    continue;
+                scale = covered ? std::max(scale, axisScale) : axisScale;
+                covered = true;
+            }
+            offset += static_cast<double>(end - begin) * scale;
+        }
+
+        return static_cast<int>(std::floor(offset));
+    };
     for (const auto& artifact : m_monitorArtifacts) {
         if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
             continue;
@@ -3203,9 +3231,29 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
             continue;
 
         const QRect source = logicalRectToImageRect(logicalPart, artifact.logicalGeometry, artifact.image.size());
-        const QRect target = logicalRectToOutputRect(logicalPart, globalRect, scaleX, scaleY).intersected(image.rect());
-        if (source.isValid() && target.isValid())
-            painter.drawImage(target, artifact.image, source);
+        if (!source.isValid())
+            continue;
+
+        const QPoint targetTopLeft(nativeAxisOffsetForLogicalPosition(globalRect.left(), logicalPart.left(), true),
+                                   nativeAxisOffsetForLogicalPosition(globalRect.top(), logicalPart.top(), false));
+        const QRect target(targetTopLeft, source.size());
+        outputBounds = outputBounds.isValid() ? outputBounds.united(target) : target;
+        drawParts.push_back({.artifact = &artifact, .source = source, .target = target});
+    }
+    if (!outputBounds.isValid() || drawParts.empty())
+        return {};
+
+    QImage image = boundedImage(outputBounds.size(), QImage::Format_ARGB32_Premultiplied);
+    if (image.isNull())
+        return {};
+    image.fill(QColor(30, 34, 38));
+
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
+    for (const auto& part : drawParts) {
+        const QRect target = part.target.translated(-outputBounds.topLeft()).intersected(image.rect());
+        if (target.isValid())
+            painter.drawImage(target, part.artifact->image, part.source);
     }
 
     return image;

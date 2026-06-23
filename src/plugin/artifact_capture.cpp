@@ -1617,12 +1617,22 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
 
     const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
-    CRegion fakeDamage{0, 0, width, height};
+    const bool previousTransformDamage = g_pHyprRenderer->m_renderData.transformDamage;
+
+    auto restoreRendererState = [&]() {
+        g_pHyprRenderer->m_renderData.transformDamage = previousTransformDamage;
+        g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
+        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+    };
+
+    const int transformedWidth = positiveRoundedIntFromDouble(monitor->m_transformedSize.x);
+    const int transformedHeight = positiveRoundedIntFromDouble(monitor->m_transformedSize.y);
+    CRegion fakeDamage{0, 0, transformedWidth, transformedHeight};
 
     g_pHyprOpenGL->makeEGLCurrent();
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+        restoreRendererState();
         return {};
     }
 
@@ -1634,8 +1644,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
         ErrorOverlay::overlay()->draw();
     g_pHyprRenderer->m_renderData.blockScreenShader = true;
     g_pHyprRenderer->endRender();
-    g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+    restoreRendererState();
 
     auto readback = readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight);
     if (budget && !readback.pixels.empty() && !budget->consume(readback.pixels.size()))
