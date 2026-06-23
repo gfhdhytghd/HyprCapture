@@ -1621,7 +1621,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
 
     g_pHyprOpenGL->makeEGLCurrent();
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-    if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, framebuffer)) {
+    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
         g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
         return {};
     }
