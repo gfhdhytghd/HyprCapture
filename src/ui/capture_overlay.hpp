@@ -49,6 +49,7 @@ class CaptureOverlay final : public QMainWindow {
         QRect   logicalGeometry;
         QImage  image;
         QString name;
+        double  scale = 1.0;
         int     transform = 0;
         bool    focused = false;
     };

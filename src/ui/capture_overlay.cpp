@@ -972,21 +972,21 @@ double aspectError(const QSize& size, const QSize& expected) {
     return std::abs(std::log(actualRatio / expectedRatio));
 }
 
-int inverseRotationDegreesForMonitorTransform(int transform) {
+int rotationDegreesForMonitorTransform(int transform) {
     switch (transform) {
         case 1:
-        case 5: return -90;
+        case 5: return 90;
         case 2:
         case 6: return 180;
         case 3:
-        case 7: return 90;
+        case 7: return -90;
         default: return 0;
     }
 }
 
 QImage rotateMonitorArtifactToLogicalOrientation(const QImage& image, int transform) {
     QTransform imageTransform;
-    imageTransform.rotate(inverseRotationDegreesForMonitorTransform(transform));
+    imageTransform.rotate(rotationDegreesForMonitorTransform(transform));
     return image.transformed(imageTransform, Qt::FastTransformation).convertToFormat(QImage::Format_RGBA8888);
 }
 
@@ -1000,6 +1000,26 @@ QImage normalizeMonitorArtifactImage(const QImage& image, int transform, const Q
         return image;
 
     return rotateMonitorArtifactToLogicalOrientation(image, transform);
+}
+
+QRect normalizeMonitorArtifactGeometry(const QRect& logicalGeometry, const QSize& imageSize, double scale, int transform) {
+    if (!logicalGeometry.isValid() || imageSize.isEmpty() || !monitorTransformSwapsAxes(transform) || scale <= 0.0 || !std::isfinite(scale))
+        return logicalGeometry;
+
+    const QSize scaledSize(std::max(1, static_cast<int>(std::lround(imageSize.width() / scale))),
+                           std::max(1, static_cast<int>(std::lround(imageSize.height() / scale))));
+    if (scaledSize == logicalGeometry.size())
+        return logicalGeometry;
+
+    const double currentScaleX = static_cast<double>(imageSize.width()) / std::max(1, logicalGeometry.width());
+    const double currentScaleY = static_cast<double>(imageSize.height()) / std::max(1, logicalGeometry.height());
+    const double currentScaleError = std::abs(std::log(currentScaleX / scale)) + std::abs(std::log(currentScaleY / scale));
+    const double normalizedScaleError = aspectError(scaledSize, imageSize);
+    const double currentAspectError = aspectError(logicalGeometry.size(), imageSize);
+
+    if (currentScaleError > 0.25 || currentAspectError > normalizedScaleError + 0.10)
+        return QRect(logicalGeometry.topLeft(), scaledSize);
+    return logicalGeometry;
 }
 
 QRect projectedImageRect(const QRect& logicalRect, const QRect& fullGeometry, const QSize& imageSize) {
@@ -1538,11 +1558,13 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         MonitorArtifact artifact;
         artifact.name = qString(info.name);
         artifact.logicalGeometry = protocolRect(info.logicalGeometry);
+        artifact.scale = info.scale;
         artifact.transform = info.transform;
         artifact.focused = info.focused;
         const QString artifactPath = qString(info.artifactPath);
         artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes);
         artifact.image = normalizeMonitorArtifactImage(artifact.image, artifact.transform, artifact.logicalGeometry);
+        artifact.logicalGeometry = normalizeMonitorArtifactGeometry(artifact.logicalGeometry, artifact.image.size(), artifact.scale, artifact.transform);
         artifactFiles.push_back(artifactPath);
         if (!artifact.logicalGeometry.isValid())
             continue;
