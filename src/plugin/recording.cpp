@@ -6,6 +6,8 @@
 #include "shared/config.hpp"
 #include "shared/protocol.hpp"
 
+#include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/helpers/Monitor.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -364,7 +366,64 @@ std::optional<std::vector<std::string>> sanitizedGsrExtraFlags(std::string_view 
     return out;
 }
 
+bool recordingRectValid(const Rect& rect) {
+    return rect.width > 0.0 && rect.height > 0.0;
+}
+
+Rect recordingMonitorRect(const PHLMONITOR& monitor) {
+    return {.x = monitor->m_position.x, .y = monitor->m_position.y, .width = monitor->m_size.x, .height = monitor->m_size.y};
+}
+
+bool recordingRectsIntersect(const Rect& a, const Rect& b) {
+    return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+bool nearlyEqualGeometry(double a, double b) {
+    return std::fabs(a - b) <= 1.0;
+}
+
+bool recordingRectsNearlyEqual(const Rect& a, const Rect& b) {
+    return nearlyEqualGeometry(a.x, b.x) && nearlyEqualGeometry(a.y, b.y) && nearlyEqualGeometry(a.width, b.width) &&
+        nearlyEqualGeometry(a.height, b.height);
+}
+
+PHLMONITOR recordingTargetExactMonitor(const Rect& target) {
+    if (!g_pCompositor || !recordingRectValid(target))
+        return {};
+
+    for (const auto& monitor : g_pCompositor->m_monitors) {
+        if (monitor && recordingRectsNearlyEqual(target, recordingMonitorRect(monitor)))
+            return monitor;
+    }
+    return {};
+}
+
+bool recordingTargetIntersectsTransformedMonitor(const Rect& target) {
+    if (!g_pCompositor || !recordingRectValid(target))
+        return false;
+
+    for (const auto& monitor : g_pCompositor->m_monitors) {
+        if (!monitor || static_cast<int>(monitor->m_transform) == 0)
+            continue;
+        if (recordingRectsIntersect(target, recordingMonitorRect(monitor)))
+            return true;
+    }
+    return false;
+}
+
+bool recordingNeedsCompositorTransformFallback(const RecordingRequest& request) {
+    if (!recordingTargetIntersectsTransformedMonitor(request.targetGeometry))
+        return false;
+
+    return !(request.mode == CaptureMode::Fullscreen && recordingTargetExactMonitor(request.targetGeometry));
+}
+
 std::string gsrCaptureSource(const RecordingRequest& request) {
+    if (request.mode == CaptureMode::Fullscreen) {
+        if (const auto monitor = recordingTargetExactMonitor(request.targetGeometry); monitor && !monitor->m_name.empty())
+            return monitor->m_name;
+    }
+
     if (request.mode == CaptureMode::Region ||
         request.mode == CaptureMode::Window ||
         (request.mode == CaptureMode::Fullscreen && request.targetGeometry.width > 0.0 && request.targetGeometry.height > 0.0)) {
@@ -1410,8 +1469,10 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
         request->defaults.recordWindowBackend = RecordWindowBackend::Compositor;
     }
 
-    if (!imageAnimation && (request->mode == CaptureMode::Fullscreen || request->mode == CaptureMode::Region ||
-                            (request->mode == CaptureMode::Window && request->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible)))
+    const bool canUseGsr = !imageAnimation &&
+        (request->mode == CaptureMode::Fullscreen || request->mode == CaptureMode::Region ||
+         (request->mode == CaptureMode::Window && request->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible));
+    if (canUseGsr && !recordingNeedsCompositorTransformFallback(*request))
         return startGsrRecording(*request);
 
     RecordingFrameRequest frameRequest{.defaults = request->defaults,

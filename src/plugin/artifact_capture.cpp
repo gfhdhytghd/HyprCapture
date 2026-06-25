@@ -2243,6 +2243,75 @@ bool readbackHasSize(const RgbaReadback& frame, int width, int height) {
     return frame.width == width && frame.height == height && checkedRgbaByteSize(width, height, bytes) && frame.pixels.size() == bytes;
 }
 
+template <typename SourcePixelFn>
+RgbaReadback remapReadbackPixels(const RgbaReadback& source, int targetWidth, int targetHeight, SourcePixelFn sourcePixel) {
+    if (!readbackHasSize(source, source.width, source.height) || targetWidth <= 0 || targetHeight <= 0)
+        return {};
+
+    std::size_t bytes = 0;
+    if (!checkedRgbaByteSize(targetWidth, targetHeight, bytes))
+        return {};
+
+    RgbaReadback target;
+    target.width = targetWidth;
+    target.height = targetHeight;
+    target.pixels.assign(bytes, 0);
+
+    for (int y = 0; y < targetHeight; ++y) {
+        for (int x = 0; x < targetWidth; ++x) {
+            const auto [srcX, srcY] = sourcePixel(x, y);
+            if (srcX < 0 || srcX >= source.width || srcY < 0 || srcY >= source.height)
+                return {};
+
+            const auto src = (static_cast<std::size_t>(srcY) * source.width + srcX) * RGBA_BYTES_PER_PIXEL;
+            const auto dst = (static_cast<std::size_t>(y) * targetWidth + x) * RGBA_BYTES_PER_PIXEL;
+            std::copy(source.pixels.data() + src, source.pixels.data() + src + RGBA_BYTES_PER_PIXEL, target.pixels.data() + dst);
+        }
+    }
+
+    return target;
+}
+
+RgbaReadback rotateReadback90Clockwise(const RgbaReadback& source) {
+    return remapReadbackPixels(source, source.height, source.width, [&](int x, int y) {
+        return std::pair<int, int>{y, source.height - 1 - x};
+    });
+}
+
+RgbaReadback rotateReadback180(const RgbaReadback& source) {
+    return remapReadbackPixels(source, source.width, source.height, [&](int x, int y) {
+        return std::pair<int, int>{source.width - 1 - x, source.height - 1 - y};
+    });
+}
+
+RgbaReadback rotateReadback90CounterClockwise(const RgbaReadback& source) {
+    return remapReadbackPixels(source, source.height, source.width, [&](int x, int y) {
+        return std::pair<int, int>{source.width - 1 - y, x};
+    });
+}
+
+RgbaReadback flipReadbackHorizontal(const RgbaReadback& source) {
+    return remapReadbackPixels(source, source.width, source.height, [&](int x, int y) {
+        return std::pair<int, int>{source.width - 1 - x, y};
+    });
+}
+
+RgbaReadback normalizeMonitorReadbackToLogicalOrientation(RgbaReadback readback, int transform) {
+    if (readback.pixels.empty())
+        return {};
+
+    switch (std::clamp(transform, 0, 7)) {
+        case 1: return rotateReadback90Clockwise(readback);
+        case 2: return rotateReadback180(readback);
+        case 3: return rotateReadback90CounterClockwise(readback);
+        case 4: return flipReadbackHorizontal(readback);
+        case 5: return flipReadbackHorizontal(rotateReadback90Clockwise(readback));
+        case 6: return flipReadbackHorizontal(rotateReadback180(readback));
+        case 7: return flipReadbackHorizontal(rotateReadback90CounterClockwise(readback));
+        default: return readback;
+    }
+}
+
 RgbaReadback solidBackgroundReadback(int width, int height, unsigned char r, unsigned char g, unsigned char b) {
     std::size_t bytes = 0;
     if (!checkedRgbaByteSize(width, height, bytes))
@@ -2821,7 +2890,17 @@ std::optional<RecordingFrame> captureDesktopRegionRecordingFrame(const Rect& tar
         const int cropY = clampedIntFromDouble((logicalPart.y - monRect.y) * monitorScale);
         const int cropWidth = positiveRoundedIntFromDouble(logicalPart.width * monitorScale);
         const int cropHeight = positiveRoundedIntFromDouble(logicalPart.height * monitorScale);
-        auto readback = renderMonitorReadback(monitor, now, cropX, cropY, cropWidth, cropHeight);
+        RgbaReadback readback;
+        const int    transform = std::clamp(static_cast<int>(monitor->m_transform), 0, 7);
+        if (transform == 0) {
+            readback = renderMonitorReadback(monitor, now, cropX, cropY, cropWidth, cropHeight);
+        } else {
+            const int monitorPixelWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
+            const int monitorPixelHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+            readback = renderMonitorReadback(monitor, now, 0, 0, monitorPixelWidth, monitorPixelHeight);
+            readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), transform);
+            readback = cropReadbackToBounds(readback, PixelBounds{.x = cropX, .y = cropY, .width = cropWidth, .height = cropHeight});
+        }
         if (readback.pixels.empty())
             continue;
 
