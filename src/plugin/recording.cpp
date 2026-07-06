@@ -412,10 +412,13 @@ bool recordingTargetIntersectsTransformedMonitor(const Rect& target) {
 }
 
 bool recordingNeedsCompositorTransformFallback(const RecordingRequest& request) {
+    if (request.mode == CaptureMode::Fullscreen || request.mode == CaptureMode::Region)
+        return false;
+
     if (!recordingTargetIntersectsTransformedMonitor(request.targetGeometry))
         return false;
 
-    return !(request.mode == CaptureMode::Fullscreen && recordingTargetExactMonitor(request.targetGeometry));
+    return true;
 }
 
 std::string gsrCaptureSource(const RecordingRequest& request) {
@@ -1115,6 +1118,22 @@ void finishRecordingOutput(const CaptureDefaults& defaults, const std::filesyste
         notifyRecording("recording result helper failed: " + result.error, CHyprColor(1.0, 0.35, 0.25, 1.0), 5000);
 }
 
+bool recordingOutputHasBytes(const std::filesystem::path& outputPath) {
+    std::error_code ec;
+    return std::filesystem::is_regular_file(outputPath, ec) && !ec && std::filesystem::file_size(outputPath, ec) > 0 && !ec;
+}
+
+void finishGsrRecordingOutput(const CaptureDefaults& defaults, const std::filesystem::path& outputPath, const std::string& message, bool launchResultHelper) {
+    if (!recordingOutputHasBytes(outputPath)) {
+        std::error_code ec;
+        std::filesystem::remove(outputPath, ec);
+        notifyRecording("gpu-screen-recorder produced no video data: " + outputPath.string(), CHyprColor(1.0, 0.35, 0.25, 1.0), 7000);
+        return;
+    }
+
+    finishRecordingOutput(defaults, outputPath, message, launchResultHelper);
+}
+
 bool reapGsrRecordingIfExited() {
     if (!g_gsrRecording)
         return false;
@@ -1127,7 +1146,7 @@ bool reapGsrRecordingIfExited() {
         auto recording = std::move(g_gsrRecording);
         if (recording->timer && g_pEventLoopManager)
             g_pEventLoopManager->removeTimer(recording->timer);
-        finishRecordingOutput(recording->defaults, recording->outputPath, "recording finished", true);
+        finishGsrRecordingOutput(recording->defaults, recording->outputPath, "recording finished", true);
         return false;
     }
 
@@ -1208,7 +1227,7 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
             while (waitpid(recording->pid, &status, 0) < 0 && errno == EINTR) {
             }
         }
-        finishRecordingOutput(recording->defaults, recording->outputPath, "recording " + reason, drain);
+        finishGsrRecordingOutput(recording->defaults, recording->outputPath, "recording " + reason, drain);
         return {.success = true};
     }
 
@@ -1463,6 +1482,8 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
         return {.success = false, .error = "invalid recording request metadata"};
 
     request->defaults.recordFormat = sanitizedRecordFormat(request->defaults.recordFormat);
+    if (request->mode != CaptureMode::Window)
+        request->defaults.recordSolidAlpha = false;
     const bool imageAnimation = isImageAnimationRecordFormat(request->defaults.recordFormat);
     if (imageAnimation) {
         request->defaults.recordMaxSeconds = normalizedAnimationDurationSeconds(request->defaults.recordMaxSeconds);
@@ -1484,8 +1505,8 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
     const auto codec = effectiveRecordingCodec(frameRequest, request->defaults.recordCodec);
     const bool transcodeToApng = format == "apng";
     const bool preserveAlpha = recordingNeedsAlpha(frameRequest) && recordingEncoderSupportsAlpha(format, codec);
-    const bool solidAlphaFallback =
-        frameRequest.defaults.recordSolidAlpha && solidAlphaBackground(frameRequest.defaults.windowBackground) && !recordingEncoderSupportsAlpha(format, codec);
+    const bool solidAlphaFallback = frameRequest.mode == CaptureMode::Window && frameRequest.defaults.recordSolidAlpha &&
+        solidAlphaBackground(frameRequest.defaults.windowBackground) && !recordingEncoderSupportsAlpha(format, codec);
     if (solidAlphaFallback) {
         frameRequest.defaults.recordSolidAlpha = false;
         notifyRecording("selected " + format + "/" + codec + " does not preserve alpha; using compositor opaque fallback",

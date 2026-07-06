@@ -3434,6 +3434,8 @@ QString CaptureOverlay::prepareRecordingRequest() {
     request.defaults.mode = m_mode;
     request.defaults.fullscreenScope = currentFullscreenScope();
     request.defaults.windowBackground = currentRecordBackground();
+    if (m_mode != hyprcapture::CaptureMode::Window)
+        request.defaults.recordSolidAlpha = false;
     request.defaults.windowBorder = currentWindowBorder();
     request.defaults.windowShadow = currentWindowShadow();
     const QString recordFormat = currentRecordFormat();
