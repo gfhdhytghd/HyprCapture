@@ -415,7 +415,7 @@ The compositor recording path uses synchronous compositor readback. To avoid mak
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `watermark` | string | empty | Disabled when empty. Set to a PNG or JPG/JPEG path, or use built-in `activate-linux` / `hypercam2`. External SVG files are ignored; transparency is preserved for PNG. |
+| `watermark` | string | empty | Disabled when empty. Set to a PNG or JPG/JPEG path, or use built-in `activate-linux`, `hypercam2`, or `hyprcam2`. External SVG files are ignored; transparency is preserved for PNG. |
 | `watermark_position` | string | `central` | Supports `up-left`, `up-middle`, `up-right`, `left-middle`, `central`, `right-middle`, `down-left`, `down-middle`, and `down-right`. Common aliases like `center`, `top-center`, and `right-meddle` are accepted. |
 | `watermark_width` | string | `20%` | Watermark width. Use pixels like `320` / `320px`, or screenshot-width percent like `18%`. |
 | `watermark_offset` | string | `0 0` | X/Y offset from the selected position. Vec2-like values such as `12 -8`, `2% -4%`, or `12px, -8px` are accepted. Percent X is relative to screenshot width; percent Y is relative to screenshot height. |

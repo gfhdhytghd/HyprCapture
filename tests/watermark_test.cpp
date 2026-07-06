@@ -74,7 +74,18 @@ int main(int argc, char** argv) {
     defaults.watermark = "/missing/unregistered hypercam 2.jpg";
     auto hypercamPathAlias = base;
     ui::applyWatermark(hypercamPathAlias, defaults);
-    require(imageDiffers(base, hypercamPathAlias), "hypercam filename alias");
+    require(!imageDiffers(hypercam, hypercamPathAlias), "hypercam filename alias renders hypercam preset");
+
+    defaults.watermark = "hyprcam2";
+    auto hyprcam = base;
+    ui::applyWatermark(hyprcam, defaults);
+    require(imageDiffers(base, hyprcam), "hyprcam changes image");
+    require(imageDiffers(hypercam, hyprcam), "hyprcam is a separate built-in preset");
+
+    defaults.watermark = "/missing/unregistered hyprcam 2.jpg";
+    auto hyprcamPathAlias = base;
+    ui::applyWatermark(hyprcamPathAlias, defaults);
+    require(!imageDiffers(hyprcam, hyprcamPathAlias), "hyprcam filename alias renders hyprcam preset");
 
     QTemporaryDir tempDir;
     require(tempDir.isValid(), "temporary watermark dir");

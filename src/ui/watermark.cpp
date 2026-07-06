@@ -16,7 +16,7 @@
 namespace hyprcapture::ui {
 namespace {
 
-enum class BuiltinWatermark { None, Hypercam2, ActivateLinux };
+enum class BuiltinWatermark { None, Hypercam2, Hyprcam2, ActivateLinux };
 
 constexpr qint64 kMaxWatermarkFileBytes = 16 * 1024 * 1024;
 constexpr qint64 kMaxWatermarkBytes = 128 * 1024 * 1024;
@@ -166,6 +166,25 @@ N/jZ/wAE9vib8Q/23ZPi1pl34eTw2/iDS9R8i4vZkuvKgW3DnZ5O3P7p8fN6fj+khbJ6tjGMHB9f8f0F
 9gcen+H6mgD4H+Fvws/bb+EPw+0LwboV18LG0fRbZbW1+1SXTybA24FiFAJ/CvdPgEn7S8PjG5Pxdm8CXPhY2TmA+GBcGf7SJYwA
 29cbNnmnAGchecZz9Cbf9lP++R/hTsKWBIJxnAPI5x/n8TQB/9k=)BASE64";
 
+constexpr const char* kHyprcamJpegBase64 =
+    R"BASE64(/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAP//////////////////////////////////////////////////////////////
+////////////////////////2wBDAf//////////////////////////////////////////////////////////////////
+////////////////////wAARCAAuAeADASIAAhEBAxEB/8QAFwABAQEBAAAAAAAAAAAAAAAAAAIBA//EACsQAAICAQIFAwQC
+AwAAAAAAAAABAhEhMYESMkFRcWHB0QMikaFCsVKC8P/EABQBAQAAAAAAAAAAAAAAAAAAAAD/xAAUEQEAAAAAAAAAAAAAAAAA
+AAAA/9oADAMBAAIRAxEAPwDoDlNu9enydQAOc3pv7Fx0QGgAAAAAAAAAAAAAOclK8XXk6AAAABMnRqdqwNAAAAAAAAAAAA5Q
+bb1enwB1AMlowNBzg9dvc6AAcoN3q9Pg6gAAAAAAAAALrU55k+yWLTA6A5tNU02++S07SYGgAAAAAAAAAACJOt7MUbV2/wAg
+dAc4SvH7OgAAAcp67fJ1Rynrt8nRAR9Tpv7FLlXgmfTf2KXKvAERcm6tmtuLy7wZDXb4E9dvkC28N+hCcm9X8Fvlfgn6fXb3
+ApvhS6kq2uevQ2ei8iMU0rQGRleH+TZSrHcpJLRET6AKlV8XSxBt3bK/h/r7Ew6gJNp4ZbdKznPmOjp6gQrlbusmptOnb9Qo
+taNUYpO6ec0AmnreL0NgnV3jsJ6LybDlW/8AYEcVvXhQtpr7uIyKt5OnDHsAb+2/S/0c05Pqzq+V+H/REOoFN8KzkhW1z0VP
+TcyKTWUAjLNa51Kk63sUloiZ9N/YAk2r4jIa7fBa5V4Ihrt8AdSZcr8FEy5X4AiLq8N6aFcT/wAWZ9Prt7nQDlDXb4Ni3f3O
+vODIa7fBs11A6HO25YeLDmmqzobBUr70BLb4qvsa+JK+JmPn3XsVPTcDU7VnO5PRsuPL+SYa7fAFO+DPp7CGj8my5WZDR+QL
+BjdBO1YEW2+sV6/8jOJp68SF8bpYXqZJJPHYDo9G/QiPFK/uot8r8E/T67e4GNyTq2a+JK+Ix8+69ip6bgUnas0iGm5YGUnq
+jG0sbUJOt7oyKvLzYCEaz+iwAAAAxq8MlKSuqLAEKOW3r0osACIxaeewlFt2uxYAxq1XoTFNXfUsAY0mSlJKsFgCIxrXU2Ub
+89CiZLF28AT9yVYqhDqTxOq9KLiqV9wMlFt3gtq8M0AQlJXVBRzb16UWAMaT1MimsOqKAEcLTuNbjhbauq9CwBlYpdqJjFq7
+LAGNJ4ZKUlhUWAIUay9bNav2KAEVJKsCMWnb7FgAY1aaNAERi1dlgARGLTt9imrwzTnN9AJSXFXS2dtCUqKA4y5t0W1J4dEv
+n3R1AxKlSJjFp2+xYAEOObj+ywBDUnV1XoVVKjQBHC07jW5jjJ5dHQAY1ar0JjFq76lgDm4tyvGqKkrVIoATFUqKAAiUW6oJ
+TSrBYAlcXWtigAAAA//Z)BASE64";
+
 QString normalizedBuiltinId(const std::string& value) {
     auto id = QString::fromStdString(value).trimmed().toLower();
     if (id.startsWith(QLatin1String("builtin:")))
@@ -184,6 +203,10 @@ bool watermarkDisabled(const std::string& value) {
 BuiltinWatermark builtinWatermarkFor(const std::string& value) {
     const auto id = normalizedBuiltinId(value);
     const auto basename = QFileInfo(id).fileName();
+    if (id == QLatin1String("hyprcam") || id == QLatin1String("hyprcam2") || id == QLatin1String("hyprcam-2") ||
+        id == QLatin1String("unregistered-hyprcam") || id == QLatin1String("unregistered-hyprcam-2") || id == QLatin1String("unregistered-hyprcam-2.jpg") ||
+        basename == QLatin1String("unregistered-hyprcam-2") || basename == QLatin1String("unregistered-hyprcam-2.jpg"))
+        return BuiltinWatermark::Hyprcam2;
     if (id == QLatin1String("hypercam") || id == QLatin1String("hypercam2") || id == QLatin1String("hypercam-2") || id == QLatin1String("unregistered") ||
         id == QLatin1String("unregistered-hypercam") || id == QLatin1String("unregistered-hypercam-2") || id == QLatin1String("unregistered-hypercam-2.jpg") ||
         basename == QLatin1String("unregistered") || basename == QLatin1String("unregistered-hypercam-2") ||
@@ -264,9 +287,9 @@ int targetWatermarkWidth(const QImage& target, const CaptureDefaults& defaults, 
 
     const int maxWidth = target.width() > kMaxWatermarkDimension / 4 ? kMaxWatermarkDimension : std::clamp(target.width() * 4, 1, kMaxWatermarkDimension);
     int targetWidth = std::clamp(static_cast<int>(std::round(pixels)), 1, maxWidth);
-    if (builtin == BuiltinWatermark::Hypercam2 && isDefaultWatermarkWidth(defaults.watermarkWidth)) {
-        constexpr double kHypercamAspect = 480.0 / 46.0;
-        const int widthForReadableHeight = static_cast<int>(std::round(std::max(46.0, target.height() * 0.065) * kHypercamAspect));
+    if ((builtin == BuiltinWatermark::Hypercam2 || builtin == BuiltinWatermark::Hyprcam2) && isDefaultWatermarkWidth(defaults.watermarkWidth)) {
+        constexpr double kCamAspect = 480.0 / 46.0;
+        const int widthForReadableHeight = static_cast<int>(std::round(std::max(46.0, target.height() * 0.065) * kCamAspect));
         const int defaultMaxWidth = std::max(1, static_cast<int>(std::round(target.width() * 0.8)));
         targetWidth = std::max(targetWidth, std::min(widthForReadableHeight, defaultMaxWidth));
     }
@@ -313,8 +336,8 @@ QImage renderSvgWatermark(const QByteArray& svg, int targetWidth) {
 QImage loadBuiltinWatermark(BuiltinWatermark builtin, int targetWidth) {
     if (builtin == BuiltinWatermark::ActivateLinux)
         return renderSvgWatermark(QByteArray(kActivateLinuxSvg), targetWidth);
-    if (builtin == BuiltinWatermark::Hypercam2) {
-        QByteArray encoded(kHypercamJpegBase64);
+    if (builtin == BuiltinWatermark::Hypercam2 || builtin == BuiltinWatermark::Hyprcam2) {
+        QByteArray encoded(builtin == BuiltinWatermark::Hyprcam2 ? kHyprcamJpegBase64 : kHypercamJpegBase64);
         encoded.replace("\n", "");
         encoded.replace("\r", "");
         encoded.replace(" ", "");
