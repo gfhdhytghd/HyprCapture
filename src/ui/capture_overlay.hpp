@@ -122,6 +122,9 @@ class CaptureOverlay final : public QMainWindow {
     void hideOptionPopups();
     hyprcapture::FullscreenScope currentFullscreenScope() const;
     hyprcapture::WindowBackground currentWindowBackground() const;
+    hyprcapture::WindowBackground currentRecordBackground() const;
+    bool currentRecordTransparencyRequired() const;
+    bool currentRecordAlphaRequested() const;
     QString currentRecordFormat() const;
     QString currentRecordCodec() const;
     int currentRecordFps() const;

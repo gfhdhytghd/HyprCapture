@@ -1868,7 +1868,7 @@ void CaptureOverlay::buildToolbar() {
     m_recordCodec = new InlineSelect(this, m_recordOptions);
     m_recordCodec->setPrefix("Codec");
     m_recordCodec->addItems(QStringList{"auto", "h264", "h264-vaapi", "h265", "h265-vaapi", "av1", "av1-vaapi", "vp9", "vp9-vaapi", "ffv1"});
-    m_recordCodec->setCurrentText(defaultRecordCodecForBackground(m_defaults, currentWindowBackground()));
+    m_recordCodec->setCurrentText(defaultRecordCodecForBackground(m_defaults, currentRecordBackground()));
     m_recordCodec->setOnChanged([this, onRecordOptionChanged] {
         m_recordCodecAuto = false;
         onRecordOptionChanged();
@@ -1878,13 +1878,13 @@ void CaptureOverlay::buildToolbar() {
     m_recordFormat = new InlineSelect(this, m_recordOptions);
     m_recordFormat->setPrefix("Format");
     m_recordFormat->addItems(QStringList{"mp4", "mov", "webm", "mkv", "gif", "apng", "webp"});
-    m_recordFormat->setCurrentText(defaultRecordFormatForBackground(m_defaults, currentWindowBackground()));
+    m_recordFormat->setCurrentText(defaultRecordFormatForBackground(m_defaults, currentRecordBackground()));
     m_recordFormat->setOnChanged([this, onRecordOptionChanged] {
         m_recordFormatAuto = false;
         if (isImageAnimationRecordFormat(currentRecordFormat())) {
             if (m_recordDuration)
                 m_recordDuration->setCurrentText(animationDurationChoice(currentRecordMaxSeconds()));
-        } else if (alphaRecordingRequested(m_defaults, currentWindowBackground()) && m_recordCodec) {
+        } else if (currentRecordAlphaRequested() && m_recordCodec) {
             const QString format = currentRecordFormat();
             if (format == "webm" || format == "mkv") {
                 m_recordCodec->setCurrentText(transparentAutoChoiceForFormat(format).codec);
@@ -2208,6 +2208,8 @@ void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
 
     clearPendingConfirm();
     m_mode = mode;
+    if (m_record)
+        applyRecordDefaultsForCurrentBackground();
     updateToolbarControlsForMode();
     updateStatus();
     update();
@@ -2252,15 +2254,29 @@ hyprcapture::WindowBackground CaptureOverlay::currentWindowBackground() const {
     return hyprcapture::parseWindowBackground(m_windowBackground->currentText().toStdString(), m_defaults.windowBackground);
 }
 
+hyprcapture::WindowBackground CaptureOverlay::currentRecordBackground() const {
+    if (m_mode != hyprcapture::CaptureMode::Window)
+        return hyprcapture::WindowBackground::FollowSystem;
+    return currentWindowBackground();
+}
+
+bool CaptureOverlay::currentRecordTransparencyRequired() const {
+    return m_mode == hyprcapture::CaptureMode::Window && transparencyRequired(currentWindowBackground());
+}
+
+bool CaptureOverlay::currentRecordAlphaRequested() const {
+    return m_mode == hyprcapture::CaptureMode::Window && alphaRecordingRequested(m_defaults, currentWindowBackground());
+}
+
 QString CaptureOverlay::currentRecordFormat() const {
     if (!m_recordFormat)
-        return defaultRecordFormatForBackground(m_defaults, currentWindowBackground());
+        return defaultRecordFormatForBackground(m_defaults, currentRecordBackground());
     return normalizedRecordFormat(m_recordFormat->currentText());
 }
 
 QString CaptureOverlay::currentRecordCodec() const {
     if (!m_recordCodec)
-        return defaultRecordCodecForBackground(m_defaults, currentWindowBackground());
+        return defaultRecordCodecForBackground(m_defaults, currentRecordBackground());
     return normalizedChoice(m_recordCodec->currentText());
 }
 
@@ -2289,7 +2305,7 @@ hyprcapture::RecordWindowBackend CaptureOverlay::currentRecordBackend() const {
 }
 
 void CaptureOverlay::applyRecordDefaultsForCurrentBackground() {
-    const auto background = currentWindowBackground();
+    const auto background = currentRecordBackground();
 
     if (background != hyprcapture::WindowBackground::Transparent) {
         if (m_recordFormatAuto && m_recordFormat)
@@ -2321,7 +2337,7 @@ QString CaptureOverlay::recordOptionsConflict() const {
     if (!m_record)
         return {};
 
-    const bool alphaRequested = transparencyRequired(currentWindowBackground());
+    const bool alphaRequested = currentRecordTransparencyRequired();
     const QString format = currentRecordFormat();
     const QString codec = currentRecordCodec();
     const bool imageAnimation = isImageAnimationRecordFormat(format);
@@ -2361,12 +2377,12 @@ QString CaptureOverlay::recordOptionsWarning() const {
                 return QStringLiteral("apng recordings of 10s or longer can create very large files");
             return QStringLiteral("apng records a 60 fps mkv intermediate before transcoding");
         }
-        if (format == "gif" && alphaRecordingRequested(m_defaults, currentWindowBackground()))
+        if (format == "gif" && currentRecordAlphaRequested())
             return QStringLiteral("gif has limited transparency; using compositor readback for a fixed-duration animation");
         return QStringLiteral("animation formats use compositor readback; keep area and fps modest");
     }
 
-    if (!alphaRecordingRequested(m_defaults, currentWindowBackground()))
+    if (!currentRecordAlphaRequested())
         return {};
 
     if (format == "webm" && (codec == "auto" || codec == "vp9")) {
@@ -3417,7 +3433,7 @@ QString CaptureOverlay::prepareRecordingRequest() {
     request.defaults = m_defaults;
     request.defaults.mode = m_mode;
     request.defaults.fullscreenScope = currentFullscreenScope();
-    request.defaults.windowBackground = currentWindowBackground();
+    request.defaults.windowBackground = currentRecordBackground();
     request.defaults.windowBorder = currentWindowBorder();
     request.defaults.windowShadow = currentWindowShadow();
     const QString recordFormat = currentRecordFormat();
