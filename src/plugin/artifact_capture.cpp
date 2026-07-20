@@ -11,10 +11,13 @@
 #include <hyprland/src/config/ConfigValue.hpp>
 #include <hyprland/src/desktop/Workspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
+#include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/errorOverlay/Overlay.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/notification/NotificationOverlay.hpp>
 #include <hyprland/src/render/gl/GLFramebuffer.hpp>
 #include <hyprland/src/render/gl/GLTexture.hpp>
@@ -1664,7 +1667,7 @@ std::optional<ExportPipePayload> captureExportPipePayload(const std::string& res
     const auto frozenTime = Time::steadyNow();
     ArtifactBudget artifactBudget;
     int monitorIndex = 0;
-    for (const auto& monitor : g_pCompositor->m_monitors) {
+    for (const auto& monitor : State::monitorState()->monitors()) {
         if (!monitor)
             continue;
 
@@ -1685,10 +1688,7 @@ std::optional<ExportPipePayload> captureExportPipePayload(const std::string& res
         info.artifactWidth = readback.width;
         info.artifactHeight = readback.height;
         info.artifactTopDown = true;
-        payload.monitors.push_back({
-            .info = std::move(info),
-            .rgba = std::move(readback.pixels),
-        });
+        payload.monitors.emplace_back(ExportPipeMonitorPayload{std::move(info), std::move(readback.pixels)});
         ++monitorIndex;
     }
 
@@ -2173,9 +2173,9 @@ std::vector<PHLWINDOW> windowsInRenderOrder() {
     if (!g_pCompositor)
         return ordered;
 
-    ordered.reserve(g_pCompositor->m_windows.size());
+    ordered.reserve(Desktop::windowState()->windows().size());
     const auto appendPass = [&](bool special, bool floating) {
-        for (const auto& window : g_pCompositor->m_windows) {
+        for (const auto& window : Desktop::windowState()->windows()) {
             if (!shouldCaptureWindow(window) || (window->m_pinned && window->m_isFloating) || window->onSpecialWorkspace() != special ||
                 window->m_isFloating != floating)
                 continue;
@@ -2189,7 +2189,7 @@ std::vector<PHLWINDOW> windowsInRenderOrder() {
     appendPass(true, false);
     appendPass(true, true);
 
-    for (const auto& window : g_pCompositor->m_windows) {
+    for (const auto& window : Desktop::windowState()->windows()) {
         if (!shouldCaptureWindow(window) || !window->m_pinned || !window->m_isFloating)
             continue;
 
@@ -2361,7 +2361,7 @@ int colorByte(float value) {
 }
 
 ShadowColorBytes shadowColorBytes(const PHLWINDOW& window) {
-    const CHyprColor color = window && window->m_realShadowColor ? window->m_realShadowColor->value() : CHyprColor(0xee1a1a1a);
+    const CHyprColor color = window && !window->m_realShadowColor.m_colors.empty() ? window->m_realShadowColor.m_colors.front() : CHyprColor(0xee1a1a1a);
     return {
         .r = colorByte(color.r),
         .g = colorByte(color.g),
@@ -2841,7 +2841,7 @@ PHLWINDOW findWindowByAddress(const std::string& address) {
     if (address.empty() || !g_pCompositor)
         return {};
 
-    for (const auto& window : g_pCompositor->m_windows) {
+    for (const auto& window : Desktop::windowState()->windows()) {
         if (window && "0x" + pointerId(window.get()) == address)
             return window;
     }
@@ -2854,7 +2854,7 @@ std::optional<RecordingFrame> captureDesktopRegionRecordingFrame(const Rect& tar
 
     std::vector<PHLMONITOR> intersecting;
     double                  outputScale = 0.0;
-    for (const auto& monitor : g_pCompositor->m_monitors) {
+    for (const auto& monitor : State::monitorState()->monitors()) {
         if (!monitor)
             continue;
         const Rect monRect = monitorRect(monitor);
@@ -3070,7 +3070,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     ArtifactBudget artifactBudget;
 
     int monitorIndex = 0;
-    for (const auto& monitor : g_pCompositor->m_monitors) {
+    for (const auto& monitor : State::monitorState()->monitors()) {
         if (session.monitors.size() >= MAX_SESSION_MONITORS)
             break;
         if (!monitor)
@@ -3118,7 +3118,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
         info.zIndex = z++;
-        const bool dontRound = window->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
+        const bool dontRound = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
         info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
         info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0);
         info.borderSize = dontRound || window->m_X11DoesntWantBorders ? 0.0 : std::max(0, window->getRealBorderSize());
@@ -3144,7 +3144,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         session.windows.push_back(std::move(info));
     }
 
-    for (const auto& monitor : g_pCompositor->m_monitors) {
+    for (const auto& monitor : State::monitorState()->monitors()) {
         if (!monitor)
             continue;
 
@@ -3190,7 +3190,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
     info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
     info.zIndex = 0;
-    const bool dontRound = window->isEffectiveInternalFSMode(FSMODE_FULLSCREEN);
+    const bool dontRound = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
     info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
     info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0);
     info.borderSize = dontRound || window->m_X11DoesntWantBorders ? 0.0 : std::max(0, window->getRealBorderSize());

@@ -7,7 +7,7 @@
 #include "shared/protocol.hpp"
 
 #include <hyprland/src/Compositor.hpp>
-#include <hyprland/src/helpers/Monitor.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -391,7 +391,7 @@ PHLMONITOR recordingTargetExactMonitor(const Rect& target) {
     if (!g_pCompositor || !recordingRectValid(target))
         return {};
 
-    for (const auto& monitor : g_pCompositor->m_monitors) {
+    for (const auto& monitor : State::monitorState()->monitors()) {
         if (monitor && recordingRectsNearlyEqual(target, recordingMonitorRect(monitor)))
             return monitor;
     }
@@ -402,7 +402,7 @@ bool recordingTargetIntersectsTransformedMonitor(const Rect& target) {
     if (!g_pCompositor || !recordingRectValid(target))
         return false;
 
-    for (const auto& monitor : g_pCompositor->m_monitors) {
+    for (const auto& monitor : State::monitorState()->monitors()) {
         if (!monitor || static_cast<int>(monitor->m_transform) == 0)
             continue;
         if (recordingRectsIntersect(target, recordingMonitorRect(monitor)))
