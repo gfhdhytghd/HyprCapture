@@ -327,6 +327,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(boolArg(request.defaults.confirmBeforeCapture));
     args.push_back("--fushion-mode");
     args.push_back(boolArg(request.defaults.fushionMode));
+    args.push_back("--capture-fullscreen-clients-as-monitor");
+    args.push_back(boolArg(request.defaults.captureFullscreenClientsAsMonitor));
     args.push_back("--save-dir");
     args.push_back(request.defaults.saveDir);
     args.push_back("--filename-template");
@@ -365,6 +367,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(std::to_string(request.defaults.recordCountdownSeconds));
     args.push_back("--thumbnail-timeout-ms");
     args.push_back(std::to_string(request.defaults.thumbnailTimeoutMs));
+    args.push_back("--thumbnail-monitor");
+    args.push_back(request.defaults.thumbnailMonitor);
     args.push_back("--watermark");
     args.push_back(request.defaults.watermark);
     args.push_back("--watermark-position");
@@ -468,6 +472,8 @@ LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const 
     args.push_back(defaults.recordSaveDir);
     args.push_back("--thumbnail-timeout-ms");
     args.push_back(std::to_string(defaults.thumbnailTimeoutMs));
+    args.push_back("--thumbnail-monitor");
+    args.push_back(defaults.thumbnailMonitor);
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
@@ -552,6 +558,8 @@ LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
     args.push_back(defaults.recordSaveDir);
     args.push_back("--thumbnail-timeout-ms");
     args.push_back(std::to_string(defaults.thumbnailTimeoutMs));
+    args.push_back("--thumbnail-monitor");
+    args.push_back(defaults.thumbnailMonitor);
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);

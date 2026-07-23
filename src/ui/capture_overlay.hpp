@@ -65,6 +65,8 @@ class CaptureOverlay final : public QMainWindow {
         QString address;
         QString title;
         QString appClass;
+        bool    focused = false;
+        bool    fullscreen = false;
     };
 
     void buildToolbar();
@@ -151,6 +153,7 @@ class CaptureOverlay final : public QMainWindow {
     const WindowArtifact* hoveredWindow() const;
     WindowArtifact* selectedWindow();
     const WindowArtifact* selectedWindow() const;
+    const WindowArtifact* filenameWindow() const;
     bool windowCaptureAvailable() const;
     void updateStatus();
     void relayoutToolbar();
@@ -185,6 +188,7 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_hasCursorLogicalPosition = false;
     bool                      m_recordFormatAuto = true;
     bool                      m_recordCodecAuto = true;
+    bool                      m_fullscreenClientSelected = false;
     QString                   m_hymissionCaptureInputToken;
 
     QWidget*     m_toolbar = nullptr;

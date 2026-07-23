@@ -3117,8 +3117,10 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
             info.selectionGeometry = overviewSelectionIt->second;
         info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
+        info.focused = window == Desktop::focusState()->window();
+        info.fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
         info.zIndex = z++;
-        const bool dontRound = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
+        const bool dontRound = info.fullscreen;
         info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
         info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0);
         info.borderSize = dontRound || window->m_X11DoesntWantBorders ? 0.0 : std::max(0, window->getRealBorderSize());
@@ -3189,8 +3191,10 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     info.address = "0x" + pointerId(window.get());
     info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
     info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
+    info.focused = window == Desktop::focusState()->window();
+    info.fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
     info.zIndex = 0;
-    const bool dontRound = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
+    const bool dontRound = info.fullscreen;
     info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
     info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0);
     info.borderSize = dontRound || window->m_X11DoesntWantBorders ? 0.0 : std::max(0, window->getRealBorderSize());

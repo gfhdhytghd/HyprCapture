@@ -331,7 +331,14 @@ std::vector<OpenWithApp> openWithAppsForPath(const QString& path) {
 
 } // namespace
 
-ResultThumbnail::ResultThumbnail(const QPixmap& pixmap, QString path, QString restoreClipboardPath, QString deleteRoot, int timeoutMs, bool copyFile, QWidget* parent)
+ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
+                                 QString path,
+                                 QString restoreClipboardPath,
+                                 QString deleteRoot,
+                                 int timeoutMs,
+                                 bool copyFile,
+                                 QScreen* targetScreen,
+                                 QWidget* parent)
     : QWidget(parent), m_path(std::move(path)), m_restoreClipboardPath(std::move(restoreClipboardPath)), m_deleteRoot(std::move(deleteRoot)), m_copyFile(copyFile) {
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
     setFocusPolicy(Qt::NoFocus);
@@ -463,7 +470,11 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap, QString path, QString re
 
     adjustSize();
     winId();
+    if (targetScreen && windowHandle())
+        windowHandle()->setScreen(targetScreen);
     if (auto* layerWindow = LayerShellQt::Window::get(windowHandle())) {
+        if (targetScreen)
+            layerWindow->setScreen(targetScreen);
         layerWindow->setScope("hyprcapture-thumbnail");
         layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
         layerWindow->setAnchors(LayerShellQt::Window::Anchors{LayerShellQt::Window::AnchorRight} | LayerShellQt::Window::AnchorBottom);

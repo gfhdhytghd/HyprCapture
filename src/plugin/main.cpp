@@ -141,8 +141,9 @@ void registerConfigValues() {
     addBoolConfig("confirm_before_capture", "Require explicit confirmation after target selection for normal open captures", false);
     addBoolConfig("fusion_mode", "Fuse region and window interactions in one overlay", false);
     addBoolConfig("fushion_mode", "Legacy alias for fusion_mode", false);
+    addBoolConfig("capture_fullscreen_clients_as_monitor", "Capture a fullscreen client as its whole monitor in window and fusion modes", false);
     addStringConfig("save_dir", "Capture output directory", "$XDG_PICTURES_DIR/Screenshots");
-    addStringConfig("filename_template", "Screenshot filename strftime template", "Screenshot-%Y-%m-%d-%H%M%S.png");
+    addStringConfig("filename_template", "Screenshot filename strftime template with window metadata variables", "Screenshot-%Y-%m-%d-%H%M%S.png");
     addStringConfig("record_save_dir", "Recording output directory", "$XDG_VIDEOS_DIR/Screenrecords");
     addStringConfig("record_filename_template", "Recording filename strftime template", "Recording-%Y-%m-%d-%H%M%S.mp4");
     addStringConfig("record_format", "Default recording format", "mp4");
@@ -160,6 +161,7 @@ void registerConfigValues() {
     addIntConfig("record_max_seconds", "Optional automatic recording stop in seconds", 0);
     addIntConfig("record_countdown_seconds", "Recording start countdown in seconds", 0);
     addIntConfig("thumbnail_timeout_ms", "Thumbnail auto-close timeout in milliseconds", 5000);
+    addStringConfig("thumbnail_monitor", "Thumbnail target monitor: active, primary, or an output name", "active");
     addStringConfig("helper", "Optional helper executable override", "");
     addStringConfig("watermark", "Watermark path or built-in name", "");
     addStringConfig("watermark_position", "Watermark position", "central");
@@ -189,6 +191,8 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.allowQuick = configBool("allow_quick", defaults.allowQuick);
     defaults.confirmBeforeCapture = configBool("confirm_before_capture", defaults.confirmBeforeCapture);
     defaults.fushionMode = configBool("fusion_mode", defaults.fushionMode) || configBool("fushion_mode", defaults.fushionMode);
+    defaults.captureFullscreenClientsAsMonitor =
+        configBool("capture_fullscreen_clients_as_monitor", defaults.captureFullscreenClientsAsMonitor);
     defaults.saveDir = configString("save_dir", defaults.saveDir);
     defaults.filenameTemplate = configString("filename_template", defaults.filenameTemplate);
     defaults.helper = configString("helper", defaults.helper);
@@ -210,6 +214,7 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.recordMaxSeconds = configInt("record_max_seconds", defaults.recordMaxSeconds);
     defaults.recordCountdownSeconds = std::clamp<std::int64_t>(configInt("record_countdown_seconds", defaults.recordCountdownSeconds), 0, 60);
     defaults.thumbnailTimeoutMs = configInt("thumbnail_timeout_ms", defaults.thumbnailTimeoutMs);
+    defaults.thumbnailMonitor = configString("thumbnail_monitor", defaults.thumbnailMonitor);
     defaults.watermark = configString("watermark", defaults.watermark);
     defaults.watermarkPosition =
         hyprcapture::parseWatermarkPosition(configString("watermark_position", hyprcapture::toString(defaults.watermarkPosition)), defaults.watermarkPosition);

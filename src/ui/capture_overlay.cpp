@@ -761,7 +761,7 @@ CaptureOutputResult writeCaptureOutput(const QImage& image,
     return result;
 }
 
-QString plannedCaptureOutputPath(const hyprcapture::CaptureDefaults& defaults) {
+QString plannedCaptureOutputPath(const hyprcapture::CaptureDefaults& defaults, const QString& windowClass, const QString& windowTitle) {
     if (!defaults.save)
         return {};
 
@@ -769,7 +769,9 @@ QString plannedCaptureOutputPath(const hyprcapture::CaptureDefaults& defaults) {
     QDir       dir(QString::fromStdString(dirPath.string()));
     if (!dir.exists())
         dir.mkpath(".");
-    return uniqueOutputPath(dir, QString::fromStdString(hyprcapture::makeTimestampedFilename(defaults.filenameTemplate)));
+    return uniqueOutputPath(
+        dir,
+        QString::fromStdString(hyprcapture::makeTimestampedFilename(defaults.filenameTemplate, windowClass.toStdString(), windowTitle.toStdString())));
 }
 
 QString thumbnailTargetPath(const hyprcapture::CaptureDefaults& defaults, const QString& plannedOutputPath) {
@@ -1586,6 +1588,8 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.address = qString(info.address);
         artifact.title = qString(info.title);
         artifact.appClass = qString(info.appClass);
+        artifact.focused = info.focused;
+        artifact.fullscreen = info.fullscreen;
         artifact.visibleGeometry = protocolRect(info.visibleGeometry);
         artifact.fullGeometry = protocolRect(info.fullGeometry);
         if (info.selectionGeometry) {
@@ -2208,6 +2212,7 @@ void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
     hideOptionPopups();
 
     clearPendingConfirm();
+    m_fullscreenClientSelected = false;
     m_mode = mode;
     if (m_record)
         applyRecordDefaultsForCurrentBackground();
@@ -2735,6 +2740,17 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         if (windowIndex >= 0) {
             m_mode = hyprcapture::CaptureMode::Window;
             m_selectedWindowIndex = windowIndex;
+            if (m_defaults.captureFullscreenClientsAsMonitor && m_windowArtifacts[static_cast<std::size_t>(windowIndex)].fullscreen) {
+                m_fullscreenClientSelected = true;
+                m_mode = hyprcapture::CaptureMode::Fullscreen;
+                if (m_fullscreenScope)
+                    m_fullscreenScope->setCurrentText(QStringLiteral("current"));
+                if (confirmBeforeCaptureEnabled())
+                    beginPendingConfirm(hyprcapture::CaptureMode::Fullscreen);
+                else
+                    finishCapture();
+                return;
+            }
             if (confirmBeforeCaptureEnabled() && !selectedWindowUsesOverviewSelection())
                 beginPendingConfirm(hyprcapture::CaptureMode::Window);
             else
@@ -2742,8 +2758,15 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
             return;
         }
 
-        updateStatus();
-        update();
+        m_fullscreenClientSelected = false;
+        m_selectedWindowIndex = -1;
+        m_mode = hyprcapture::CaptureMode::Fullscreen;
+        if (m_fullscreenScope)
+            m_fullscreenScope->setCurrentText(QStringLiteral("current"));
+        if (confirmBeforeCaptureEnabled())
+            beginPendingConfirm(hyprcapture::CaptureMode::Fullscreen);
+        else
+            finishCapture();
         return;
     }
 
@@ -2751,6 +2774,18 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         const int windowIndex = hoveredWindowIndex();
         if (windowIndex >= 0)
             m_selectedWindowIndex = windowIndex;
+        if (windowIndex >= 0 && m_defaults.captureFullscreenClientsAsMonitor &&
+            m_windowArtifacts[static_cast<std::size_t>(windowIndex)].fullscreen) {
+            m_fullscreenClientSelected = true;
+            m_mode = hyprcapture::CaptureMode::Fullscreen;
+            if (m_fullscreenScope)
+                m_fullscreenScope->setCurrentText(QStringLiteral("current"));
+            if (confirmBeforeCaptureEnabled())
+                beginPendingConfirm(hyprcapture::CaptureMode::Fullscreen);
+            else
+                finishCapture();
+            return;
+        }
         if (confirmBeforeCaptureEnabled() && !selectedWindowUsesOverviewSelection()) {
             if (m_selectedWindowIndex >= 0)
                 beginPendingConfirm(hyprcapture::CaptureMode::Window);
@@ -3026,6 +3061,15 @@ CaptureOverlay::WindowArtifact* CaptureOverlay::selectedWindow() {
     return const_cast<WindowArtifact*>(std::as_const(*this).selectedWindow());
 }
 
+const CaptureOverlay::WindowArtifact* CaptureOverlay::filenameWindow() const {
+    if (const auto* selected = selectedWindow()) {
+        if (m_mode == hyprcapture::CaptureMode::Window || (m_mode == hyprcapture::CaptureMode::Fullscreen && m_fullscreenClientSelected))
+            return selected;
+    }
+    const auto focused = std::ranges::find_if(m_windowArtifacts, [](const WindowArtifact& window) { return window.focused; });
+    return focused == m_windowArtifacts.end() ? nullptr : &*focused;
+}
+
 bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
     if (!window.image.isNull())
         return true;
@@ -3086,6 +3130,8 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         capturedWindow.address = qString(info.address);
         capturedWindow.title = qString(info.title);
         capturedWindow.appClass = qString(info.appClass);
+        capturedWindow.focused = info.focused;
+        capturedWindow.fullscreen = info.fullscreen;
         capturedWindow.visibleGeometry = protocolRect(info.visibleGeometry);
         capturedWindow.fullGeometry = protocolRect(info.fullGeometry);
         capturedWindow.selectionGeometry = window.selectionGeometry;
@@ -3592,7 +3638,9 @@ void CaptureOverlay::renderAndSaveCapture() {
     hyprcapture::ui::applyWatermark(image, m_defaults);
     traceTiming(QStringLiteral("apply_watermark"), watermarkTimer.elapsed());
 
-    const QString plannedOutputPath = plannedCaptureOutputPath(m_defaults);
+    const auto* filenameTarget = filenameWindow();
+    const QString plannedOutputPath =
+        plannedCaptureOutputPath(m_defaults, filenameTarget ? filenameTarget->appClass : QString{}, filenameTarget ? filenameTarget->title : QString{});
     const QString targetPath = thumbnailTargetPath(m_defaults, plannedOutputPath);
     const QString restoreClipboardPath =
         (m_defaults.clipboard && m_defaults.showThumbnail) ? hyprcapture::ui::runtimeFile("clipboard", ".json") : QString{};
@@ -3657,6 +3705,7 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
         return;
 
     QStringList args{"--thumbnail-window", previewPath, "--thumbnail-timeout-ms", QString::number(m_defaults.thumbnailTimeoutMs)};
+    args << "--thumbnail-monitor" << qString(m_defaults.thumbnailMonitor);
     if (!targetPath.isEmpty())
         args << "--thumbnail-target" << targetPath;
     const QString deleteRoot = thumbnailDeleteRoot(m_defaults);

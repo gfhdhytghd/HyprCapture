@@ -68,6 +68,11 @@ int main() {
     require(makeTimestampedFilename("Screenshot-%Y.png").ends_with(".png"), "timestamp filename suffix");
     require(makeTimestampedFilename("../escape.png") == "escape.png", "filename basename clamp");
     require(makeTimestampedFilename("..") == "Screenshot.png", "invalid filename fallback");
+    require(sanitizeFilenameVariable("  Firefox / Private: window?  ") == "Firefox-Private-window", "filename variable sanitization");
+    require(sanitizeFilenameVariable("../../") == "unknown", "empty filename variable fallback");
+    require(makeTimestampedFilename("Shot-%w-{window_class}-{window_title}.png", "org.mozilla/firefox", "Private: Window")
+                .find("org.mozilla-firefox-Private-Window.png") != std::string::npos,
+            "window filename template variables");
 
     CaptureSession session;
     session.id = "test-session";
@@ -75,6 +80,8 @@ int main() {
     session.defaults.allowQuick = true;
     session.defaults.confirmBeforeCapture = true;
     session.defaults.fushionMode = true;
+    session.defaults.captureFullscreenClientsAsMonitor = true;
+    session.defaults.thumbnailMonitor = "DP-2";
     session.defaults.windowBackground = WindowBackground::FollowSystem;
     session.defaults.recordTransparentFormat = "webm";
     session.defaults.recordTransparentCodec = "auto";
@@ -92,6 +99,8 @@ int main() {
     session.windows.push_back({.address = "0x1",
                                .title = "Title",
                                .appClass = "Class",
+                               .focused = true,
+                               .fullscreen = true,
                                .visibleGeometry = {.x = 10, .y = 10, .width = 100, .height = 100},
                                .fullGeometry = {.x = -40, .y = 10, .width = 200, .height = 100},
                                .rounding = 12,
@@ -111,6 +120,8 @@ int main() {
     require(json.find("\"fushionMode\":true") != std::string::npos, "fushion mode json");
     require(json.find("\"allowQuick\":true") != std::string::npos, "allow quick json");
     require(json.find("\"confirmBeforeCapture\":true") != std::string::npos, "confirm before capture json");
+    require(json.find("\"captureFullscreenClientsAsMonitor\":true") != std::string::npos, "fullscreen client behavior json");
+    require(json.find("\"thumbnailMonitor\":\"DP-2\"") != std::string::npos, "thumbnail monitor json");
     require(json.find("\"windowBackground\":\"follow-system\"") != std::string::npos, "window background json");
     require(json.find("\"recordTransparentFormat\":\"webm\"") != std::string::npos, "transparent record format json");
     require(json.find("\"recordTransparentCodec\":\"auto\"") != std::string::npos, "transparent record codec json");
@@ -122,6 +133,7 @@ int main() {
     require(json.find("\"watermarkOffset\":\"-2% 24px\"") != std::string::npos, "watermark offset json");
     require(json.find("\"cursorPosition\"") != std::string::npos, "cursor position json");
     require(json.find("\"fullGeometry\"") != std::string::npos, "full geometry json");
+    require(json.find("\"fullscreen\":true") != std::string::npos, "fullscreen window json");
     require(json.find("\"selectionGeometry\"") != std::string::npos, "selection geometry json");
     require(json.find("\"rounding\":12") != std::string::npos, "rounding json");
     require(json.find("\"roundingPower\":2.5") != std::string::npos, "rounding power json");
@@ -138,6 +150,8 @@ int main() {
     require(decoded->defaults.mode == CaptureMode::Window, "decoded mode");
     require(decoded->defaults.allowQuick, "decoded allow quick");
     require(decoded->defaults.confirmBeforeCapture, "decoded confirm before capture");
+    require(decoded->defaults.captureFullscreenClientsAsMonitor, "decoded fullscreen client behavior");
+    require(decoded->defaults.thumbnailMonitor == "DP-2", "decoded thumbnail monitor");
     require(decoded->defaults.fushionMode, "decoded fushion mode");
     require(decoded->defaults.recordTransparentFormat == "webm", "decoded transparent record format");
     require(decoded->defaults.recordTransparentCodec == "auto", "decoded transparent record codec");
@@ -148,6 +162,7 @@ int main() {
     require(decoded->monitors.front().focused, "decoded focused monitor");
     require(decoded->windows.front().artifactPath == "/tmp/window.rgba", "decoded artifact path");
     require(decoded->windows.front().selectionGeometry.has_value(), "decoded selection geometry exists");
+    require(decoded->windows.front().focused && decoded->windows.front().fullscreen, "decoded window state");
     require(decoded->windows.front().selectionGeometry->x == 30 && decoded->windows.front().selectionGeometry->width == 120, "decoded selection geometry values");
 
     CaptureSession legacySession = session;

@@ -37,6 +37,8 @@ struct WindowInfo {
     std::string address;
     std::string title;
     std::string appClass;
+    bool        focused = false;
+    bool        fullscreen = false;
     Rect        visibleGeometry;
     Rect        fullGeometry;
     std::optional<Rect> selectionGeometry;

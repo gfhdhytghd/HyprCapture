@@ -274,8 +274,9 @@ plugin {
         allow_quick = 0
         confirm_before_capture = 0
         fusion_mode = 0
+        capture_fullscreen_clients_as_monitor = 0
         save_dir = $XDG_PICTURES_DIR/Screenshots
-        filename_template = Screenshot-%Y-%m-%d-%H%M%S.png
+        filename_template = Screenshot-%Y-%m-%d-%H%M%S-{window_class}.png
         record_save_dir = $XDG_VIDEOS_DIR/Screenrecords
         record_filename_template = Recording-%Y-%m-%d-%H%M%S.mp4
         record_format = mp4
@@ -294,6 +295,7 @@ plugin {
         record_countdown_seconds = 0
         include_cursor = 0
         thumbnail_timeout_ms = 5000
+        thumbnail_monitor = active
         watermark =
         watermark_position = central
         watermark_width = 20%
@@ -320,8 +322,9 @@ hl.config({
             allow_quick = false,
             confirm_before_capture = false,
             fusion_mode = false,
+            capture_fullscreen_clients_as_monitor = false,
             save_dir = "$XDG_PICTURES_DIR/Screenshots",
-            filename_template = "Screenshot-%Y-%m-%d-%H%M%S.png",
+            filename_template = "Screenshot-%Y-%m-%d-%H%M%S-{window_class}.png",
             record_save_dir = "$XDG_VIDEOS_DIR/Screenrecords",
             record_filename_template = "Recording-%Y-%m-%d-%H%M%S.mp4",
             record_format = "mp4",
@@ -340,6 +343,7 @@ hl.config({
             record_countdown_seconds = 0,
             include_cursor = false,
             thumbnail_timeout_ms = 5000,
+            thumbnail_monitor = "active",
             watermark = "",
             watermark_position = "central",
             watermark_width = "20%",
@@ -396,8 +400,9 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `include_cursor` | bool | `0` | Parsed and forwarded by the plugin/helper; cursor compositing is not currently rendered into the output. |
 | `allow_quick` | bool | `0` | Enable no-confirmation `hyprcapture:quick` dispatchers. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |
 | `confirm_before_capture` | bool | `0` | For `hyprcapture:open`, require an explicit confirmation after choosing a fullscreen, region, or window target. Region targets can be moved or resized; window targets can be switched before confirming. `hyprcapture:quick` and direct `hyprcapture:record` keep their existing no-extra-confirmation behavior. |
-| `fusion_mode` | bool | `0` | Fuse region and window interactions in one overlay: drag to capture a region, or single-click a window to capture that window. The toolbar keeps the fullscreen action and configuration controls; fullscreen multi-monitor scope is shown only when multiple monitors are present. |
+| `fusion_mode` | bool | `0` | Fuse region and window interactions in one overlay: drag anywhere, including from the desktop background, to capture a region; single-click a window to capture that window; or single-click the background to capture the clicked monitor. The toolbar keeps the fullscreen action and configuration controls; fullscreen multi-monitor scope is shown only when multiple monitors are present. |
 | `fushion_mode` | bool | `0` | Legacy compatibility alias for `fusion_mode`. New configs should use `fusion_mode`. |
+| `capture_fullscreen_clients_as_monitor` | bool | `0` | In window and fusion modes, capture the fullscreen client's entire monitor instead of the isolated client. Disabled by default for compatibility. |
 
 ### Output options
 
@@ -407,7 +412,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `clipboard` | bool | `1` | Copy the output image to the clipboard. Uses `wl-copy` when available so the clipboard survives helper exit. |
 | `show_thumbnail` | bool | `1` | Show the result thumbnail after capture. |
 | `save_dir` | string | `$XDG_PICTURES_DIR/Screenshots` | Output directory. `~` is expanded against `HOME`; `$XDG_PICTURES_DIR` is read from XDG user-dirs with `~/Pictures` as fallback. |
-| `filename_template` | string | `Screenshot-%Y-%m-%d-%H%M%S.png` | `strftime` template for saved screenshot filenames. |
+| `filename_template` | string | `Screenshot-%Y-%m-%d-%H%M%S.png` | `strftime` template for saved screenshot filenames. `{window_class}` and `{window_title}` expand to the selected window, or the focused window when there is no selected target. Values are filename-sanitized; missing metadata expands to `unknown`. Existing `strftime` directives, including `%w`, keep their original meaning. |
 | `record_save_dir` | string | `$XDG_VIDEOS_DIR/Screenrecords` | Output directory for recordings. `$XDG_VIDEOS_DIR` is read from XDG user-dirs with `~/Videos` as fallback. Finished recordings can be copied to the clipboard as local file URIs and shown in the thumbnail when those global output settings are enabled. |
 | `record_filename_template` | string | `Recording-%Y-%m-%d-%H%M%S.mp4` | `strftime` template for saved recording filenames. |
 | `record_format` | string | `mp4` | Default recording format shown in the overlay for non-transparent window backgrounds, fullscreen recording, and region recording. Supports `mp4`, `mov`, `webm`, `mkv`, `gif`, `apng`, and `webp`; the selected value replaces the filename extension. |
@@ -425,6 +430,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `record_max_seconds` | int | `0` | Optional automatic stop in seconds. `0` means no duration limit for normal video formats. GIF, APNG, and WebP require one of `3`, `5`, `10`, `15`, or `30` seconds in the overlay and fall back to `5` when configured otherwise. |
 | `record_countdown_seconds` | int | `0` | Optional countdown before recording starts. `0` disables it; values are clamped to 60 seconds. When enabled, HyprCapture closes the capture overlay, shows an input-transparent countdown window centered on the active screen, then starts recording. |
 | `thumbnail_timeout_ms` | int | `5000` | Thumbnail auto-close timeout in milliseconds. Use `0` to keep it open until user action. |
+| `thumbnail_monitor` | string | `active` | Monitor used for result thumbnails. Supports `active`, `primary`, or a case-insensitive output name such as `DP-2`. Unknown names fall back to the active monitor. |
 | `helper` | string | empty | Optional absolute helper override. By default the plugin tries `HYPRCAPTURE_HELPER`, then `$HOME/.local/bin/hyprcapture-ui`, then trusted system install paths. |
 
 For 60 fps, prefer hardware encoding:

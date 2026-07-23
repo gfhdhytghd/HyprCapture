@@ -34,6 +34,21 @@
 
 namespace {
 
+QScreen* thumbnailScreen(QString selector) {
+    selector = selector.trimmed();
+    if (selector.compare(QStringLiteral("primary"), Qt::CaseInsensitive) == 0)
+        return QGuiApplication::primaryScreen();
+    if (!selector.isEmpty() && selector.compare(QStringLiteral("active"), Qt::CaseInsensitive) != 0) {
+        for (QScreen* screen : QGuiApplication::screens()) {
+            if (screen && screen->name().compare(selector, Qt::CaseInsensitive) == 0)
+                return screen;
+        }
+    }
+    if (QScreen* active = QGuiApplication::screenAt(QCursor::pos()))
+        return active;
+    return QGuiApplication::primaryScreen();
+}
+
 constexpr qint64 MAX_SESSION_JSON_BYTES = 8LL * 1024LL * 1024LL;
 constexpr qint64 MAX_THUMBNAIL_SOURCE_BYTES = 128LL * 1024LL * 1024LL;
 constexpr int    MAX_THUMBNAIL_DIMENSION = 32768;
@@ -376,7 +391,8 @@ int showRecordingResult(const hyprcapture::CaptureDefaults& defaults, const QStr
                               restoreClipboardPath,
                               deleteRoot,
                               static_cast<int>(defaults.thumbnailTimeoutMs),
-                              true);
+                              true,
+                              thumbnailScreen(QString::fromStdString(defaults.thumbnailMonitor)));
     thumbnail.show();
     return qApp->exec();
 }
@@ -448,7 +464,9 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
         state->restoreClipboardPath = hyprcapture::ui::saveClipboardSnapshot();
 
     if (defaults.showThumbnail) {
-        state->thumbnail = new ResultThumbnail(recordingThumbnailPixmap(false), cleanOutput, state->restoreClipboardPath, deleteRoot, 0, true);
+        state->thumbnail =
+            new ResultThumbnail(recordingThumbnailPixmap(false), cleanOutput, state->restoreClipboardPath, deleteRoot, 0, true,
+                                thumbnailScreen(QString::fromStdString(defaults.thumbnailMonitor)));
         state->thumbnail->setTranscodeProgress(0.0);
         state->thumbnail->show();
     }
@@ -555,8 +573,9 @@ int main(int argc, char** argv) {
         {"include-cursor", "Include cursor.", "0|1", "0"},
         {"confirm-before-capture", "Require explicit confirmation after target selection for normal open captures.", "0|1", "0"},
         {{"fushion-mode", "fusion-mode"}, "Enable fushion toolbar behavior.", "0|1", "0"},
+        {"capture-fullscreen-clients-as-monitor", "Capture fullscreen clients as their monitor in window/fusion mode.", "0|1", "0"},
         {"save-dir", "Save directory.", "path", "$XDG_PICTURES_DIR/Screenshots"},
-        {"filename-template", "Filename strftime template.", "template", "Screenshot-%Y-%m-%d-%H%M%S.png"},
+        {"filename-template", "Filename strftime template with {window_class}/{window_title}.", "template", "Screenshot-%Y-%m-%d-%H%M%S.png"},
         {"record-save-dir", "Recording save directory.", "path", "$XDG_VIDEOS_DIR/Screenrecords"},
         {"record-filename-template", "Recording filename strftime template.", "template", "Recording-%Y-%m-%d-%H%M%S.mp4"},
         {"record-format", "Recording format.", "format", "mp4"},
@@ -574,6 +593,7 @@ int main(int argc, char** argv) {
         {"record-max-seconds", "Recording max seconds.", "seconds", "0"},
         {"record-countdown-seconds", "Recording start countdown seconds.", "seconds", "0"},
         {"thumbnail-timeout-ms", "Thumbnail timeout.", "ms", "5000"},
+        {"thumbnail-monitor", "Thumbnail monitor: active, primary, or output name.", "monitor", "active"},
         {"watermark", "Watermark image path or built-in id.", "path|id", ""},
         {"watermark-position", "Watermark position.", "position", "central"},
         {"watermark-width", "Watermark width in pixels or screenshot-width percent.", "width", "20%"},
@@ -606,7 +626,9 @@ int main(int argc, char** argv) {
                                   thumbnailTarget,
                                   parser.value("restore-clipboard"),
                                   parser.value("thumbnail-delete-root"),
-                                  boundedInt(parser.value("thumbnail-timeout-ms"), 5000, 0, MAX_THUMBNAIL_TIMEOUT_MS));
+                                  boundedInt(parser.value("thumbnail-timeout-ms"), 5000, 0, MAX_THUMBNAIL_TIMEOUT_MS),
+                                  false,
+                                  thumbnailScreen(parser.value("thumbnail-monitor")));
         thumbnail.show();
         return app.exec();
     }
@@ -623,6 +645,8 @@ int main(int argc, char** argv) {
     defaults.includeCursor = flagValue(parser, "include-cursor", defaults.includeCursor);
     defaults.confirmBeforeCapture = flagValue(parser, "confirm-before-capture", defaults.confirmBeforeCapture);
     defaults.fushionMode = flagValue(parser, "fushion-mode", defaults.fushionMode);
+    defaults.captureFullscreenClientsAsMonitor =
+        flagValue(parser, "capture-fullscreen-clients-as-monitor", defaults.captureFullscreenClientsAsMonitor);
     defaults.saveDir = parser.value("save-dir").toStdString();
     defaults.filenameTemplate = parser.value("filename-template").toStdString();
     defaults.recordSaveDir = parser.value("record-save-dir").toStdString();
@@ -642,6 +666,7 @@ int main(int argc, char** argv) {
     defaults.recordMaxSeconds = boundedInt(parser.value("record-max-seconds"), defaults.recordMaxSeconds, 0, 24 * 60 * 60);
     defaults.recordCountdownSeconds = boundedInt(parser.value("record-countdown-seconds"), defaults.recordCountdownSeconds, 0, MAX_RECORD_COUNTDOWN_SECONDS);
     defaults.thumbnailTimeoutMs = boundedInt(parser.value("thumbnail-timeout-ms"), defaults.thumbnailTimeoutMs, 0, MAX_THUMBNAIL_TIMEOUT_MS);
+    defaults.thumbnailMonitor = parser.value("thumbnail-monitor").toStdString();
     defaults.watermark = parser.value("watermark").toStdString();
     defaults.watermarkPosition = hyprcapture::parseWatermarkPosition(parser.value("watermark-position").toStdString(), defaults.watermarkPosition);
     defaults.watermarkWidth = parser.value("watermark-width").toStdString();

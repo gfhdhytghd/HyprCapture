@@ -28,6 +28,7 @@ struct CaptureDefaults {
     bool             allowQuick = false;
     bool             confirmBeforeCapture = false;
     bool             fushionMode = false;
+    bool             captureFullscreenClientsAsMonitor = false;
     std::string      saveDir = "$XDG_PICTURES_DIR/Screenshots";
     std::string      filenameTemplate = "Screenshot-%Y-%m-%d-%H%M%S.png";
     std::string      helper;
@@ -48,6 +49,7 @@ struct CaptureDefaults {
     std::int64_t     recordMaxSeconds = 0;
     std::int64_t     recordCountdownSeconds = 0;
     std::int64_t     thumbnailTimeoutMs = 5000;
+    std::string      thumbnailMonitor = "active";
     std::string      watermark;
     WatermarkPosition watermarkPosition = WatermarkPosition::Central;
     std::string      watermarkWidth = "20%";
@@ -73,6 +75,9 @@ std::string toString(NotificationBackend value);
 std::string toString(WatermarkPosition value);
 
 std::filesystem::path expandUserPath(std::string_view path);
-std::string makeTimestampedFilename(std::string_view filenameTemplate);
+std::string sanitizeFilenameVariable(std::string_view value);
+std::string makeTimestampedFilename(std::string_view filenameTemplate,
+                                    std::string_view windowClass = {},
+                                    std::string_view windowTitle = {});
 
 } // namespace hyprcapture

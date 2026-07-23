@@ -323,7 +323,49 @@ std::filesystem::path expandUserPath(std::string_view path) {
     return std::filesystem::path(p);
 }
 
-std::string makeTimestampedFilename(std::string_view filenameTemplate) {
+std::string sanitizeFilenameVariable(std::string_view value) {
+    std::string out;
+    out.reserve(std::min<std::size_t>(value.size(), 128));
+    bool pendingSeparator = false;
+    for (std::size_t i = 0; i < value.size();) {
+        const auto ch = static_cast<unsigned char>(value[i]);
+        const bool safeAscii = std::isalnum(ch) || ch == '.' || ch == '_' || ch == '-';
+        std::size_t utf8Length = 0;
+        if (ch >= 0xC2 && ch <= 0xDF)
+            utf8Length = 2;
+        else if (ch >= 0xE0 && ch <= 0xEF)
+            utf8Length = 3;
+        else if (ch >= 0xF0 && ch <= 0xF4)
+            utf8Length = 4;
+        if (utf8Length > 0 && (i + utf8Length > value.size() || !std::ranges::all_of(value.substr(i + 1, utf8Length - 1), [](unsigned char continuation) {
+                return continuation >= 0x80 && continuation <= 0xBF;
+            })))
+            utf8Length = 0;
+
+        if (safeAscii || utf8Length > 0) {
+            if (pendingSeparator && !out.empty() && out.back() != '-')
+                out.push_back('-');
+            pendingSeparator = false;
+            if (out.size() + std::max<std::size_t>(utf8Length, 1) > 128)
+                break;
+            out.append(value.substr(i, std::max<std::size_t>(utf8Length, 1)));
+        } else {
+            pendingSeparator = true;
+        }
+        i += std::max<std::size_t>(utf8Length, 1);
+    }
+
+    while (!out.empty() && (out.front() == '.' || out.front() == '-'))
+        out.erase(out.begin());
+    while (!out.empty() && (out.back() == '.' || out.back() == '-'))
+        out.pop_back();
+    return out.empty() ? "unknown" : out;
+}
+
+std::string makeTimestampedFilename(std::string_view filenameTemplate, std::string_view windowClass, std::string_view windowTitle) {
+    const std::string sanitizedClass = sanitizeFilenameVariable(windowClass);
+    const std::string sanitizedTitle = sanitizeFilenameVariable(windowTitle);
+
     const auto now = std::chrono::system_clock::now();
     const auto t = std::chrono::system_clock::to_time_t(now);
     std::tm tm {};
@@ -332,6 +374,15 @@ std::string makeTimestampedFilename(std::string_view filenameTemplate) {
     std::ostringstream out;
     out << std::put_time(&tm, std::string(filenameTemplate).c_str());
     auto filename = out.str();
+    const auto replaceVariable = [&filename](std::string_view variable, const std::string& value) {
+        std::size_t position = 0;
+        while ((position = filename.find(variable, position)) != std::string::npos) {
+            filename.replace(position, variable.size(), value);
+            position += value.size();
+        }
+    };
+    replaceVariable("{window_class}", sanitizedClass);
+    replaceVariable("{window_title}", sanitizedTitle);
     filename = std::filesystem::path(filename).filename().string();
     if (filename.empty() || filename == "." || filename == "..")
         return "Screenshot.png";

@@ -72,6 +72,7 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"allowQuick", defaults.allowQuick},
         {"confirmBeforeCapture", defaults.confirmBeforeCapture},
         {"fushionMode", defaults.fushionMode},
+        {"captureFullscreenClientsAsMonitor", defaults.captureFullscreenClientsAsMonitor},
         {"saveDir", boundedString(defaults.saveDir, MAX_PATH_BYTES)},
         {"filenameTemplate", boundedString(defaults.filenameTemplate, MAX_METADATA_STRING_BYTES)},
         {"recordSaveDir", boundedString(defaults.recordSaveDir, MAX_PATH_BYTES)},
@@ -91,6 +92,7 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"recordMaxSeconds", std::clamp<std::int64_t>(defaults.recordMaxSeconds, 0, MAX_RECORD_SECONDS)},
         {"recordCountdownSeconds", std::clamp<std::int64_t>(defaults.recordCountdownSeconds, 0, MAX_RECORD_COUNTDOWN_SECONDS)},
         {"thumbnailTimeoutMs", std::clamp<std::int64_t>(defaults.thumbnailTimeoutMs, 0, 60 * 60 * 1000)},
+        {"thumbnailMonitor", boundedString(defaults.thumbnailMonitor, MAX_METADATA_STRING_BYTES)},
         {"watermark", boundedString(defaults.watermark, MAX_PATH_BYTES)},
         {"watermarkPosition", toString(defaults.watermarkPosition)},
         {"watermarkWidth", boundedString(defaults.watermarkWidth, MAX_METADATA_STRING_BYTES)},
@@ -221,6 +223,7 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
         boolValue(obj, "allowQuick", defaults.allowQuick, false) && boolValue(obj, "confirmBeforeCapture", defaults.confirmBeforeCapture, false) &&
         boolValue(obj, "fushionMode", defaults.fushionMode, false) &&
+        boolValue(obj, "captureFullscreenClientsAsMonitor", defaults.captureFullscreenClientsAsMonitor, false) &&
         stringValue(obj, "saveDir", defaults.saveDir, MAX_PATH_BYTES, false) &&
         stringValue(obj, "filenameTemplate", defaults.filenameTemplate, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "recordSaveDir", defaults.recordSaveDir, MAX_PATH_BYTES, false) &&
@@ -239,6 +242,7 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         int64Value(obj, "recordMaxSeconds", defaults.recordMaxSeconds, 0, MAX_RECORD_SECONDS, false) &&
         int64Value(obj, "recordCountdownSeconds", defaults.recordCountdownSeconds, 0, MAX_RECORD_COUNTDOWN_SECONDS, false) &&
         int64Value(obj, "thumbnailTimeoutMs", defaults.thumbnailTimeoutMs, 0, 60 * 60 * 1000, false) &&
+        stringValue(obj, "thumbnailMonitor", defaults.thumbnailMonitor, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "watermark", defaults.watermark, MAX_PATH_BYTES, false) &&
         stringValue(obj, "watermarkWidth", defaults.watermarkWidth, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "watermarkOffset", defaults.watermarkOffset, MAX_METADATA_STRING_BYTES, false) &&
@@ -273,7 +277,9 @@ bool windowValue(const Json& obj, WindowInfo& out) {
 
     WindowInfo window;
     if (!stringValue(obj, "address", window.address, MAX_METADATA_STRING_BYTES) || !stringValue(obj, "title", window.title, MAX_METADATA_STRING_BYTES) ||
-        !stringValue(obj, "class", window.appClass, MAX_METADATA_STRING_BYTES) || !rectValue(obj, "visibleGeometry", window.visibleGeometry) ||
+        !stringValue(obj, "class", window.appClass, MAX_METADATA_STRING_BYTES) ||
+        !boolValue(obj, "focused", window.focused, false) || !boolValue(obj, "fullscreen", window.fullscreen, false) ||
+        !rectValue(obj, "visibleGeometry", window.visibleGeometry) ||
         !rectValue(obj, "fullGeometry", window.fullGeometry) || !doubleValue(obj, "rounding", window.rounding, 0.0, MAX_LOGICAL_COORDINATE, false) ||
         !doubleValue(obj, "roundingPower", window.roundingPower, 1.0, 10.0, false) ||
         !doubleValue(obj, "borderSize", window.borderSize, 0.0, MAX_LOGICAL_COORDINATE, false) ||
@@ -345,6 +351,8 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"address", boundedString(win.address, MAX_METADATA_STRING_BYTES)},
             {"title", boundedString(win.title, MAX_METADATA_STRING_BYTES)},
             {"class", boundedString(win.appClass, MAX_METADATA_STRING_BYTES)},
+            {"focused", win.focused},
+            {"fullscreen", win.fullscreen},
             {"visibleGeometry", rectJson(win.visibleGeometry)},
             {"fullGeometry", rectJson(win.fullGeometry)},
             {"rounding", boundedDouble(win.rounding, 0.0, MAX_LOGICAL_COORDINATE)},
