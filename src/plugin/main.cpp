@@ -22,6 +22,7 @@ extern "C" {
 }
 
 #include "plugin/artifact_capture.hpp"
+#include "plugin/notification.hpp"
 #include "plugin/recording.hpp"
 #include "plugin/session_launcher.hpp"
 
@@ -131,6 +132,7 @@ void registerConfigValues() {
     addStringConfig("window_background", "Window capture background mode", "follow-system");
     addStringConfig("window_border", "Window capture border policy", "keep");
     addStringConfig("window_shadow", "Window capture shadow policy", "keep");
+    addStringConfig("notification_backend", "Backend for non-error notifications (hyprland or system)", "hyprland");
     addBoolConfig("save", "Save captures to disk", true);
     addBoolConfig("clipboard", "Copy captures to the clipboard", true);
     addBoolConfig("show_thumbnail", "Show a result thumbnail after capture", true);
@@ -231,7 +233,7 @@ SDispatchResult openCapture(const std::string& args, bool quick, bool record) {
     const auto now = std::chrono::steady_clock::now();
     if (g_lastCaptureDispatch.time_since_epoch().count() != 0 && now - g_lastCaptureDispatch < kMinDispatchInterval) {
         const std::string error = "capture dispatch rate-limited";
-        HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] " + error, CHyprColor(1.0, 0.2, 0.2, 1.0), 2500);
+        hyprcapture::notifyUser(error, hyprcapture::NotificationLevel::Error, 2500);
         return {.success = false, .error = error};
     }
 
@@ -240,7 +242,7 @@ SDispatchResult openCapture(const std::string& args, bool quick, bool record) {
         const std::string error = "hyprcapture:quick disabled; set plugin:hyprcapture:allow_quick = 1 to enable no-confirmation capture";
         if (g_lastQuickRejectNotification.time_since_epoch().count() == 0 || now - g_lastQuickRejectNotification >= kMinDispatchInterval) {
             g_lastQuickRejectNotification = now;
-            HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] " + error, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+            hyprcapture::notifyUser(error, hyprcapture::NotificationLevel::Error, 5000);
         }
         return {.success = false, .error = error};
     }
@@ -251,7 +253,7 @@ SDispatchResult openCapture(const std::string& args, bool quick, bool record) {
     const auto result = hyprcapture::launchHelper(
         {.defaults = defaults, .requestedMode = requestedMode, .quick = quick, .record = record, .recordActive = hyprcapture::isRecordingActive()});
     if (!result.success) {
-        HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] " + result.error, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        hyprcapture::notifyUser(result.error, hyprcapture::NotificationLevel::Error, 5000);
         return {.success = false, .error = result.error};
     }
     g_lastCaptureDispatch = now;
@@ -285,21 +287,21 @@ SDispatchResult dispatchRecordStop(const std::string&) {
 SDispatchResult dispatchRecordStart(const std::string& args) {
     const auto result = hyprcapture::startRecordingFromRequestFile(args);
     if (!result.success)
-        HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] " + result.error, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        hyprcapture::notifyUser(result.error, hyprcapture::NotificationLevel::Error, 5000);
     return dispatchResult(result);
 }
 
 SDispatchResult dispatchWindowCapture(const std::string& args) {
     const auto result = hyprcapture::captureWindowArtifactFromRequestFile(args);
     if (!result.success)
-        HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] " + result.error, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        hyprcapture::notifyUser(result.error, hyprcapture::NotificationLevel::Error, 5000);
     return dispatchResult(result);
 }
 
 SDispatchResult dispatchExportPipe(const std::string& args) {
     const auto result = hyprcapture::captureExportPipeFromRequestFile(args);
     if (!result.success)
-        HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] " + result.error, CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        hyprcapture::notifyUser(result.error, hyprcapture::NotificationLevel::Error, 5000);
     return dispatchResult(result);
 }
 
@@ -465,11 +467,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     const auto registerDispatcher = [&](const char* name, auto handler) {
         if (!HyprlandAPI::addDispatcherV2(g_pluginHandle, name, handler)) {
-            HyprlandAPI::addNotification(
-                g_pluginHandle,
-                std::string("[hyprcapture] failed to register dispatcher ") + name,
-                CHyprColor(1.0, 0.2, 0.2, 1.0),
-                5000);
+            hyprcapture::notifyUser(std::string("failed to register dispatcher ") + name, hyprcapture::NotificationLevel::Error, 5000);
         }
     };
 
@@ -504,7 +502,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     }
 
     if (!HyprlandAPI::reloadConfig())
-        HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] reloadConfig failed", CHyprColor(1.0, 0.2, 0.2, 1.0), 5000);
+        hyprcapture::notifyUser("reloadConfig failed", hyprcapture::NotificationLevel::Error, 5000);
     installOverlayLayerRule();
 
     return {

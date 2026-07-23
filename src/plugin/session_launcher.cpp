@@ -606,4 +606,55 @@ LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
     return {.success = true};
 }
 
+LaunchResult launchSystemNotification(const std::string& message, int timeoutMs, bool warning) {
+    std::optional<std::string> executable;
+    for (const char* candidate : {"/usr/bin/notify-send", "/bin/notify-send"}) {
+        if (const auto trusted = trustedExecutablePath(candidate)) {
+            executable = trusted;
+            break;
+        }
+    }
+    if (!executable)
+        return {.success = false, .error = "notify-send is not installed in a trusted system path"};
+
+    std::vector<std::string> args = {
+        *executable,
+        "--app-name=HyprCapture",
+        "--icon=camera-photo",
+        "--urgency=" + std::string(warning ? "normal" : "low"),
+        "--expire-time=" + std::to_string(std::clamp(timeoutMs, 0, 60 * 60 * 1000)),
+        "HyprCapture",
+        message,
+    };
+    std::vector<char*> argv;
+    argv.reserve(args.size() + 1);
+    for (auto& arg : args)
+        argv.push_back(arg.data());
+    argv.push_back(nullptr);
+
+    auto childEnv = childEnvironment();
+    std::vector<char*> envp;
+    envp.reserve(childEnv.size() + 1);
+    for (auto& env : childEnv)
+        envp.push_back(env.data());
+    envp.push_back(nullptr);
+
+    SpawnFileActions fileActions;
+    if (const auto error = initSpawnFileActions(fileActions))
+        return {.success = false, .error = std::string("spawn setup failed: ") + std::strerror(*error)};
+
+    SpawnAttributes attrs;
+    if (const auto error = initSpawnAttributes(attrs))
+        return {.success = false, .error = std::string("spawn setup failed: ") + std::strerror(*error)};
+
+    if (const auto error = configureSpawnFileDescriptorPolicy(fileActions, attrs))
+        return {.success = false, .error = std::string("spawn setup failed: ") + std::strerror(*error)};
+
+    pid_t     pid = -1;
+    const int spawnError = posix_spawn(&pid, argv[0], &fileActions.value, &attrs.value, argv.data(), envp.data());
+    if (spawnError != 0)
+        return {.success = false, .error = std::string("exec failed: ") + std::strerror(spawnError)};
+    return {.success = true};
+}
+
 } // namespace hyprcapture

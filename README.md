@@ -243,6 +243,7 @@ plugin {
         window_background = follow-system
         window_border = keep
         window_shadow = keep
+        notification_backend = hyprland
         save = 1
         clipboard = 1
         show_thumbnail = 1
@@ -288,6 +289,7 @@ hl.config({
             window_background = "follow-system",
             window_border = "keep",
             window_shadow = "keep",
+            notification_backend = "hyprland",
             save = true,
             clipboard = true,
             show_thumbnail = true,
@@ -366,6 +368,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `window_background` | string | `follow-system` | Background behind transparent window pixels. Supports `follow-system`, `white`, `black`, `real`, and `transparent`. |
 | `window_border` | string | `keep` | Window border policy. Supports `keep` and `remove`. |
 | `window_shadow` | string | `keep` | Window shadow policy. Supports `keep` and `remove`. Transparent window recordings keep shadows and normalize the alpha falloff so the shadow fades out instead of encoding as a hard border. |
+| `notification_backend` | string | `hyprland` | Backend for non-error recording status and warning notifications. `hyprland` uses Hyprland's overlay; `system` uses the desktop notification service through `notify-send` (libnotify) and falls back to the Hyprland overlay when the command cannot be launched. Errors always use the Hyprland overlay so missing external notification infrastructure cannot hide failures. |
 | `include_cursor` | bool | `0` | Parsed and forwarded by the plugin/helper; cursor compositing is not currently rendered into the output. |
 | `allow_quick` | bool | `0` | Enable no-confirmation `hyprcapture:quick` dispatchers. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |
 | `confirm_before_capture` | bool | `0` | For `hyprcapture:open`, require an explicit confirmation after choosing a fullscreen, region, or window target. Region targets can be moved or resized; window targets can be switched before confirming. `hyprcapture:quick` and direct `hyprcapture:record` keep their existing no-extra-confirmation behavior. |

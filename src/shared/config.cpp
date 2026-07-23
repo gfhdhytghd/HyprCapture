@@ -177,6 +177,15 @@ RecordWindowBackend parseRecordWindowBackend(std::string_view value, RecordWindo
     return fallback;
 }
 
+NotificationBackend parseNotificationBackend(std::string_view value, NotificationBackend fallback) {
+    const auto v = normalized(value);
+    if (v == "hyprland" || v == "overlay")
+        return NotificationBackend::Hyprland;
+    if (v == "system" || v == "libnotify" || v == "dbus")
+        return NotificationBackend::System;
+    return fallback;
+}
+
 std::string normalizeRecordFormat(std::string_view value) {
     const auto v = normalized(value);
     if (v == "mkv" || v == "matroska")
@@ -267,6 +276,14 @@ std::string toString(RecordWindowBackend value) {
         case RecordWindowBackend::GsrVisible: return "gsr-visible";
     }
     return "compositor";
+}
+
+std::string toString(NotificationBackend value) {
+    switch (value) {
+        case NotificationBackend::Hyprland: return "hyprland";
+        case NotificationBackend::System: return "system";
+    }
+    return "hyprland";
 }
 
 std::string toString(WatermarkPosition value) {

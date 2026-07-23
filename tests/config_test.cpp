@@ -35,6 +35,9 @@ int main() {
     require(parseWindowBackground("transparent") == WindowBackground::Transparent, "transparent background parse");
     require(parseDecorationPolicy("strip") == DecorationPolicy::Remove, "decoration policy parse");
     require(parseRecordWindowBackend("visible_gsr") == RecordWindowBackend::GsrVisible, "visible gsr backend parse");
+    require(parseNotificationBackend("libnotify") == NotificationBackend::System, "libnotify notification backend alias");
+    require(parseNotificationBackend("dbus") == NotificationBackend::System, "dbus notification backend alias");
+    require(parseNotificationBackend("bad", NotificationBackend::System) == NotificationBackend::System, "notification backend fallback");
     require(normalizeRecordFormat("animated_webp") == "mp4", "unknown record format fallback");
     require(normalizeRecordFormat("matroska") == "mkv", "matroska record format parse");
     require(normalizeRecordFormat("gif") == "gif", "gif record format parse");
@@ -53,6 +56,7 @@ int main() {
     require(toString(FullscreenScope::PerMonitor) == "per-monitor", "per monitor stringify");
     require(toString(WindowBackground::FollowSystem) == "follow-system", "follow system stringify");
     require(toString(RecordWindowBackend::GsrVisible) == "gsr-visible", "visible gsr backend stringify");
+    require(toString(NotificationBackend::System) == "system", "system notification backend stringify");
     require(toString(WatermarkPosition::DownMiddle) == "down-middle", "down middle stringify");
 
     const auto expanded = expandUserPath("~/Pictures/Screenshots").string();

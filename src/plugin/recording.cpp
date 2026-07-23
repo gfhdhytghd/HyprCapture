@@ -1,6 +1,7 @@
 #include "plugin/recording.hpp"
 
 #include "plugin/artifact_capture.hpp"
+#include "plugin/notification.hpp"
 #include "plugin/session_launcher.hpp"
 #include "plugin/timing.hpp"
 #include "shared/config.hpp"
@@ -10,7 +11,6 @@
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
-#include <hyprland/src/plugins/PluginAPI.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -41,7 +41,6 @@
 #include <vector>
 
 extern char** environ;
-extern HANDLE g_pluginHandle;
 
 namespace hyprcapture {
 namespace {
@@ -1101,9 +1100,8 @@ struct ActiveGsrRecording {
 
 std::unique_ptr<ActiveGsrRecording> g_gsrRecording;
 
-void notifyRecording(const std::string& message, const CHyprColor& color = CHyprColor(0.2, 0.8, 0.3, 1.0), float timeoutMs = 3000) {
-    if (g_pluginHandle)
-        HyprlandAPI::addNotification(g_pluginHandle, "[hyprcapture] " + message, color, timeoutMs);
+void notifyRecording(const std::string& message, NotificationLevel level = NotificationLevel::Info, int timeoutMs = 3000) {
+    notifyUser(message, level, timeoutMs);
 }
 
 void finishRecordingOutput(const CaptureDefaults& defaults, const std::filesystem::path& outputPath, const std::string& message, bool launchResultHelper) {
@@ -1115,7 +1113,7 @@ void finishRecordingOutput(const CaptureDefaults& defaults, const std::filesyste
 
     const auto result = launchRecordingResultHelper(defaults, outputPath.string());
     if (!result.success)
-        notifyRecording("recording result helper failed: " + result.error, CHyprColor(1.0, 0.35, 0.25, 1.0), 5000);
+        notifyRecording("recording result helper failed: " + result.error, NotificationLevel::Error, 5000);
 }
 
 bool recordingOutputHasBytes(const std::filesystem::path& outputPath) {
@@ -1127,7 +1125,7 @@ void finishGsrRecordingOutput(const CaptureDefaults& defaults, const std::filesy
     if (!recordingOutputHasBytes(outputPath)) {
         std::error_code ec;
         std::filesystem::remove(outputPath, ec);
-        notifyRecording("gpu-screen-recorder produced no video data: " + outputPath.string(), CHyprColor(1.0, 0.35, 0.25, 1.0), 7000);
+        notifyRecording("gpu-screen-recorder produced no video data: " + outputPath.string(), NotificationLevel::Error, 7000);
         return;
     }
 
@@ -1163,11 +1161,11 @@ void startApngTranscodeFromFinishedRecording(FinishingRawRecording& recording) {
         std::error_code ec;
         std::filesystem::remove(recording.encoderOutputPath, ec);
         std::filesystem::remove(recording.outputPath, ec);
-        notifyRecording("apng transcode helper failed: " + result.error, CHyprColor(1.0, 0.35, 0.25, 1.0), 7000);
+        notifyRecording("apng transcode helper failed: " + result.error, NotificationLevel::Error, 7000);
         return;
     }
 
-    notifyRecording("apng transcode opened in helper: " + recording.outputPath.string(), CHyprColor(1.0, 0.72, 0.2, 1.0), 5000);
+    notifyRecording("apng transcode opened in helper: " + recording.outputPath.string(), NotificationLevel::Warning, 5000);
 }
 
 void completeFinishingRawRecording() {
@@ -1254,7 +1252,7 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
         scheduleFinishingRawRecordingPoll();
         notifyRecording(recording->transcodeToApng ? "recording finalizing mkv intermediate: " + recording->outputPath.string() :
                                                      "recording finalizing: " + recording->outputPath.string(),
-                        CHyprColor(1.0, 0.72, 0.2, 1.0),
+                        NotificationLevel::Warning,
                         3000);
         return {.success = true};
     }
@@ -1510,7 +1508,7 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
     if (solidAlphaFallback) {
         frameRequest.defaults.recordSolidAlpha = false;
         notifyRecording("selected " + format + "/" + codec + " does not preserve alpha; using compositor opaque fallback",
-                        CHyprColor(1.0, 0.75, 0.25, 1.0),
+                        NotificationLevel::Warning,
                         5000);
     }
 
@@ -1572,14 +1570,14 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
 
     if (fps < requestedFps) {
         if (isImageAnimationRecordFormat(format))
-            notifyRecording(format + " recording limited to " + std::to_string(fps) + " fps for stable animation timing", CHyprColor(1.0, 0.72, 0.2, 1.0), 5000);
+            notifyRecording(format + " recording limited to " + std::to_string(fps) + " fps for stable animation timing", NotificationLevel::Warning, 5000);
         else
-            notifyRecording("window recording limited to " + std::to_string(fps) + " fps to avoid compositor stalls", CHyprColor(1.0, 0.72, 0.2, 1.0), 5000);
+            notifyRecording("window recording limited to " + std::to_string(fps) + " fps to avoid compositor stalls", NotificationLevel::Warning, 5000);
     }
     if (format == "apng") {
-        notifyRecording("apng recording uses a 60 fps mkv intermediate before transcoding", CHyprColor(1.0, 0.72, 0.2, 1.0), 5000);
+        notifyRecording("apng recording uses a 60 fps mkv intermediate before transcoding", NotificationLevel::Warning, 5000);
         if (request->defaults.recordMaxSeconds >= 10)
-            notifyRecording("apng recordings of 10s or longer can create very large files", CHyprColor(1.0, 0.72, 0.2, 1.0), 7000);
+            notifyRecording("apng recordings of 10s or longer can create very large files", NotificationLevel::Warning, 7000);
     }
     notifyRecording("recording started: " + outputPath->string());
     return {.success = true};

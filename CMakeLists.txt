@@ -64,6 +64,7 @@ list(REMOVE_DUPLICATES HYPRLAND_DERIVED_INCLUDE_DIRS)
 
 add_library(hyprcapture SHARED
   src/plugin/main.cpp
+  src/plugin/notification.cpp
   src/plugin/artifact_capture.cpp
   src/plugin/recording.cpp
   src/plugin/session_launcher.cpp

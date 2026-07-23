@@ -12,6 +12,7 @@ enum class FullscreenScope { All, Current, PerMonitor };
 enum class WindowBackground { White, Black, FollowSystem, Real, Transparent };
 enum class DecorationPolicy { Keep, Remove };
 enum class RecordWindowBackend { Compositor, GsrVisible };
+enum class NotificationBackend { Hyprland, System };
 enum class WatermarkPosition { UpLeft, UpMiddle, UpRight, LeftMiddle, Central, RightMiddle, DownLeft, DownMiddle, DownRight };
 
 struct CaptureDefaults {
@@ -58,6 +59,7 @@ FullscreenScope parseFullscreenScope(std::string_view value, FullscreenScope fal
 WindowBackground parseWindowBackground(std::string_view value, WindowBackground fallback = WindowBackground::FollowSystem);
 DecorationPolicy parseDecorationPolicy(std::string_view value, DecorationPolicy fallback = DecorationPolicy::Keep);
 RecordWindowBackend parseRecordWindowBackend(std::string_view value, RecordWindowBackend fallback = RecordWindowBackend::Compositor);
+NotificationBackend parseNotificationBackend(std::string_view value, NotificationBackend fallback = NotificationBackend::Hyprland);
 WatermarkPosition parseWatermarkPosition(std::string_view value, WatermarkPosition fallback = WatermarkPosition::Central);
 std::string normalizeRecordFormat(std::string_view value);
 bool recordFormatIsImageAnimation(std::string_view value);
@@ -67,6 +69,7 @@ std::string toString(FullscreenScope value);
 std::string toString(WindowBackground value);
 std::string toString(DecorationPolicy value);
 std::string toString(RecordWindowBackend value);
+std::string toString(NotificationBackend value);
 std::string toString(WatermarkPosition value);
 
 std::filesystem::path expandUserPath(std::string_view path);

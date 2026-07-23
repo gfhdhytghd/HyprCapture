@@ -26,5 +26,6 @@ LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
                                             const std::string&     outputPath,
                                             bool                  preserveAlpha,
                                             int                   durationMs);
+LaunchResult launchSystemNotification(const std::string& message, int timeoutMs, bool warning);
 
 } // namespace hyprcapture
