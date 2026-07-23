@@ -1,6 +1,7 @@
 #include "ui/capture_overlay.hpp"
 
 #include "ui/clipboard_utils.hpp"
+#include "ui/overlay_paint.hpp"
 #include "ui/result_thumbnail.hpp"
 #include "ui/watermark.hpp"
 #include "shared/protocol.hpp"
@@ -2472,14 +2473,11 @@ void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const 
             if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
                 continue;
 
-            const QRect logicalPart = globalTarget.intersected(artifact.logicalGeometry);
-            if (!logicalPart.isValid())
+            if (!globalTarget.intersects(artifact.logicalGeometry))
                 continue;
 
-            const QRect source = logicalRectToImageRect(logicalPart, artifact.logicalGeometry, artifact.image.size());
-            const QRect localTarget = globalToLocalRect(logicalPart).intersected(target);
-            if (source.isValid() && localTarget.isValid())
-                painter.drawImage(localTarget, artifact.image, source);
+            const QRect destination = globalToLocalRect(artifact.logicalGeometry);
+            hyprcapture::ui::paintClippedImage(painter, target, destination, artifact.image);
         }
         painter.restore();
         return;
@@ -2490,9 +2488,9 @@ void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const 
         return;
     }
 
-    const QRect source = localToDesktopSourceRect(target);
-    if (source.isValid())
-        painter.drawImage(target, m_desktopImage, source);
+    const QRect destination = globalToLocalRect(m_desktopGeometry);
+    if (destination.isValid())
+        hyprcapture::ui::paintClippedImage(painter, target, destination, m_desktopImage);
     else
         painter.fillRect(target, QColor(30, 34, 38));
 }

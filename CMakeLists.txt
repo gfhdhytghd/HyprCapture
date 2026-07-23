@@ -82,6 +82,7 @@ add_executable(hyprcapture-ui
   src/ui/main.cpp
   src/ui/clipboard_utils.cpp
   src/ui/capture_overlay.cpp
+  src/ui/overlay_paint.cpp
   src/ui/result_thumbnail.cpp
   src/ui/watermark.cpp
   src/shared/config.cpp
@@ -121,6 +122,14 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-security-test PRIVATE src)
   target_link_libraries(hyprcapture-security-test PRIVATE Qt6::Core Qt6::Gui)
   add_test(NAME hyprcapture-security-test COMMAND hyprcapture-security-test)
+
+  add_executable(hyprcapture-overlay-paint-test
+    tests/overlay_paint_test.cpp
+    src/ui/overlay_paint.cpp
+  )
+  target_include_directories(hyprcapture-overlay-paint-test PRIVATE src)
+  target_link_libraries(hyprcapture-overlay-paint-test PRIVATE Qt6::Gui)
+  add_test(NAME hyprcapture-overlay-paint-test COMMAND hyprcapture-overlay-paint-test)
 endif()
 
 install(TARGETS hyprcapture LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
