@@ -67,6 +67,7 @@ add_library(hyprcapture SHARED
   src/plugin/notification.cpp
   src/plugin/artifact_capture.cpp
   src/plugin/recording.cpp
+  src/plugin/recording_state.cpp
   src/plugin/session_launcher.cpp
   src/plugin/timing.cpp
   src/shared/config.cpp
@@ -130,6 +131,14 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-overlay-paint-test PRIVATE src)
   target_link_libraries(hyprcapture-overlay-paint-test PRIVATE Qt6::Gui)
   add_test(NAME hyprcapture-overlay-paint-test COMMAND hyprcapture-overlay-paint-test)
+
+  add_executable(hyprcapture-recording-state-test
+    tests/recording_state_test.cpp
+    src/plugin/recording_state.cpp
+  )
+  target_include_directories(hyprcapture-recording-state-test PRIVATE src)
+  target_link_libraries(hyprcapture-recording-state-test PRIVATE nlohmann_json::nlohmann_json)
+  add_test(NAME hyprcapture-recording-state-test COMMAND hyprcapture-recording-state-test)
 endif()
 
 install(TARGETS hyprcapture LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

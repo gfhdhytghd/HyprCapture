@@ -2,6 +2,7 @@
 
 #include "plugin/artifact_capture.hpp"
 #include "plugin/notification.hpp"
+#include "plugin/recording_state.hpp"
 #include "plugin/session_launcher.hpp"
 #include "plugin/timing.hpp"
 #include "shared/config.hpp"
@@ -1094,11 +1095,13 @@ std::unique_ptr<FinishingRawRecording> g_finishingRawRecording;
 struct ActiveGsrRecording {
     pid_t                 pid = -1;
     SP<CEventLoopTimer>   timer;
+    Time::steady_tp       startedAt;
     std::filesystem::path outputPath;
     CaptureDefaults       defaults;
 };
 
 std::unique_ptr<ActiveGsrRecording> g_gsrRecording;
+RecordingStateServer               g_recordingStateServer;
 
 void notifyRecording(const std::string& message, NotificationLevel level = NotificationLevel::Info, int timeoutMs = 3000) {
     notifyUser(message, level, timeoutMs);
@@ -1141,10 +1144,12 @@ bool reapGsrRecordingIfExited() {
     if (result == 0)
         return true;
     if (result == g_gsrRecording->pid || (result < 0 && errno == ECHILD)) {
+        g_recordingStateServer.beginFinalizing();
         auto recording = std::move(g_gsrRecording);
         if (recording->timer && g_pEventLoopManager)
             g_pEventLoopManager->removeTimer(recording->timer);
         finishGsrRecordingOutput(recording->defaults, recording->outputPath, "recording finished", true);
+        g_recordingStateServer.clear();
         return false;
     }
 
@@ -1181,10 +1186,12 @@ void completeFinishingRawRecording() {
 
     if (recording->transcodeToApng) {
         startApngTranscodeFromFinishedRecording(*recording);
+        g_recordingStateServer.clear();
         return;
     }
 
     finishRecordingOutput(recording->defaults, recording->outputPath, recording->message, recording->launchResultHelper);
+    g_recordingStateServer.clear();
 }
 
 bool reapFinishingRawRecordingIfActive() {
@@ -1215,6 +1222,7 @@ void scheduleFinishingRawRecordingPoll() {
 
 LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
     if (g_gsrRecording) {
+        g_recordingStateServer.beginFinalizing();
         auto recording = std::move(g_gsrRecording);
         if (recording->timer && g_pEventLoopManager)
             g_pEventLoopManager->removeTimer(recording->timer);
@@ -1226,6 +1234,7 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
             }
         }
         finishGsrRecordingOutput(recording->defaults, recording->outputPath, "recording " + reason, drain);
+        g_recordingStateServer.clear();
         return {.success = true};
     }
 
@@ -1233,6 +1242,7 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
         return {.success = false, .error = "no active recording"};
 
     auto recording = std::move(g_recording);
+    g_recordingStateServer.beginFinalizing();
     if (recording->timer && g_pEventLoopManager)
         g_pEventLoopManager->removeTimer(recording->timer);
     recording->timer.reset();
@@ -1263,10 +1273,12 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
     if (!drain && recording->transcodeToApng) {
         std::error_code ec;
         std::filesystem::remove(recording->encoderOutputPath, ec);
+        g_recordingStateServer.clear();
         return {.success = true};
     }
 
     finishRecordingOutput(recording->request.defaults, recording->outputPath, "recording " + reason, drain);
+    g_recordingStateServer.clear();
     return {.success = true};
 }
 
@@ -1276,16 +1288,22 @@ void addPendingFrameRepeats(ActiveRecording& recording, int repeats) {
     recording.pendingFrameRepeats = std::min(MAX_PENDING_FRAME_REPEATS, recording.pendingFrameRepeats + repeats);
 }
 
-void scheduleGsrStopTimer(int maxSeconds) {
-    if (!g_gsrRecording || !g_pEventLoopManager || maxSeconds <= 0)
+void scheduleGsrMonitorTimer(int maxSeconds) {
+    if (!g_gsrRecording || !g_pEventLoopManager)
         return;
 
     g_gsrRecording->timer = makeShared<CEventLoopTimer>(
-        std::chrono::seconds(maxSeconds),
-        [](SP<CEventLoopTimer> self, void*) {
+        std::chrono::milliseconds(250),
+        [maxSeconds](SP<CEventLoopTimer> self, void*) {
             if (!g_gsrRecording || g_gsrRecording->timer.get() != self.get())
                 return;
-            stopRecordingInternal("stopped at max duration", true);
+            if (!reapGsrRecordingIfExited())
+                return;
+            if (maxSeconds > 0 && std::chrono::duration_cast<std::chrono::seconds>(Time::steadyNow() - g_gsrRecording->startedAt).count() >= maxSeconds) {
+                stopRecordingInternal("stopped at max duration", true);
+                return;
+            }
+            self->updateTimeout(std::chrono::milliseconds(250));
         },
         nullptr);
     g_pEventLoopManager->addTimer(g_gsrRecording->timer);
@@ -1455,9 +1473,11 @@ LaunchResult startGsrRecording(const RecordingRequest& request) {
 
     g_gsrRecording = std::make_unique<ActiveGsrRecording>();
     g_gsrRecording->pid = pid;
+    g_gsrRecording->startedAt = Time::steadyNow();
     g_gsrRecording->outputPath = *outputPath;
     g_gsrRecording->defaults = request.defaults;
-    scheduleGsrStopTimer(std::clamp<int>(static_cast<int>(request.defaults.recordMaxSeconds), 0, 24 * 60 * 60));
+    scheduleGsrMonitorTimer(std::clamp<int>(static_cast<int>(request.defaults.recordMaxSeconds), 0, 24 * 60 * 60));
+    g_recordingStateServer.begin("gpu-screen-recorder", *outputPath, toString(request.mode), sanitizedRecordFormat(request.defaults.recordFormat));
 
     notifyRecording("recording started via gpu-screen-recorder: " + outputPath->string());
     return {.success = true};
@@ -1567,6 +1587,7 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
     g_recording->transcodeToApng = transcodeToApng;
     g_recording->preserveAlpha = preserveAlpha;
     scheduleRecordingTimer();
+    g_recordingStateServer.begin("compositor", *outputPath, toString(request->mode), format);
 
     if (fps < requestedFps) {
         if (isImageAnimationRecordFormat(format))
@@ -1591,6 +1612,14 @@ bool isRecordingActive() {
     return static_cast<bool>(g_recording) || reapGsrRecordingIfExited() || reapFinishingRawRecordingIfActive();
 }
 
+bool initializeRecordingStateServer(std::string* error) {
+    return g_recordingStateServer.start({}, error);
+}
+
+std::filesystem::path recordingStateSocketPath() {
+    return g_recordingStateServer.socketPath();
+}
+
 void shutdownRecording() {
     if (g_recording || g_gsrRecording)
         stopRecordingInternal("stopped during plugin unload", false);
@@ -1606,6 +1635,8 @@ void shutdownRecording() {
             std::filesystem::remove(recording->encoderOutputPath, ec);
         }
     }
+    g_recordingStateServer.clear();
+    g_recordingStateServer.stop();
 }
 
 } // namespace hyprcapture

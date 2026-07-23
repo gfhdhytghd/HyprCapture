@@ -505,6 +505,14 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         hyprcapture::notifyUser("reloadConfig failed", hyprcapture::NotificationLevel::Error, 5000);
     installOverlayLayerRule();
 
+    std::string stateServerError;
+    if (!hyprcapture::initializeRecordingStateServer(&stateServerError))
+        HyprlandAPI::addNotification(
+            g_pluginHandle,
+            "[hyprcapture] recording state socket unavailable: " + stateServerError,
+            CHyprColor(1.0, 0.5, 0.2, 1.0),
+            5000);
+
     return {
         .name = "HyprCapture",
         .description = "Hyprland-only screenshot overlay",

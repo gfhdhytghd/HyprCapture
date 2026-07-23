@@ -219,6 +219,30 @@ To stop an active recording, open the same overlay and click the checked record 
 
 Current recording output is a single file under `record_save_dir`. Fullscreen and region video recordings require `gpu-screen-recorder` and avoid Hyprland's screencopy, portal, and screenshare session paths. GIF and animated WebP use FFmpeg rawvideo input from compositor RGBA readback for all capture modes. APNG records a hidden 60 fps MKV intermediate first, then the helper transcodes it to APNG while showing the thumbnail with progress when thumbnails are enabled. Animation formats require a fixed duration of 3, 5, 10, 15, or 30 seconds and default to 5 seconds. `record_window_backend = gsr-visible` records the selected on-screen window rectangle through `gpu-screen-recorder` for lower overhead on normal video formats, without portal or managed screenshare sessions, but it captures what is visibly present in that screen region. Finished recordings use the same `clipboard` and `show_thumbnail` settings as screenshots; clipboard output is a local file URI.
 
+#### Recording state socket
+
+Local status bars and other integrations can read recording state from a Unix stream socket. The primary path is:
+
+```text
+$XDG_RUNTIME_DIR/hyprcapture/recording.sock
+```
+
+If `XDG_RUNTIME_DIR` is unavailable or unsafe, HyprCapture falls back to `/dev/shm/hyprcapture-$UID/recording.sock`, then `/tmp/hyprcapture-$UID/recording.sock`. The runtime directory is owner-only and the socket mode is `0600`. The socket is removed on a clean plugin unload; a user-owned stale socket is replaced on the next load.
+
+Connect once to receive one newline-terminated JSON object, after which HyprCapture closes the connection. No request body is needed and the socket does not accept commands:
+
+```sh
+socat - UNIX-CONNECT:"${XDG_RUNTIME_DIR}/hyprcapture/recording.sock"
+```
+
+Protocol v1 example:
+
+```json
+{"version":1,"active":true,"phase":"recording","backend":"gpu-screen-recorder","output":"/home/user/Videos/Screenrecords/Recording.mp4","elapsed":12.345,"elapsedMs":12345,"startedAt":"2026-07-23T12:34:56Z","mode":"fullscreen","format":"mp4"}
+```
+
+`phase` is `inactive`, `recording`, or `finalizing`. `active` is true only while frames are being captured. During `finalizing`, the encoder is draining and `elapsed`/`elapsedMs` remain frozen at the captured duration; `output` remains available until finalization completes. `backend` is `gpu-screen-recorder` or `compositor`. Inactive string fields are empty and elapsed values are zero. Clients should ignore unknown fields so later protocol versions can add metadata without breaking existing integrations.
+
 ### Thumbnail
 
 The thumbnail appears after capture when `show_thumbnail = 1`.
