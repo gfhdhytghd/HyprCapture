@@ -276,7 +276,7 @@ plugin {
         fusion_mode = 0
         capture_fullscreen_clients_as_monitor = 0
         save_dir = $XDG_PICTURES_DIR/Screenshots
-        filename_template = Screenshot-%Y-%m-%d-%H%M%S-{window_class}.png
+        filename_template = Screenshot-%Y-%m-%d-%H%M%S.png
         record_save_dir = $XDG_VIDEOS_DIR/Screenrecords
         record_filename_template = Recording-%Y-%m-%d-%H%M%S.mp4
         record_format = mp4
@@ -324,7 +324,7 @@ hl.config({
             fusion_mode = false,
             capture_fullscreen_clients_as_monitor = false,
             save_dir = "$XDG_PICTURES_DIR/Screenshots",
-            filename_template = "Screenshot-%Y-%m-%d-%H%M%S-{window_class}.png",
+            filename_template = "Screenshot-%Y-%m-%d-%H%M%S.png",
             record_save_dir = "$XDG_VIDEOS_DIR/Screenrecords",
             record_filename_template = "Recording-%Y-%m-%d-%H%M%S.mp4",
             record_format = "mp4",
