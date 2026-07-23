@@ -111,12 +111,15 @@ std::optional<std::string> firstRunnableHelper(const std::string& configured) {
 }
 
 bool allowEnvironmentName(std::string_view name) {
-    if (name == "HOME" || name == "USER" || name == "LOGNAME" || name == "LANG" || name == "XDG_RUNTIME_DIR" || name == "XDG_CURRENT_DESKTOP" ||
-        name == "XDG_SESSION_TYPE" || name == "WAYLAND_DISPLAY" || name == "DISPLAY" || name == "DBUS_SESSION_BUS_ADDRESS" ||
-        name == "QT_QPA_PLATFORM" || name == "QT_SCALE_FACTOR" || name == "QT_AUTO_SCREEN_SCALE_FACTOR" || name == "QT_ENABLE_HIGHDPI_SCALING" ||
-        name == "HYPRCAPTURE_TIMING" || name == "HYPRLAND_INSTANCE_SIGNATURE")
-        return true;
-    return name.starts_with("LC_");
+    static constexpr std::string_view allowed[] = {
+        "HOME", "USER", "LOGNAME", "LANG",
+        "XDG_RUNTIME_DIR", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE",
+        "WAYLAND_DISPLAY", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
+        "QT_QPA_PLATFORM", "QT_QPA_PLATFORMTHEME", "QT_SCALE_FACTOR",
+        "QT_AUTO_SCREEN_SCALE_FACTOR", "QT_ENABLE_HIGHDPI_SCALING",
+        "HYPRCAPTURE_TIMING", "HYPRLAND_INSTANCE_SIGNATURE",
+    };
+    return std::find(std::begin(allowed), std::end(allowed), name) != std::end(allowed) || name.starts_with("LC_");
 }
 
 std::vector<std::string> childEnvironment() {
