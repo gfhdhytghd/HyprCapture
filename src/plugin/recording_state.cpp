@@ -376,14 +376,24 @@ void RecordingStateServer::run() {
             continue;
 
         while (true) {
-            const int client = accept4(listenFd, nullptr, nullptr, SOCK_CLOEXEC | SOCK_NONBLOCK);
+            const int client = accept4(listenFd, nullptr, nullptr, SOCK_CLOEXEC);
             if (client < 0) {
                 if (errno == EINTR)
                     continue;
                 break;
             }
             const auto response = snapshotJson() + "\n";
-            (void)send(client, response.data(), response.size(), MSG_NOSIGNAL | MSG_DONTWAIT);
+            std::size_t sent = 0;
+            while (sent < response.size()) {
+                const auto bytes = send(client, response.data() + sent, response.size() - sent, MSG_NOSIGNAL);
+                if (bytes > 0) {
+                    sent += static_cast<std::size_t>(bytes);
+                    continue;
+                }
+                if (bytes < 0 && errno == EINTR)
+                    continue;
+                break;
+            }
             close(client);
         }
         fds[0].revents = 0;

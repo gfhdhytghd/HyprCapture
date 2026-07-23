@@ -507,10 +507,9 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     std::string stateServerError;
     if (!hyprcapture::initializeRecordingStateServer(&stateServerError))
-        HyprlandAPI::addNotification(
-            g_pluginHandle,
-            "[hyprcapture] recording state socket unavailable: " + stateServerError,
-            CHyprColor(1.0, 0.5, 0.2, 1.0),
+        hyprcapture::notifyUser(
+            "recording state socket unavailable: " + stateServerError,
+            hyprcapture::NotificationLevel::Warning,
             5000);
 
     return {
