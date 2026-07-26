@@ -7,6 +7,8 @@ class QPainter;
 
 namespace hyprcapture::ui {
 
+QRect clippedSelectionGeometry(const QRect& selection, const QRect& clip);
+
 // Paint using one stable image-to-destination mapping, then reveal only clip.
 // Re-cropping and re-scaling the image for every changing clip makes the
 // sampling grid move when the scale is fractional.

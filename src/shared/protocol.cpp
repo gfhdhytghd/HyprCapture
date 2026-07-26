@@ -304,6 +304,12 @@ bool windowValue(const Json& obj, WindowInfo& out) {
             return false;
         window.selectionGeometry = selection;
     }
+    if (obj.contains("selectionClipGeometry")) {
+        Rect clip;
+        if (!rectValue(obj, "selectionClipGeometry", clip))
+            return false;
+        window.selectionClipGeometry = clip;
+    }
     out = std::move(window);
     return true;
 }
@@ -371,6 +377,8 @@ std::string encodeSessionJson(const CaptureSession& session) {
         };
         if (win.selectionGeometry)
             windowJson["selectionGeometry"] = rectJson(*win.selectionGeometry);
+        if (win.selectionClipGeometry)
+            windowJson["selectionClipGeometry"] = rectJson(*win.selectionClipGeometry);
         root["windows"].push_back(std::move(windowJson));
     }
 

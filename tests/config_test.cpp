@@ -112,6 +112,7 @@ int main() {
     session.windows.back().artifactWidth = 200;
     session.windows.back().artifactHeight = 100;
     session.windows.back().selectionGeometry = Rect{.x = 30, .y = 40, .width = 120, .height = 80};
+    session.windows.back().selectionClipGeometry = Rect{.x = 0, .y = 0, .width = 100, .height = 100};
     session.windows.back().realBackgroundPath = "/tmp/window-real.rgba";
     session.windows.back().realBackgroundWidth = 200;
     session.windows.back().realBackgroundHeight = 100;
@@ -135,6 +136,7 @@ int main() {
     require(json.find("\"fullGeometry\"") != std::string::npos, "full geometry json");
     require(json.find("\"fullscreen\":true") != std::string::npos, "fullscreen window json");
     require(json.find("\"selectionGeometry\"") != std::string::npos, "selection geometry json");
+    require(json.find("\"selectionClipGeometry\"") != std::string::npos, "selection clip geometry json");
     require(json.find("\"rounding\":12") != std::string::npos, "rounding json");
     require(json.find("\"roundingPower\":2.5") != std::string::npos, "rounding power json");
     require(json.find("\"borderSize\":2") != std::string::npos, "border size json");
@@ -162,16 +164,21 @@ int main() {
     require(decoded->monitors.front().focused, "decoded focused monitor");
     require(decoded->windows.front().artifactPath == "/tmp/window.rgba", "decoded artifact path");
     require(decoded->windows.front().selectionGeometry.has_value(), "decoded selection geometry exists");
+    require(decoded->windows.front().selectionClipGeometry.has_value(), "decoded selection clip geometry exists");
     require(decoded->windows.front().focused && decoded->windows.front().fullscreen, "decoded window state");
     require(decoded->windows.front().selectionGeometry->x == 30 && decoded->windows.front().selectionGeometry->width == 120, "decoded selection geometry values");
+    require(decoded->windows.front().selectionClipGeometry->x == 0 && decoded->windows.front().selectionClipGeometry->width == 100,
+            "decoded selection clip geometry values");
 
     CaptureSession legacySession = session;
     legacySession.windows.front().selectionGeometry.reset();
+    legacySession.windows.front().selectionClipGeometry.reset();
     const auto legacyJson = encodeSessionJson(legacySession);
     require(legacyJson.find("\"selectionGeometry\"") == std::string::npos, "missing optional selection geometry omitted");
     const auto legacyDecoded = decodeSessionJson(legacyJson);
     require(legacyDecoded.has_value(), "session without selection geometry decodes");
     require(!legacyDecoded->windows.front().selectionGeometry.has_value(), "missing optional selection geometry stays empty");
+    require(!legacyDecoded->windows.front().selectionClipGeometry.has_value(), "missing optional selection clip geometry stays empty");
 
     RecordingRequest recording;
     recording.id = "recording-request";

@@ -1597,6 +1597,8 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
             if (artifact.selectionGeometry.isValid())
                 m_hymissionOverviewSession = true;
         }
+        if (info.selectionClipGeometry)
+            artifact.selectionClipGeometry = protocolRect(*info.selectionClipGeometry);
         artifact.rounding = info.rounding;
         artifact.roundingPower = info.roundingPower;
         artifact.borderSize = info.borderSize;
@@ -2984,7 +2986,8 @@ QRect CaptureOverlay::windowFrameGeometry(const WindowArtifact& window) const {
 }
 
 QRect CaptureOverlay::windowSelectionGeometry(const WindowArtifact& window) const {
-    return window.selectionGeometry.isValid() ? window.selectionGeometry : windowFrameGeometry(window);
+    const QRect selection = window.selectionGeometry.isValid() ? window.selectionGeometry : windowFrameGeometry(window);
+    return hyprcapture::ui::clippedSelectionGeometry(selection, window.selectionClipGeometry);
 }
 
 bool CaptureOverlay::hasOverviewSelectionGeometry(const WindowArtifact& window) const {
@@ -3135,6 +3138,7 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         capturedWindow.visibleGeometry = protocolRect(info.visibleGeometry);
         capturedWindow.fullGeometry = protocolRect(info.fullGeometry);
         capturedWindow.selectionGeometry = window.selectionGeometry;
+        capturedWindow.selectionClipGeometry = window.selectionClipGeometry;
         capturedWindow.rounding = info.rounding;
         capturedWindow.roundingPower = info.roundingPower;
         capturedWindow.borderSize = info.borderSize;

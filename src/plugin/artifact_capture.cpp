@@ -16,6 +16,9 @@
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/errorOverlay/Overlay.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
+#include <hyprland/src/layout/algorithm/Algorithm.hpp>
+#include <hyprland/src/layout/space/Space.hpp>
+#include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -1456,6 +1459,17 @@ CBox renderedWindowGoalMainSurfaceBox(const PHLWINDOW& window) {
 
     CBox box{window->m_realPosition->goal().x, window->m_realPosition->goal().y, window->m_realSize->goal().x, window->m_realSize->goal().y};
     return renderedWindowBox(window, box);
+}
+
+bool isScrollingTiledWindow(const PHLWINDOW& window) {
+    if (!window || window->m_isFloating || !window->m_workspace || !window->m_workspace->m_space)
+        return false;
+
+    const auto algorithm = window->m_workspace->m_space->algorithm();
+    if (!algorithm || !algorithm->tiledAlgo())
+        return false;
+
+    return Layout::Supplementary::algoMatcher()->getNameForTiledAlgo(algorithm->tiledAlgo().get()) == "scrolling";
 }
 
 std::string pointerId(const void* ptr) {
@@ -3072,6 +3086,8 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.address = address;
         if (overviewSelectionIt != overviewSelectionGeometry.end())
             info.selectionGeometry = overviewSelectionIt->second;
+        if (isScrollingTiledWindow(window))
+            info.selectionClipGeometry = monitorRect(monitor);
         info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
         info.focused = window == Desktop::focusState()->window();

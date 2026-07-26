@@ -57,6 +57,7 @@ class CaptureOverlay final : public QMainWindow {
         QRect   fullGeometry;
         QRect   visibleGeometry;
         QRect   selectionGeometry;
+        QRect   selectionClipGeometry;
         double  rounding = 0.0;
         double  roundingPower = 2.0;
         double  borderSize = 0.0;

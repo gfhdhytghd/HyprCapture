@@ -33,6 +33,11 @@ int main(int argc, char** argv) {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     QGuiApplication app(argc, argv);
 
+    require(hyprcapture::ui::clippedSelectionGeometry(QRect(900, 100, 300, 500), QRect(0, 0, 1000, 800)) == QRect(900, 100, 100, 500),
+            "scrolling selection is clipped to its output");
+    require(hyprcapture::ui::clippedSelectionGeometry(QRect(900, 100, 300, 500), QRect{}) == QRect(900, 100, 300, 500),
+            "ordinary cross-output selection remains unchanged");
+
     const QImage source = testPattern();
     const QRect  destination(3, 2, 20, 11);
 
