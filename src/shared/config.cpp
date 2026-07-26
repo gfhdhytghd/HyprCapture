@@ -144,6 +144,17 @@ FullscreenScope parseFullscreenScope(std::string_view value, FullscreenScope fal
     return fallback;
 }
 
+OverlayScope parseOverlayScope(std::string_view value, OverlayScope fallback) {
+    const auto v = normalized(value);
+    if (v == "fix" || v == "fixed" || v == "launch")
+        return OverlayScope::Fix;
+    if (v == "focus" || v == "focused" || v == "forcus")
+        return OverlayScope::Focus;
+    if (v == "all" || v == "all-monitors")
+        return OverlayScope::All;
+    return fallback;
+}
+
 WindowBackground parseWindowBackground(std::string_view value, WindowBackground fallback) {
     const auto v = normalized(value);
     if (v == "white")
@@ -249,6 +260,15 @@ std::string toString(FullscreenScope value) {
         case FullscreenScope::PerMonitor: return "per-monitor";
     }
     return "all";
+}
+
+std::string toString(OverlayScope value) {
+    switch (value) {
+        case OverlayScope::Fix: return "fix";
+        case OverlayScope::Focus: return "focus";
+        case OverlayScope::All: return "all";
+    }
+    return "fix";
 }
 
 std::string toString(WindowBackground value) {

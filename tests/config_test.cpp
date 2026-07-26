@@ -30,6 +30,9 @@ int main() {
     require(parseFullscreenScope("all-monitors") == FullscreenScope::All, "all monitor scope parse");
     require(parseFullscreenScope("current-monitor") == FullscreenScope::Current, "current monitor scope parse");
     require(parseFullscreenScope("per_monitor") == FullscreenScope::PerMonitor, "per monitor scope parse");
+    require(parseOverlayScope("fix") == OverlayScope::Fix, "fixed overlay scope parse");
+    require(parseOverlayScope("forcus") == OverlayScope::Focus, "legacy misspelled focus overlay scope parse");
+    require(parseOverlayScope("all-monitors") == OverlayScope::All, "all monitor overlay scope parse");
 
     require(parseWindowBackground("follow_system") == WindowBackground::FollowSystem, "follow system background parse");
     require(parseWindowBackground("transparent") == WindowBackground::Transparent, "transparent background parse");
@@ -54,6 +57,7 @@ int main() {
 
     require(toString(CaptureMode::Fullscreen) == "fullscreen", "fullscreen stringify");
     require(toString(FullscreenScope::PerMonitor) == "per-monitor", "per monitor stringify");
+    require(toString(OverlayScope::Focus) == "focus", "focus overlay scope stringify");
     require(toString(WindowBackground::FollowSystem) == "follow-system", "follow system stringify");
     require(toString(RecordWindowBackend::GsrVisible) == "gsr-visible", "visible gsr backend stringify");
     require(toString(NotificationBackend::System) == "system", "system notification backend stringify");
@@ -77,6 +81,7 @@ int main() {
     CaptureSession session;
     session.id = "test-session";
     session.defaults.mode = CaptureMode::Window;
+    session.defaults.overlayScope = OverlayScope::All;
     session.defaults.allowQuick = true;
     session.defaults.confirmBeforeCapture = true;
     session.defaults.fushionMode = true;
@@ -119,6 +124,7 @@ int main() {
     session.windows.back().title = std::string("Title") + '\x01';
     const auto json = encodeSessionJson(session);
     require(json.find("\"fushionMode\":true") != std::string::npos, "fushion mode json");
+    require(json.find("\"overlayScope\":\"all\"") != std::string::npos, "overlay scope json");
     require(json.find("\"allowQuick\":true") != std::string::npos, "allow quick json");
     require(json.find("\"confirmBeforeCapture\":true") != std::string::npos, "confirm before capture json");
     require(json.find("\"captureFullscreenClientsAsMonitor\":true") != std::string::npos, "fullscreen client behavior json");
@@ -150,6 +156,7 @@ int main() {
     require(decoded.has_value(), "encoded session decodes");
     require(decoded->id == "test-session", "decoded id");
     require(decoded->defaults.mode == CaptureMode::Window, "decoded mode");
+    require(decoded->defaults.overlayScope == OverlayScope::All, "decoded overlay scope");
     require(decoded->defaults.allowQuick, "decoded allow quick");
     require(decoded->defaults.confirmBeforeCapture, "decoded confirm before capture");
     require(decoded->defaults.captureFullscreenClientsAsMonitor, "decoded fullscreen client behavior");
@@ -169,6 +176,14 @@ int main() {
     require(decoded->windows.front().selectionGeometry->x == 30 && decoded->windows.front().selectionGeometry->width == 120, "decoded selection geometry values");
     require(decoded->windows.front().selectionClipGeometry->x == 0 && decoded->windows.front().selectionClipGeometry->width == 100,
             "decoded selection clip geometry values");
+
+    auto legacyOverlayJson = json;
+    const auto overlayScopeField = legacyOverlayJson.find("\"overlayScope\":\"all\",");
+    require(overlayScopeField != std::string::npos, "overlay scope field found for legacy test");
+    legacyOverlayJson.erase(overlayScopeField, std::string("\"overlayScope\":\"all\",").size());
+    const auto legacyOverlayDecoded = decodeSessionJson(legacyOverlayJson);
+    require(legacyOverlayDecoded.has_value(), "session without overlay scope decodes");
+    require(legacyOverlayDecoded->defaults.overlayScope == OverlayScope::Fix, "missing overlay scope keeps fixed default");
 
     CaptureSession legacySession = session;
     legacySession.windows.front().selectionGeometry.reset();

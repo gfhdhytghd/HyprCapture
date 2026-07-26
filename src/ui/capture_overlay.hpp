@@ -12,6 +12,7 @@
 #include <vector>
 
 class QButtonGroup;
+class QEnterEvent;
 class QGraphicsOpacityEffect;
 class QLabel;
 class QPainter;
@@ -19,6 +20,7 @@ class QPushButton;
 class QResizeEvent;
 class QShowEvent;
 class QPropertyAnimation;
+class QScreen;
 class InlineSelect;
 
 namespace hyprcapture::ui {
@@ -31,9 +33,21 @@ class CaptureOverlay final : public QMainWindow {
 
   public:
     explicit CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick, bool record, bool recordActive, QString sessionJson, QWidget* parent = nullptr);
+    CaptureOverlay(const CaptureOverlay& source, const QRect& overlayGeometry, bool active, QWidget* parent = nullptr);
     ~CaptureOverlay() override;
 
+    QScreen* overlayScreen() const;
+    hyprcapture::OverlayScope overlayScope() const;
+    bool isOverlayActive() const;
+    void setOverlayActive(bool active);
+    void adoptInteractionState(const CaptureOverlay& source);
+
+  signals:
+    void activationRequested();
+    void finishingStarted();
+
   protected:
+    void enterEvent(QEnterEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
@@ -71,6 +85,8 @@ class CaptureOverlay final : public QMainWindow {
     };
 
     void buildToolbar();
+    void initializeOverlay(const QRect& overlayGeometry);
+    bool requestActivation();
     void parseSessionJson(const QString& json);
     void captureScreensBeforeOverlay();
     QRect preferredOverlayLogicalGeometry() const;
@@ -180,6 +196,7 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_dragging = false;
     bool                      m_finishing = false;
     bool                      m_fadeOutStarted = false;
+    bool                      m_overlayActive = true;
     double                    m_overlayOpacity = 0.0;
     QPoint                    m_dragStart;
     QPoint                    m_dragEnd;

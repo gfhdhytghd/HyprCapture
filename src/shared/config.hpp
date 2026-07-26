@@ -9,6 +9,7 @@ namespace hyprcapture {
 
 enum class CaptureMode { Fullscreen, Region, Window };
 enum class FullscreenScope { All, Current, PerMonitor };
+enum class OverlayScope { Fix, Focus, All };
 enum class WindowBackground { White, Black, FollowSystem, Real, Transparent };
 enum class DecorationPolicy { Keep, Remove };
 enum class RecordWindowBackend { Compositor, GsrVisible };
@@ -18,6 +19,7 @@ enum class WatermarkPosition { UpLeft, UpMiddle, UpRight, LeftMiddle, Central, R
 struct CaptureDefaults {
     CaptureMode      mode = CaptureMode::Region;
     FullscreenScope  fullscreenScope = FullscreenScope::All;
+    OverlayScope     overlayScope = OverlayScope::Fix;
     WindowBackground windowBackground = WindowBackground::FollowSystem;
     DecorationPolicy windowBorder = DecorationPolicy::Keep;
     DecorationPolicy windowShadow = DecorationPolicy::Keep;
@@ -58,6 +60,7 @@ struct CaptureDefaults {
 
 CaptureMode parseCaptureMode(std::string_view value, CaptureMode fallback = CaptureMode::Region);
 FullscreenScope parseFullscreenScope(std::string_view value, FullscreenScope fallback = FullscreenScope::All);
+OverlayScope parseOverlayScope(std::string_view value, OverlayScope fallback = OverlayScope::Fix);
 WindowBackground parseWindowBackground(std::string_view value, WindowBackground fallback = WindowBackground::FollowSystem);
 DecorationPolicy parseDecorationPolicy(std::string_view value, DecorationPolicy fallback = DecorationPolicy::Keep);
 RecordWindowBackend parseRecordWindowBackend(std::string_view value, RecordWindowBackend fallback = RecordWindowBackend::Compositor);
@@ -68,6 +71,7 @@ bool recordFormatIsImageAnimation(std::string_view value);
 
 std::string toString(CaptureMode value);
 std::string toString(FullscreenScope value);
+std::string toString(OverlayScope value);
 std::string toString(WindowBackground value);
 std::string toString(DecorationPolicy value);
 std::string toString(RecordWindowBackend value);

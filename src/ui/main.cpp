@@ -652,6 +652,7 @@ int main(int argc, char** argv) {
     parser.addOptions({
         {{"m", "mode"}, "Capture mode.", "mode", "region"},
         {"fullscreen-scope", "Fullscreen scope.", "scope", "all"},
+        {"overlay-scope", "Overlay monitor scope.", "scope", "fix"},
         {"window-background", "Window background.", "background", "follow-system"},
         {"window-border", "Window border policy.", "policy", "keep"},
         {"window-shadow", "Window shadow policy.", "policy", "keep"},
@@ -724,6 +725,7 @@ int main(int argc, char** argv) {
     hyprcapture::CaptureDefaults defaults;
     defaults.mode = hyprcapture::parseCaptureMode(parser.value("mode").toStdString(), defaults.mode);
     defaults.fullscreenScope = hyprcapture::parseFullscreenScope(parser.value("fullscreen-scope").toStdString(), defaults.fullscreenScope);
+    defaults.overlayScope = hyprcapture::parseOverlayScope(parser.value("overlay-scope").toStdString(), defaults.overlayScope);
     defaults.windowBackground = hyprcapture::parseWindowBackground(parser.value("window-background").toStdString(), defaults.windowBackground);
     defaults.windowBorder = hyprcapture::parseDecorationPolicy(parser.value("window-border").toStdString(), defaults.windowBorder);
     defaults.windowShadow = hyprcapture::parseDecorationPolicy(parser.value("window-shadow").toStdString(), defaults.windowShadow);
@@ -789,8 +791,51 @@ int main(int argc, char** argv) {
             QFile::remove(path);
     }
 
-    CaptureOverlay overlay(defaults, parser.isSet("quick"), parser.isSet("record"), parser.isSet("record-active"), sessionJson);
-    overlay.show();
+    const bool quick = parser.isSet("quick");
+    CaptureOverlay overlay(defaults, quick, parser.isSet("record"), parser.isSet("record-active"), sessionJson);
+    const auto     overlayScope = overlay.overlayScope();
+
+    std::vector<std::unique_ptr<CaptureOverlay>> extraOverlays;
+    std::vector<CaptureOverlay*>                 overlays{&overlay};
+    if (!quick && overlayScope != hyprcapture::OverlayScope::Fix) {
+        QScreen* launchScreen = overlay.overlayScreen();
+        for (QScreen* screen : QGuiApplication::screens()) {
+            if (!screen || screen == launchScreen)
+                continue;
+            const bool active = overlayScope == hyprcapture::OverlayScope::All;
+            auto       extra = std::make_unique<CaptureOverlay>(overlay, screen->geometry(), active);
+            overlays.push_back(extra.get());
+            extraOverlays.push_back(std::move(extra));
+        }
+    }
+
+    CaptureOverlay* activeOverlay = &overlay;
+    if (overlayScope == hyprcapture::OverlayScope::Focus) {
+        for (CaptureOverlay* candidate : overlays) {
+            QObject::connect(candidate, &CaptureOverlay::activationRequested, &app, [&, candidate] {
+                if (activeOverlay == candidate)
+                    return;
+                candidate->adoptInteractionState(*activeOverlay);
+                activeOverlay->setOverlayActive(false);
+                candidate->setOverlayActive(true);
+                activeOverlay = candidate;
+            });
+        }
+    }
+    if (overlays.size() > 1) {
+        for (CaptureOverlay* candidate : overlays) {
+            QObject::connect(candidate, &CaptureOverlay::finishingStarted, &app, [&, candidate] {
+                for (CaptureOverlay* peer : overlays)
+                    if (peer != candidate)
+                        peer->setOverlayActive(false);
+            });
+        }
+    }
+
+    for (CaptureOverlay* candidate : overlays) {
+        candidate->show();
+        candidate->raise();
+    }
     overlay.activateWindow();
     overlay.raise();
 

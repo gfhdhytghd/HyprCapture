@@ -129,6 +129,7 @@ void registerConfigValues() {
 
     addStringConfig("default_mode", "Default HyprCapture mode", "region");
     addStringConfig("fullscreen_scope", "Fullscreen capture scope", "all");
+    addStringConfig("overlay_scope", "Overlay monitor scope (fix, focus, or all)", "fix");
     addStringConfig("window_background", "Window capture background mode", "follow-system");
     addStringConfig("window_border", "Window capture border policy", "keep");
     addStringConfig("window_shadow", "Window capture shadow policy", "keep");
@@ -180,6 +181,8 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.mode = hyprcapture::parseCaptureMode(configString("default_mode", hyprcapture::toString(defaults.mode)), defaults.mode);
     defaults.fullscreenScope =
         hyprcapture::parseFullscreenScope(configString("fullscreen_scope", hyprcapture::toString(defaults.fullscreenScope)), defaults.fullscreenScope);
+    defaults.overlayScope =
+        hyprcapture::parseOverlayScope(configString("overlay_scope", hyprcapture::toString(defaults.overlayScope)), defaults.overlayScope);
     defaults.windowBackground =
         hyprcapture::parseWindowBackground(configString("window_background", hyprcapture::toString(defaults.windowBackground)), defaults.windowBackground);
     defaults.windowBorder = hyprcapture::parseDecorationPolicy(configString("window_border", hyprcapture::toString(defaults.windowBorder)), defaults.windowBorder);

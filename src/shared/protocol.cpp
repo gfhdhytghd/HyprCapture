@@ -62,6 +62,7 @@ Json defaultsJson(const CaptureDefaults& defaults) {
     return Json{
         {"mode", toString(defaults.mode)},
         {"fullscreenScope", toString(defaults.fullscreenScope)},
+        {"overlayScope", toString(defaults.overlayScope)},
         {"windowBackground", toString(defaults.windowBackground)},
         {"windowBorder", toString(defaults.windowBorder)},
         {"windowShadow", toString(defaults.windowShadow)},
@@ -202,6 +203,11 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         defaults.fullscreenScope = parseFullscreenScope(value, defaults.fullscreenScope);
     else
         return false;
+    if (obj.contains("overlayScope")) {
+        if (!stringValue(obj, "overlayScope", value, MAX_METADATA_STRING_BYTES))
+            return false;
+        defaults.overlayScope = parseOverlayScope(value, defaults.overlayScope);
+    }
     if (stringValue(obj, "windowBackground", value, MAX_METADATA_STRING_BYTES, false))
         defaults.windowBackground = parseWindowBackground(value, defaults.windowBackground);
     else

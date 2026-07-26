@@ -348,6 +348,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(toString(request.requestedMode));
     args.push_back("--fullscreen-scope");
     args.push_back(toString(request.defaults.fullscreenScope));
+    args.push_back("--overlay-scope");
+    args.push_back(toString(request.defaults.overlayScope));
     args.push_back("--window-background");
     args.push_back(toString(request.defaults.windowBackground));
     args.push_back("--window-border");

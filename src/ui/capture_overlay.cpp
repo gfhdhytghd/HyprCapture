@@ -15,6 +15,7 @@
 #include <QDateTime>
 #include <QDir>
 #include <QElapsedTimer>
+#include <QEnterEvent>
 #include <QFile>
 #include <QFrame>
 #include <QFileInfo>
@@ -1492,11 +1493,6 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     : QMainWindow(parent), m_defaults(std::move(defaults)), m_mode(m_defaults.mode), m_quick(quick), m_record(record), m_recordActive(recordActive) {
     QElapsedTimer constructorTimer;
     constructorTimer.start();
-    setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
-    setAttribute(Qt::WA_TranslucentBackground);
-    setMouseTracking(true);
-    setCursor(Qt::CrossCursor);
-
     QElapsedTimer parseTimer;
     parseTimer.start();
     parseSessionJson(sessionJson);
@@ -1509,8 +1505,45 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     captureScreensBeforeOverlay();
     traceTiming(QStringLiteral("prepare_desktop"), preCaptureTimer.elapsed());
 
-    m_overlayLogicalGeometry = preferredOverlayLogicalGeometry();
-    setGeometry(m_overlayLogicalGeometry.isValid() ? m_overlayLogicalGeometry : QRect(0, 0, 1280, 720));
+    initializeOverlay(preferredOverlayLogicalGeometry());
+    traceTiming(QStringLiteral("overlay_construct"), constructorTimer.elapsed());
+    if (m_quick)
+        QTimer::singleShot(0, this, &CaptureOverlay::finishCapture);
+}
+
+CaptureOverlay::CaptureOverlay(const CaptureOverlay& source, const QRect& overlayGeometry, bool active, QWidget* parent)
+    : QMainWindow(parent),
+      m_defaults(source.m_defaults),
+      m_mode(source.m_mode),
+      m_quick(source.m_quick),
+      m_record(source.m_record),
+      m_recordActive(source.m_recordActive),
+      m_recordError(source.m_recordError),
+      m_sessionDecoded(source.m_sessionDecoded),
+      m_hymissionOverviewSession(source.m_hymissionOverviewSession),
+      m_confirmBeforeCapture(source.m_confirmBeforeCapture),
+      m_overlayActive(active),
+      m_cursorLogicalPosition(source.m_cursorLogicalPosition),
+      m_hasCursorLogicalPosition(source.m_hasCursorLogicalPosition),
+      m_recordFormatAuto(source.m_recordFormatAuto),
+      m_recordCodecAuto(source.m_recordCodecAuto),
+      m_desktopImage(source.m_desktopImage),
+      m_desktopGeometry(source.m_desktopGeometry),
+      m_sessionMonitorCount(source.m_sessionMonitorCount),
+      m_sessionWindowCount(source.m_sessionWindowCount),
+      m_monitorArtifacts(source.m_monitorArtifacts),
+      m_windowArtifacts(source.m_windowArtifacts) {
+    initializeOverlay(overlayGeometry);
+}
+
+void CaptureOverlay::initializeOverlay(const QRect& overlayGeometry) {
+    setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setMouseTracking(true);
+    setCursor(Qt::CrossCursor);
+
+    m_overlayLogicalGeometry = overlayGeometry.isValid() ? overlayGeometry : QRect(0, 0, 1280, 720);
+    setGeometry(m_overlayLogicalGeometry);
 
     QElapsedTimer toolbarTimer;
     toolbarTimer.start();
@@ -1518,14 +1551,14 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     traceTiming(QStringLiteral("build_toolbar"), toolbarTimer.elapsed());
 
     winId();
-    QScreen* overlayScreen = screenForOverlayGeometry(m_overlayLogicalGeometry);
-    if (overlayScreen && windowHandle())
-        windowHandle()->setScreen(overlayScreen);
+    QScreen* targetScreen = screenForOverlayGeometry(m_overlayLogicalGeometry);
+    if (targetScreen && windowHandle())
+        windowHandle()->setScreen(targetScreen);
     if (auto* layerWindow = LayerShellQt::Window::get(windowHandle())) {
         layerWindow->setScope("hyprcapture-ui");
         layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
-        if (overlayScreen)
-            layerWindow->setScreen(overlayScreen);
+        if (targetScreen)
+            layerWindow->setScreen(targetScreen);
         layerWindow->setAnchors(LayerShellQt::Window::Anchors{LayerShellQt::Window::AnchorTop} | LayerShellQt::Window::AnchorBottom |
                                 LayerShellQt::Window::AnchorLeft | LayerShellQt::Window::AnchorRight);
         layerWindow->setExclusiveZone(-1);
@@ -1533,13 +1566,84 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
         layerWindow->setActivateOnShow(true);
         layerWindow->setDesiredSize(QSize(0, 0));
     }
-    traceTiming(QStringLiteral("overlay_construct"), constructorTimer.elapsed());
-    if (m_quick)
-        QTimer::singleShot(0, this, &CaptureOverlay::finishCapture);
+    if (m_toolbar)
+        m_toolbar->setVisible(m_overlayActive);
 }
 
 CaptureOverlay::~CaptureOverlay() {
     endHymissionCaptureInputSuppression();
+}
+
+QScreen* CaptureOverlay::overlayScreen() const {
+    return screenForOverlayGeometry(m_overlayLogicalGeometry);
+}
+
+hyprcapture::OverlayScope CaptureOverlay::overlayScope() const {
+    return m_defaults.overlayScope;
+}
+
+bool CaptureOverlay::isOverlayActive() const {
+    return m_overlayActive;
+}
+
+void CaptureOverlay::setOverlayActive(bool active) {
+    if (m_overlayActive == active)
+        return;
+
+    m_overlayActive = active;
+    hideOptionPopups();
+    if (!active) {
+        clearPendingConfirm();
+        m_dragStart = {};
+        m_dragEnd = {};
+        m_fullscreenClientSelected = false;
+    }
+    if (m_toolbar)
+        m_toolbar->setVisible(active);
+    if (active) {
+        setCursor(Qt::CrossCursor);
+        raise();
+        activateWindow();
+        refreshInitialCursorPosition();
+    }
+    update();
+}
+
+void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
+    if (&source == this)
+        return;
+
+    m_mode = source.m_mode;
+    m_record = source.m_record;
+    m_recordError = source.m_recordError;
+    m_recordFormatAuto = source.m_recordFormatAuto;
+    m_recordCodecAuto = source.m_recordCodecAuto;
+    if (m_recordToggle)
+        m_recordToggle->setChecked(m_record);
+    if (m_fullscreenScope)
+        m_fullscreenScope->setCurrentText(qString(hyprcapture::toString(source.currentFullscreenScope())));
+    if (m_windowBackground)
+        m_windowBackground->setCurrentText(qString(hyprcapture::toString(source.currentWindowBackground())));
+    if (m_recordFormat)
+        m_recordFormat->setCurrentText(source.currentRecordFormat());
+    if (m_recordCodec)
+        m_recordCodec->setCurrentText(source.currentRecordCodec());
+    if (m_recordFps)
+        m_recordFps->setCurrentText(QString::number(source.currentRecordFps()));
+    if (m_recordDuration)
+        m_recordDuration->setCurrentText(animationDurationChoice(source.currentRecordMaxSeconds()));
+    if (m_recordBackend)
+        m_recordBackend->setCurrentText(qString(hyprcapture::toString(source.currentRecordBackend())));
+    clearPendingConfirm();
+    updateToolbarControlsForMode();
+    updateRecordWarning();
+    updateStatus();
+}
+
+bool CaptureOverlay::requestActivation() {
+    if (!m_overlayActive)
+        emit activationRequested();
+    return m_overlayActive;
 }
 
 void CaptureOverlay::parseSessionJson(const QString& json) {
@@ -1818,11 +1922,13 @@ void CaptureOverlay::buildToolbar() {
     connect(m_recordToggle, &QPushButton::clicked, this, [this] {
         if (m_recordActive) {
             m_recordToggle->setChecked(true);
-            if (stopRecording())
+            if (stopRecording()) {
+                emit finishingStarted();
                 fadeOutThen([this] {
                     endHymissionCaptureInputSuppression();
                     qApp->quit();
                 });
+            }
             return;
         }
 
@@ -1991,6 +2097,11 @@ void CaptureOverlay::fadeOutThen(std::function<void()> finished) {
         if (finished)
             finished();
     });
+}
+
+void CaptureOverlay::enterEvent(QEnterEvent* event) {
+    requestActivation();
+    QMainWindow::enterEvent(event);
 }
 
 void CaptureOverlay::showEvent(QShowEvent* event) {
@@ -2507,6 +2618,8 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
     painter.fillRect(rect(), Qt::transparent);
+    if (!m_overlayActive)
+        return;
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
     painter.setOpacity(m_overlayOpacity);
 
@@ -2555,6 +2668,8 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
 }
 
 void CaptureOverlay::mousePressEvent(QMouseEvent* event) {
+    if (!requestActivation())
+        return;
     if (m_toolbar->geometry().contains(event->pos()))
         return;
     rememberCursorLocalPosition(event->position());
@@ -2626,6 +2741,8 @@ void CaptureOverlay::mousePressEvent(QMouseEvent* event) {
 }
 
 void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
+    if (!requestActivation())
+        return;
     rememberCursorLocalPosition(event->position());
     if (pendingConfirmActive()) {
         if (m_mode == hyprcapture::CaptureMode::Region) {
@@ -2672,6 +2789,8 @@ void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
+    if (!requestActivation())
+        return;
     rememberCursorLocalPosition(event->position());
     if (event->button() != Qt::LeftButton)
         return;
@@ -3609,10 +3728,12 @@ void CaptureOverlay::finishCapture() {
             updateStatus();
             return;
         }
+        emit finishingStarted();
         launchRecordingCountdown(requestPath);
         return;
     }
 
+    emit finishingStarted();
     if (m_mode == hyprcapture::CaptureMode::Window) {
         traceTiming(QStringLiteral("fade_start"));
         fadeOutThen([this] { renderAndSaveCapture(); });
@@ -3723,6 +3844,7 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
 }
 
 void CaptureOverlay::cancelCapture() {
+    emit finishingStarted();
     fadeOutThen([this] {
         endHymissionCaptureInputSuppression();
         qApp->quit();

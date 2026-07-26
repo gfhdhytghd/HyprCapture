@@ -264,6 +264,7 @@ plugin {
     hyprcapture {
         default_mode = region
         fullscreen_scope = all
+        overlay_scope = fix
         window_background = follow-system
         window_border = keep
         window_shadow = keep
@@ -312,6 +313,7 @@ hl.config({
         hyprcapture = {
             default_mode = "region",
             fullscreen_scope = "all",
+            overlay_scope = "fix",
             window_background = "follow-system",
             window_border = "keep",
             window_shadow = "keep",
@@ -393,6 +395,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | --- | --- | --- | --- |
 | `default_mode` | string | `region` | Default mode for `hyprcapture:open` and `hyprcapture:quick`. Supports `region`, `fullscreen`, and `window`. |
 | `fullscreen_scope` | string | `all` | Fullscreen capture scope. Supports `all`, `current`, and `per-monitor`. |
+| `overlay_scope` | string | `fix` | Overlay monitor behavior. `fix` keeps it on the monitor where capture starts, `focus` moves it to the monitor under the pointer while it is open, and `all` shows it on every monitor. The legacy typo `forcus` is accepted as `focus`. |
 | `window_background` | string | `follow-system` | Background behind transparent window pixels. Supports `follow-system`, `white`, `black`, `real`, and `transparent`. |
 | `window_border` | string | `keep` | Window border policy. Supports `keep` and `remove`. |
 | `window_shadow` | string | `keep` | Window shadow policy. Supports `keep` and `remove`. Transparent window recordings keep shadows and normalize the alpha falloff so the shadow fades out instead of encoding as a hard border. |
