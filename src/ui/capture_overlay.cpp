@@ -2654,8 +2654,10 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     painter.fillRect(rect(), QColor(0, 0, 0, 80));
 
     const bool fusionGesture = m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen;
+    const bool fusionTargetPreview = fusionGesture && !pendingConfirmActive();
     const QRect sel = normalizedSelection().intersected(regionCaptureBounds());
-    const bool selectionVisible = m_dragging || (sel.width() > 4 && sel.height() > 4);
+    const bool selectionLargeEnough = sel.width() > 4 && sel.height() > 4;
+    const bool selectionVisible = selectionLargeEnough || (m_dragging && !fusionTargetPreview);
     if ((m_mode == hyprcapture::CaptureMode::Region || fusionGesture) && selectionVisible) {
         paintDesktop(painter, sel);
         painter.setPen(QPen(QColor(255, 255, 255, 230), 2));
@@ -2674,6 +2676,14 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
         if (cap.isValid()) {
             paintDesktop(painter, cap);
             painter.setPen(QPen(QColor(255, 255, 255, 230), 2));
+            painter.drawRect(cap.adjusted(0, 0, -1, -1));
+        }
+    } else if (fusionTargetPreview && !hoveredWindow()) {
+        const QPoint localCursor = globalToLocalRect(QRect(cursorLogicalPosition(), QSize(1, 1))).topLeft();
+        const QRect  cap = localScreenRectAt(localCursor);
+        if (cap.isValid()) {
+            painter.setPen(QPen(QColor(255, 255, 255, 230), 2));
+            painter.setBrush(Qt::NoBrush);
             painter.drawRect(cap.adjusted(0, 0, -1, -1));
         }
     } else if (m_mode == hyprcapture::CaptureMode::Window || fusionGesture) {
