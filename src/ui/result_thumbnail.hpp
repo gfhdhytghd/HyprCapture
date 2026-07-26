@@ -2,6 +2,7 @@
 
 #include <QPoint>
 #include <QPointF>
+#include <QPointer>
 #include <QTimer>
 #include <QWidget>
 
@@ -27,6 +28,14 @@ class ResultThumbnail final : public QWidget {
     void setImagePixmap(const QPixmap& pixmap);
     void setTranscodeProgress(double progress);
     void finishTranscodeProgress(bool success, int timeoutMs);
+    void applySynchronizedSwipeOffset(const QPointF& offset);
+    void resetSynchronizedSwipe();
+    void animateSynchronizedSwipeOut(bool deleteRequested);
+
+  signals:
+    void swipeOffsetChanged(const QPointF& offset);
+    void swipeResetStarted();
+    void swipeActionStarted(bool deleteRequested);
 
   protected:
     void closeEvent(QCloseEvent* event) override;
@@ -50,7 +59,7 @@ class ResultThumbnail final : public QWidget {
     void startFileDrag();
     void updateSwipeVisual();
     void resetSwipe();
-    void animateSwipeOut(SwipeAction action);
+    void animateSwipeOut(SwipeAction action, bool finalizeAction);
     void deleteAndClose();
     void restoreClipboard() const;
     void startCloseTimer(int timeoutMs);
@@ -59,6 +68,7 @@ class ResultThumbnail final : public QWidget {
     QString m_restoreClipboardPath;
     QString m_deleteRoot;
     bool    m_copyFile = false;
+    QPointer<QScreen> m_targetScreen;
     QWidget* m_card = nullptr;
     SwipeBackdrop* m_swipeBackdrop = nullptr;
     TranscodeProgressOverlay* m_transcodeOverlay = nullptr;

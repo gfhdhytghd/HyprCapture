@@ -70,9 +70,11 @@ QColor interpolateColor(const QColor& from, const QColor& to, double amount) {
     return QColor(mix(from.red(), to.red()), mix(from.green(), to.green()), mix(from.blue(), to.blue()), mix(from.alpha(), to.alpha()));
 }
 
-qreal thumbnailTargetDevicePixelRatio(const QPixmap& pixmap) {
+qreal thumbnailTargetDevicePixelRatio(const QPixmap& pixmap, const QScreen* targetScreen) {
     qreal dpr = std::max<qreal>(1.0, pixmap.devicePixelRatio());
-    const QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
+    const QScreen* screen = targetScreen;
+    if (!screen)
+        screen = QGuiApplication::screenAt(QCursor::pos());
     if (!screen)
         screen = QGuiApplication::primaryScreen();
     if (screen)
@@ -80,7 +82,7 @@ qreal thumbnailTargetDevicePixelRatio(const QPixmap& pixmap) {
     return std::clamp(dpr, qreal{1.0}, kThumbnailMaxDevicePixelRatio);
 }
 
-QPixmap scaledThumbnailPixmap(const QPixmap& pixmap) {
+QPixmap scaledThumbnailPixmap(const QPixmap& pixmap, const QScreen* targetScreen) {
     if (pixmap.isNull())
         return {};
 
@@ -91,7 +93,7 @@ QPixmap scaledThumbnailPixmap(const QPixmap& pixmap) {
         targetLogicalSize = targetLogicalSize.scaled(kThumbnailMaxWidth, kThumbnailMaxHeight, Qt::KeepAspectRatio);
     targetLogicalSize = targetLogicalSize.expandedTo(QSize(1, 1));
 
-    qreal dpr = thumbnailTargetDevicePixelRatio(pixmap);
+    qreal dpr = thumbnailTargetDevicePixelRatio(pixmap, targetScreen);
     dpr = std::min(dpr, static_cast<qreal>(pixmap.width()) / targetLogicalSize.width());
     dpr = std::min(dpr, static_cast<qreal>(pixmap.height()) / targetLogicalSize.height());
     dpr = std::clamp(dpr, qreal{1.0}, kThumbnailMaxDevicePixelRatio);
@@ -339,7 +341,12 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
                                  bool copyFile,
                                  QScreen* targetScreen,
                                  QWidget* parent)
-    : QWidget(parent), m_path(std::move(path)), m_restoreClipboardPath(std::move(restoreClipboardPath)), m_deleteRoot(std::move(deleteRoot)), m_copyFile(copyFile) {
+    : QWidget(parent),
+      m_path(std::move(path)),
+      m_restoreClipboardPath(std::move(restoreClipboardPath)),
+      m_deleteRoot(std::move(deleteRoot)),
+      m_copyFile(copyFile),
+      m_targetScreen(targetScreen) {
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
     setFocusPolicy(Qt::NoFocus);
     setObjectName("thumbnail");
@@ -445,7 +452,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     m_menuShell->hide();
     layout->addWidget(m_menuShell, 0, Qt::AlignRight);
 
-    QPixmap scaledPixmap = scaledThumbnailPixmap(pixmap);
+    QPixmap scaledPixmap = scaledThumbnailPixmap(pixmap, targetScreen);
     const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize();
     m_card = new QWidget(this);
     m_card->setObjectName("thumbnailImageCard");
@@ -490,7 +497,10 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     startCloseTimer(timeoutMs);
 
     m_swipeResetTimer.setSingleShot(true);
-    connect(&m_swipeResetTimer, &QTimer::timeout, this, &ResultThumbnail::resetSwipe);
+    connect(&m_swipeResetTimer, &QTimer::timeout, this, [this] {
+        resetSwipe();
+        emit swipeResetStarted();
+    });
 }
 
 void ResultThumbnail::closeEvent(QCloseEvent* event) {
@@ -564,14 +574,18 @@ void ResultThumbnail::wheelEvent(QWheelEvent* event) {
         m_swipeOffset.setY(std::clamp(m_swipeOffset.y(), 0.0, static_cast<double>(m_card->height() + 80)));
     }
     updateSwipeVisual();
+    emit swipeOffsetChanged(m_swipeOffset);
     event->accept();
 
-    if (m_swipeOffset.x() >= std::min(kSwipeCloseThreshold, imageWidth * 0.55))
-        animateSwipeOut(SwipeAction::Close);
-    else if (canDeleteThumbnailPath(m_path, m_deleteRoot) && m_swipeOffset.y() >= std::min(kSwipeDeleteThreshold, imageHeight * 0.55))
-        animateSwipeOut(SwipeAction::Delete);
-    else
+    if (m_swipeOffset.x() >= std::min(kSwipeCloseThreshold, imageWidth * 0.55)) {
+        emit swipeActionStarted(false);
+        animateSwipeOut(SwipeAction::Close, true);
+    } else if (canDeleteThumbnailPath(m_path, m_deleteRoot) && m_swipeOffset.y() >= std::min(kSwipeDeleteThreshold, imageHeight * 0.55)) {
+        emit swipeActionStarted(true);
+        animateSwipeOut(SwipeAction::Delete, true);
+    } else {
         m_swipeResetTimer.start(180);
+    }
 }
 
 bool ResultThumbnail::openPath(const QString& path) {
@@ -686,7 +700,7 @@ void ResultThumbnail::resetSwipe() {
     animation->start(QAbstractAnimation::DeleteWhenStopped);
 }
 
-void ResultThumbnail::animateSwipeOut(SwipeAction action) {
+void ResultThumbnail::animateSwipeOut(SwipeAction action, bool finalizeAction) {
     if (m_swipeCompleting || !m_imageLabel || !m_card)
         return;
 
@@ -700,13 +714,32 @@ void ResultThumbnail::animateSwipeOut(SwipeAction action) {
     animation->setStartValue(m_imageLabel->pos());
     animation->setEndValue(target);
     animation->setEasingCurve(QEasingCurve::InCubic);
-    connect(animation, &QPropertyAnimation::finished, this, [this, action] {
+    connect(animation, &QPropertyAnimation::finished, this, [this, action, finalizeAction] {
+        if (!finalizeAction)
+            return;
         if (action == SwipeAction::Delete)
             deleteAndClose();
         else
             close();
     });
     animation->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void ResultThumbnail::applySynchronizedSwipeOffset(const QPointF& offset) {
+    if (m_swipeCompleting)
+        return;
+    m_closeTimer.stop();
+    m_swipeResetTimer.stop();
+    m_swipeOffset = offset;
+    updateSwipeVisual();
+}
+
+void ResultThumbnail::resetSynchronizedSwipe() {
+    resetSwipe();
+}
+
+void ResultThumbnail::animateSynchronizedSwipeOut(bool deleteRequested) {
+    animateSwipeOut(deleteRequested ? SwipeAction::Delete : SwipeAction::Close, false);
 }
 
 void ResultThumbnail::deleteAndClose() {
@@ -762,7 +795,7 @@ void ResultThumbnail::leaveEvent(QEvent*) {
 void ResultThumbnail::setImagePixmap(const QPixmap& pixmap) {
     if (!m_imageLabel || pixmap.isNull())
         return;
-    m_imageLabel->setPixmap(pixmap);
+    m_imageLabel->setPixmap(scaledThumbnailPixmap(pixmap, m_targetScreen));
 }
 
 void ResultThumbnail::setTranscodeProgress(double progress) {

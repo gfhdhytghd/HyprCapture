@@ -3,9 +3,14 @@
 #include "plugin/artifact_capture.hpp"
 #include "shared/protocol.hpp"
 
+#include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/state/MonitorState.hpp>
+
 #include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
@@ -30,6 +35,39 @@ constexpr int EXEC_FAILURE_PIPE_TIMEOUT_MS = 2000;
 
 std::string boolArg(bool value) {
     return value ? "1" : "0";
+}
+
+std::string trimLower(std::string value) {
+    const auto notSpace = [](unsigned char character) {
+        return !std::isspace(character);
+    };
+    value.erase(value.begin(), std::find_if(value.begin(), value.end(), notSpace));
+    value.erase(std::find_if(value.rbegin(), value.rend(), notSpace).base(), value.end());
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char character) {
+        return static_cast<char>(std::tolower(character));
+    });
+    return value;
+}
+
+std::string resolvedThumbnailMonitor(const std::string& selector) {
+    const std::string normalized = trimLower(selector);
+    if (normalized == "primary" || normalized == "all")
+        return selector;
+
+    if (normalized != "active" && !normalized.empty()) {
+        for (const auto& monitor : State::monitorState()->monitors()) {
+            if (monitor && trimLower(monitor->m_name) == normalized)
+                return monitor->m_name;
+        }
+    }
+
+    if (!g_pInputManager)
+        return selector;
+    const auto cursor = g_pInputManager->getMouseCoordsInternal();
+    if (!std::isfinite(cursor.x) || !std::isfinite(cursor.y))
+        return selector;
+    const auto monitor = State::monitorState()->query().vec(cursor).run();
+    return monitor && !monitor->m_name.empty() ? monitor->m_name : selector;
 }
 
 std::string defaultInstalledHelperPath() {
@@ -291,6 +329,7 @@ LaunchResult launchHelper(const LaunchRequest& request) {
 
     CaptureDefaults captureDefaults = request.defaults;
     captureDefaults.mode = request.requestedMode;
+    captureDefaults.thumbnailMonitor = resolvedThumbnailMonitor(captureDefaults.thumbnailMonitor);
     CaptureSession session = captureCompositorArtifacts(captureDefaults, request.quick || request.record || request.recordActive);
     session.defaults.mode = request.requestedMode;
 
@@ -368,7 +407,7 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back("--thumbnail-timeout-ms");
     args.push_back(std::to_string(request.defaults.thumbnailTimeoutMs));
     args.push_back("--thumbnail-monitor");
-    args.push_back(request.defaults.thumbnailMonitor);
+    args.push_back(captureDefaults.thumbnailMonitor);
     args.push_back("--watermark");
     args.push_back(request.defaults.watermark);
     args.push_back("--watermark-position");
@@ -473,7 +512,7 @@ LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const 
     args.push_back("--thumbnail-timeout-ms");
     args.push_back(std::to_string(defaults.thumbnailTimeoutMs));
     args.push_back("--thumbnail-monitor");
-    args.push_back(defaults.thumbnailMonitor);
+    args.push_back(resolvedThumbnailMonitor(defaults.thumbnailMonitor));
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
@@ -559,7 +598,7 @@ LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
     args.push_back("--thumbnail-timeout-ms");
     args.push_back(std::to_string(defaults.thumbnailTimeoutMs));
     args.push_back("--thumbnail-monitor");
-    args.push_back(defaults.thumbnailMonitor);
+    args.push_back(resolvedThumbnailMonitor(defaults.thumbnailMonitor));
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);

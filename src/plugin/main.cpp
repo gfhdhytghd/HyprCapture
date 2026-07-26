@@ -161,7 +161,7 @@ void registerConfigValues() {
     addIntConfig("record_max_seconds", "Optional automatic recording stop in seconds", 0);
     addIntConfig("record_countdown_seconds", "Recording start countdown in seconds", 0);
     addIntConfig("thumbnail_timeout_ms", "Thumbnail auto-close timeout in milliseconds", 5000);
-    addStringConfig("thumbnail_monitor", "Thumbnail target monitor: active, primary, or an output name", "active");
+    addStringConfig("thumbnail_monitor", "Thumbnail target monitor: active, primary, all, or an output name", "active");
     addStringConfig("helper", "Optional helper executable override", "");
     addStringConfig("watermark", "Watermark path or built-in name", "");
     addStringConfig("watermark_position", "Watermark position", "central");

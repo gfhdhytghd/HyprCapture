@@ -430,7 +430,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `record_max_seconds` | int | `0` | Optional automatic stop in seconds. `0` means no duration limit for normal video formats. GIF, APNG, and WebP require one of `3`, `5`, `10`, `15`, or `30` seconds in the overlay and fall back to `5` when configured otherwise. |
 | `record_countdown_seconds` | int | `0` | Optional countdown before recording starts. `0` disables it; values are clamped to 60 seconds. When enabled, HyprCapture closes the capture overlay, shows an input-transparent countdown window centered on the active screen, then starts recording. |
 | `thumbnail_timeout_ms` | int | `5000` | Thumbnail auto-close timeout in milliseconds. Use `0` to keep it open until user action. |
-| `thumbnail_monitor` | string | `active` | Monitor used for result thumbnails. Supports `active`, `primary`, or a case-insensitive output name such as `DP-2`. Unknown names fall back to the active monitor. |
+| `thumbnail_monitor` | string | `active` | Monitor used for result thumbnails. Supports `active`, `primary`, `all`, or a case-insensitive output name such as `DP-2`. `active` is resolved from Hyprland's pointer position before the helper starts. `all` shows one synchronized thumbnail per monitor; swipe progress and swipe-to-close/delete animations are shared, while right-click menus remain independent. Unknown names fall back to the active monitor. |
 | `helper` | string | empty | Optional absolute helper override. By default the plugin tries `HYPRCAPTURE_HELPER`, then `$HOME/.local/bin/hyprcapture-ui`, then trusted system install paths. |
 
 For 60 fps, prefer hardware encoding:
