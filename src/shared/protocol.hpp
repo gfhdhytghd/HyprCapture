@@ -31,6 +31,10 @@ struct MonitorInfo {
     int         artifactWidth = 0;
     int         artifactHeight = 0;
     bool        artifactTopDown = true;
+    std::string cursorArtifactPath;
+    int         cursorArtifactWidth = 0;
+    int         cursorArtifactHeight = 0;
+    bool        cursorArtifactTopDown = true;
 };
 
 struct WindowInfo {

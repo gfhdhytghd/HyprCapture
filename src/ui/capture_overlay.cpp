@@ -1676,9 +1676,18 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.transform = info.transform;
         artifact.focused = info.focused;
         const QString artifactPath = qString(info.artifactPath);
+        const QString cursorArtifactPath = qString(info.cursorArtifactPath);
         artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes);
         artifact.image = normalizeMonitorArtifactImage(artifact.image, artifact.transform, artifact.logicalGeometry);
+        artifact.cursorImage =
+            loadRawRgba(cursorArtifactPath,
+                        info.cursorArtifactWidth,
+                        info.cursorArtifactHeight,
+                        info.cursorArtifactTopDown,
+                        remainingArtifactBytes);
+        artifact.cursorImage = normalizeMonitorArtifactImage(artifact.cursorImage, artifact.transform, artifact.logicalGeometry);
         artifactFiles.push_back(artifactPath);
+        artifactFiles.push_back(cursorArtifactPath);
         if (!artifact.logicalGeometry.isValid())
             continue;
         m_desktopGeometry = m_desktopGeometry.united(artifact.logicalGeometry);
@@ -2613,6 +2622,24 @@ void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const 
         painter.fillRect(target, QColor(30, 34, 38));
 }
 
+void CaptureOverlay::paintCursorLayers(QPainter& painter, const QRect& outputRect, const QRect& globalRect) const {
+    if (!m_defaults.includeCursor || !outputRect.isValid() || !globalRect.isValid())
+        return;
+
+    for (const auto& artifact : m_monitorArtifacts) {
+        if (artifact.cursorImage.isNull() || !artifact.logicalGeometry.isValid())
+            continue;
+
+        const QRect logicalPart = globalRect.intersected(artifact.logicalGeometry);
+        const QRect source =
+            hyprcapture::ui::mapLogicalRectToPixels(logicalPart, artifact.logicalGeometry, artifact.cursorImage.rect());
+        const QRect target = hyprcapture::ui::mapLogicalRectToPixels(logicalPart, globalRect, outputRect);
+        if (!source.isValid() || !target.isValid())
+            continue;
+        hyprcapture::ui::paintImageLayer(painter, target, artifact.cursorImage, source);
+    }
+}
+
 void CaptureOverlay::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -3387,6 +3414,7 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
 
     struct DrawPart {
         const MonitorArtifact* artifact = nullptr;
+        QRect                  logical;
         QRect                  source;
         QRect                  target;
     };
@@ -3464,7 +3492,7 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
                                    nativeAxisOffsetForLogicalPosition(globalRect.top(), logicalPart.top(), false));
         const QRect target(targetTopLeft, source.size());
         outputBounds = outputBounds.isValid() ? outputBounds.united(target) : target;
-        drawParts.push_back({.artifact = &artifact, .source = source, .target = target});
+        drawParts.push_back({.artifact = &artifact, .logical = logicalPart, .source = source, .target = target});
     }
     if (!outputBounds.isValid() || drawParts.empty())
         return {};
@@ -3480,6 +3508,15 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
         const QRect target = part.target.translated(-outputBounds.topLeft()).intersected(image.rect());
         if (target.isValid())
             painter.drawImage(target, part.artifact->image, part.source);
+    }
+    if (m_defaults.includeCursor) {
+        for (const auto& part : drawParts) {
+            if (part.artifact->cursorImage.isNull())
+                continue;
+            const QRect source = logicalRectToImageRect(part.logical, part.artifact->logicalGeometry, part.artifact->cursorImage.size());
+            const QRect target = part.target.translated(-outputBounds.topLeft()).intersected(image.rect());
+            hyprcapture::ui::paintImageLayer(painter, target, part.artifact->cursorImage, source);
+        }
     }
 
     return image;
@@ -3545,6 +3582,7 @@ QImage CaptureOverlay::renderResultImage() {
         }
 
         painter.drawImage(image.rect(), repairedArtifact, artifactSource);
+        paintCursorLayers(painter, image.rect(), logicalSource);
         return image;
     }
 

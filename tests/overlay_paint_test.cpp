@@ -38,6 +38,18 @@ int main(int argc, char** argv) {
     require(hyprcapture::ui::clippedSelectionGeometry(QRect(900, 100, 300, 500), QRect{}) == QRect(900, 100, 300, 500),
             "ordinary cross-output selection remains unchanged");
 
+    require(hyprcapture::ui::mapLogicalRectToPixels(QRect(110, 55, 20, 10), QRect(100, 50, 200, 100), QRect(0, 0, 400, 200)) ==
+                QRect(20, 10, 40, 20),
+            "HiDPI cursor layer mapping");
+    require(hyprcapture::ui::mapLogicalRectToPixels(QRect(90, 40, 30, 30), QRect(100, 50, 50, 40), QRect(5, 7, 100, 80)) ==
+                QRect(5, 7, 40, 40),
+            "window cursor layer is clipped and mapped into the output");
+    require(hyprcapture::ui::mapLogicalRectToPixels(QRect(10, 20, 20, 40), QRect(0, 0, 100, 200), QRect(0, 0, 200, 400)) ==
+                QRect(20, 40, 40, 80),
+            "normalized portrait cursor layer mapping");
+    require(!hyprcapture::ui::mapLogicalRectToPixels(QRect(500, 500, 10, 10), QRect(0, 0, 100, 100), QRect(0, 0, 200, 200)).isValid(),
+            "cursor outside the capture is omitted");
+
     const QImage source = testPattern();
     const QRect  destination(3, 2, 20, 11);
 
@@ -71,6 +83,30 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    QImage cursorLayer(QSize(6, 4), QImage::Format_RGBA8888);
+    cursorLayer.fill(Qt::transparent);
+    cursorLayer.setPixelColor(2, 1, QColor(255, 40, 20, 255));
+    cursorLayer.setPixelColor(3, 1, QColor(255, 40, 20, 128));
+
+    QImage cursorComposite(QSize(5, 3), QImage::Format_RGBA8888);
+    cursorComposite.fill(QColor(10, 20, 30, 255));
+    {
+        QPainter painter(&cursorComposite);
+        hyprcapture::ui::paintImageLayer(painter, QRect(1, 0, 3, 2), cursorLayer, QRect(1, 1, 3, 2));
+    }
+    require(cursorComposite.pixelColor(0, 0) == QColor(10, 20, 30, 255), "cursor layer escaped its target");
+    require(cursorComposite.pixelColor(2, 0) == QColor(255, 40, 20, 255), "opaque cursor pixel was not composited");
+    require(cursorComposite.pixelColor(1, 1) == QColor(10, 20, 30, 255), "transparent cursor pixel replaced the capture");
+    require(cursorComposite.pixelColor(3, 0).red() > 10 && cursorComposite.pixelColor(3, 0).red() < 255,
+            "partial-alpha cursor pixel was not blended");
+
+    const QImage unchanged = cursorComposite;
+    {
+        QPainter painter(&cursorComposite);
+        hyprcapture::ui::paintImageLayer(painter, QRect{}, cursorLayer, cursorLayer.rect());
+    }
+    require(cursorComposite == unchanged, "invalid cursor target changed the capture");
 
     std::cout << "hyprcapture overlay paint tests passed\n";
     return 0;

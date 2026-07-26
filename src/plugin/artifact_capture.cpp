@@ -21,6 +21,7 @@
 #include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
+#include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/notification/NotificationOverlay.hpp>
 #include <hyprland/src/render/gl/GLFramebuffer.hpp>
@@ -252,6 +253,10 @@ Rect monitorRect(const PHLMONITOR& monitor) {
 
 bool intersects(const Rect& a, const Rect& b) {
     return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
+bool contains(const Rect& rect, const Point& point) {
+    return point.x >= rect.x && point.x < rect.x + rect.width && point.y >= rect.y && point.y < rect.y + rect.height;
 }
 
 Rect intersection(const Rect& a, const Rect& b) {
@@ -1724,6 +1729,62 @@ bool renderMonitorArtifact(const PHLMONITOR& monitor, const Time::steady_tp& fro
     return !readback.pixels.empty() && writeRgbaFile(path, readback.pixels);
 }
 
+bool renderCursorArtifact(const PHLMONITOR& monitor,
+                          const Time::steady_tp& frozenTime,
+                          const Point& capturedCursorPosition,
+                          const std::filesystem::path& path,
+                          int& width,
+                          int& height,
+                          ArtifactBudget& budget) {
+    if (!monitor || !g_pHyprRenderer || !g_pHyprOpenGL || !Pointer::mgr())
+        return false;
+
+    width = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
+    height = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+    std::size_t framebufferBytes = 0;
+    if (!checkedRgbaByteSize(width, height, framebufferBytes) || !budget.canFit(framebufferBytes))
+        return false;
+
+    auto framebuffer = createFramebuffer("hyprcapture-cursor", width, height, monitor->m_output->state->state().drmFormat);
+    if (!framebuffer)
+        return false;
+
+    const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
+    const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
+    const bool previousTransformDamage = g_pHyprRenderer->m_renderData.transformDamage;
+    const auto restoreRendererState = [&]() {
+        g_pHyprRenderer->m_renderData.transformDamage = previousTransformDamage;
+        g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
+        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+    };
+
+    const int transformedWidth = positiveRoundedIntFromDouble(monitor->m_transformedSize.x);
+    const int transformedHeight = positiveRoundedIntFromDouble(monitor->m_transformedSize.y);
+    CRegion fakeDamage{0, 0, transformedWidth, transformedHeight};
+
+    g_pHyprOpenGL->makeEGLCurrent();
+    g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+        restoreRendererState();
+        return false;
+    }
+
+    g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
+    const Vector2D cursorPosition =
+        Vector2D{capturedCursorPosition.x, capturedCursorPosition.y} - monitor->m_position;
+    const bool forceSoftwareRender = Pointer::mgr()->hasVisibleHWCursor(monitor);
+    Pointer::mgr()->renderSoftwareCursorsFor(monitor, frozenTime, fakeDamage, cursorPosition, forceSoftwareRender);
+    g_pHyprRenderer->m_renderData.blockScreenShader = true;
+    g_pHyprRenderer->endRender();
+    restoreRendererState();
+
+    auto readback = readRgbaFramebufferRegion(*framebuffer, 0, 0, width, height);
+    PixelBounds alphaBounds;
+    if (readback.pixels.empty() || !findAlphaBounds(readback, alphaBounds) || !budget.consume(readback.pixels.size()))
+        return false;
+    return writeRgbaFile(path, readback.pixels);
+}
+
 RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
                                           const PHLMONITOR& monitor,
                                           const Time::steady_tp& frozenTime,
@@ -3052,9 +3113,21 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.scale = monitor->m_scale;
         info.transform = static_cast<int>(monitor->m_transform);
         info.focused = monitor == Desktop::focusState()->monitor();
-        const auto path = root / ("monitor-" + std::to_string(monitorIndex++) + ".rgba");
+        const int artifactIndex = monitorIndex++;
+        const auto path = root / ("monitor-" + std::to_string(artifactIndex) + ".rgba");
         if (captureMonitorArtifacts && renderMonitorArtifact(monitor, frozenTime, path, info.artifactWidth, info.artifactHeight, artifactBudget))
             info.artifactPath = path.string();
+        if (defaults.includeCursor && session.cursorPosition && contains(info.logicalGeometry, *session.cursorPosition)) {
+            const auto cursorPath = root / ("cursor-" + std::to_string(artifactIndex) + ".rgba");
+            if (renderCursorArtifact(monitor,
+                                     frozenTime,
+                                     *session.cursorPosition,
+                                     cursorPath,
+                                     info.cursorArtifactWidth,
+                                     info.cursorArtifactHeight,
+                                     artifactBudget))
+                info.cursorArtifactPath = cursorPath.string();
+        }
         session.monitors.push_back(std::move(info));
     }
 
@@ -3263,8 +3336,10 @@ void cleanupCompositorArtifacts(const CaptureSession& session) {
         rememberParent(parents, path);
     };
 
-    for (const auto& monitor : session.monitors)
+    for (const auto& monitor : session.monitors) {
         removeArtifact(monitor.artifactPath);
+        removeArtifact(monitor.cursorArtifactPath);
+    }
 
     for (const auto& window : session.windows) {
         removeArtifact(window.artifactPath);

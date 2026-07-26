@@ -268,10 +268,16 @@ bool monitorValue(const Json& obj, MonitorInfo& out) {
         !stringValue(obj, "artifactPath", monitor.artifactPath, MAX_PATH_BYTES, false) ||
         !intValue(obj, "artifactWidth", monitor.artifactWidth, 0, MAX_ARTIFACT_DIMENSION, false) ||
         !intValue(obj, "artifactHeight", monitor.artifactHeight, 0, MAX_ARTIFACT_DIMENSION, false) ||
-        !boolValue(obj, "artifactTopDown", monitor.artifactTopDown, false))
+        !boolValue(obj, "artifactTopDown", monitor.artifactTopDown, false) ||
+        !stringValue(obj, "cursorArtifactPath", monitor.cursorArtifactPath, MAX_PATH_BYTES, false) ||
+        !intValue(obj, "cursorArtifactWidth", monitor.cursorArtifactWidth, 0, MAX_ARTIFACT_DIMENSION, false) ||
+        !intValue(obj, "cursorArtifactHeight", monitor.cursorArtifactHeight, 0, MAX_ARTIFACT_DIMENSION, false) ||
+        !boolValue(obj, "cursorArtifactTopDown", monitor.cursorArtifactTopDown, false))
         return false;
 
     if (!monitor.artifactPath.empty() && (monitor.artifactWidth <= 0 || monitor.artifactHeight <= 0))
+        return false;
+    if (!monitor.cursorArtifactPath.empty() && (monitor.cursorArtifactWidth <= 0 || monitor.cursorArtifactHeight <= 0))
         return false;
     out = std::move(monitor);
     return true;
@@ -352,6 +358,10 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"artifactWidth", boundedDimension(mon.artifactWidth)},
             {"artifactHeight", boundedDimension(mon.artifactHeight)},
             {"artifactTopDown", mon.artifactTopDown},
+            {"cursorArtifactPath", boundedString(mon.cursorArtifactPath, MAX_PATH_BYTES)},
+            {"cursorArtifactWidth", boundedDimension(mon.cursorArtifactWidth)},
+            {"cursorArtifactHeight", boundedDimension(mon.cursorArtifactHeight)},
+            {"cursorArtifactTopDown", mon.cursorArtifactTopDown},
         });
     }
 

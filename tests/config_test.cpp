@@ -16,6 +16,20 @@ void require(bool condition, const char* message) {
     std::exit(1);
 }
 
+void eraseJsonField(std::string& json, const std::string& key) {
+    const std::string needle = "\"" + key + "\":";
+    auto begin = json.find(needle);
+    require(begin != std::string::npos, "legacy json field exists");
+    auto end = json.find(',', begin);
+    const auto objectEnd = json.find('}', begin);
+    if (end != std::string::npos && end < objectEnd) {
+        json.erase(begin, end - begin + 1);
+        return;
+    }
+    require(begin > 0 && json[begin - 1] == ',', "legacy final field has separator");
+    json.erase(begin - 1, objectEnd - begin + 1);
+}
+
 } // namespace
 
 int main() {
@@ -101,6 +115,9 @@ int main() {
     session.monitors.back().artifactPath = "/tmp/monitor.rgba";
     session.monitors.back().artifactWidth = 3840;
     session.monitors.back().artifactHeight = 2160;
+    session.monitors.back().cursorArtifactPath = "/tmp/cursor.rgba";
+    session.monitors.back().cursorArtifactWidth = 3840;
+    session.monitors.back().cursorArtifactHeight = 2160;
     session.windows.push_back({.address = "0x1",
                                .title = "Title",
                                .appClass = "Class",
@@ -149,6 +166,8 @@ int main() {
     require(json.find("\"artifactPath\":\"/tmp/window.rgba\"") != std::string::npos, "artifact path json");
     require(json.find("\"focused\":true") != std::string::npos, "focused monitor json");
     require(json.find("\"artifactTopDown\":true") != std::string::npos, "artifact orientation json");
+    require(json.find("\"cursorArtifactPath\":\"/tmp/cursor.rgba\"") != std::string::npos, "cursor artifact path json");
+    require(json.find("\"cursorArtifactWidth\":3840") != std::string::npos, "cursor artifact width json");
     require(json.find("\"realBackgroundPath\":\"/tmp/window-real.rgba\"") != std::string::npos, "real background path json");
     require(json.find("\"realBackgroundWidth\":200") != std::string::npos, "real background width json");
     require(json.find("Title\\u0001") != std::string::npos, "control byte json escaping");
@@ -169,6 +188,9 @@ int main() {
     require(decoded->cursorPosition.has_value() && decoded->cursorPosition->x == 120 && decoded->cursorPosition->y == 240, "decoded cursor position");
     require(decoded->monitors.size() == 1 && decoded->windows.size() == 1, "decoded object counts");
     require(decoded->monitors.front().focused, "decoded focused monitor");
+    require(decoded->monitors.front().cursorArtifactPath == "/tmp/cursor.rgba", "decoded cursor artifact path");
+    require(decoded->monitors.front().cursorArtifactWidth == 3840 && decoded->monitors.front().cursorArtifactHeight == 2160,
+            "decoded cursor artifact dimensions");
     require(decoded->windows.front().artifactPath == "/tmp/window.rgba", "decoded artifact path");
     require(decoded->windows.front().selectionGeometry.has_value(), "decoded selection geometry exists");
     require(decoded->windows.front().selectionClipGeometry.has_value(), "decoded selection clip geometry exists");
@@ -184,6 +206,19 @@ int main() {
     const auto legacyOverlayDecoded = decodeSessionJson(legacyOverlayJson);
     require(legacyOverlayDecoded.has_value(), "session without overlay scope decodes");
     require(legacyOverlayDecoded->defaults.overlayScope == OverlayScope::Fix, "missing overlay scope keeps fixed default");
+
+    auto legacyCursorJson = json;
+    eraseJsonField(legacyCursorJson, "cursorArtifactPath");
+    eraseJsonField(legacyCursorJson, "cursorArtifactWidth");
+    eraseJsonField(legacyCursorJson, "cursorArtifactHeight");
+    eraseJsonField(legacyCursorJson, "cursorArtifactTopDown");
+    const auto legacyCursorDecoded = decodeSessionJson(legacyCursorJson);
+    require(legacyCursorDecoded.has_value(), "session without cursor artifact fields decodes");
+    require(legacyCursorDecoded->monitors.front().cursorArtifactPath.empty(), "missing cursor artifact stays empty");
+
+    CaptureSession invalidCursorSession = session;
+    invalidCursorSession.monitors.front().cursorArtifactWidth = 0;
+    require(!decodeSessionJson(encodeSessionJson(invalidCursorSession)).has_value(), "cursor artifact path requires valid dimensions");
 
     CaptureSession legacySession = session;
     legacySession.windows.front().selectionGeometry.reset();

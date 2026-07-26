@@ -62,6 +62,7 @@ class CaptureOverlay final : public QMainWindow {
     struct MonitorArtifact {
         QRect   logicalGeometry;
         QImage  image;
+        QImage  cursorImage;
         QString name;
         int     transform = 0;
         bool    focused = false;
@@ -121,6 +122,7 @@ class CaptureOverlay final : public QMainWindow {
     QImage renderResultImage();
     QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect) const;
     void paintDesktop(QPainter& painter, const QRect& target) const;
+    void paintCursorLayers(QPainter& painter, const QRect& outputRect, const QRect& globalRect) const;
     QRect normalizedSelection() const;
     QRect captureRectForMode() const;
     QRect fullscreenCaptureRect() const;
