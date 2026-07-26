@@ -1,6 +1,7 @@
 #pragma once
 
 #include "shared/config.hpp"
+#include "ui/overlay_paint.hpp"
 
 #include <QImage>
 #include <QMainWindow>
@@ -66,6 +67,7 @@ class CaptureOverlay final : public QMainWindow {
         QString name;
         int     transform = 0;
         bool    focused = false;
+        hyprcapture::ui::ScreenCornerRadii previewCornerRadii;
     };
 
     struct WindowArtifact {
@@ -126,6 +128,7 @@ class CaptureOverlay final : public QMainWindow {
     QRect normalizedSelection() const;
     QRect captureRectForMode() const;
     QRect fullscreenCaptureRect() const;
+    hyprcapture::ui::ScreenCornerRadii fullscreenPreviewCornerRadii(const QRect& localRect) const;
     QRect regionCaptureBounds() const;
     QRect localScreenRectAt(const QPoint& localPos) const;
     QPoint clampedToRect(const QPoint& point, const QRect& bounds) const;

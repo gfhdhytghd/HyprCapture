@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QPainter>
 
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -23,6 +24,17 @@ QImage testPattern() {
         for (int x = 0; x < image.width(); ++x)
             image.setPixelColor(x, y, QColor((x * 37 + y * 11) % 256, (x * 13 + y * 43) % 256, (x * 71 + y * 5) % 256));
     }
+    return image;
+}
+
+QImage roundedDesktop(const QSize& size, int radius) {
+    QImage image(size, QImage::Format_RGBA8888);
+    image.fill(Qt::black);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, false);
+    QPainterPath path;
+    path.addRoundedRect(QRectF(image.rect()), radius, radius, Qt::AbsoluteSize);
+    painter.fillPath(path, QColor(45, 110, 190));
     return image;
 }
 
@@ -49,6 +61,18 @@ int main(int argc, char** argv) {
             "normalized portrait cursor layer mapping");
     require(!hyprcapture::ui::mapLogicalRectToPixels(QRect(500, 500, 10, 10), QRect(0, 0, 100, 100), QRect(0, 0, 200, 200)).isValid(),
             "cursor outside the capture is omitted");
+
+    const auto roundedCorners = hyprcapture::ui::detectScreenCornerRadii(roundedDesktop(QSize(240, 160), 28), QSize(240, 160));
+    require(std::abs(roundedCorners.topLeft - 28.0) <= 2.0 && std::abs(roundedCorners.topRight - 28.0) <= 2.0 &&
+                std::abs(roundedCorners.bottomRight - 28.0) <= 2.0 && std::abs(roundedCorners.bottomLeft - 28.0) <= 2.0,
+            "rounded desktop corners are detected");
+    const auto hidpiCorners = hyprcapture::ui::detectScreenCornerRadii(roundedDesktop(QSize(480, 320), 56), QSize(240, 160));
+    require(std::abs(hidpiCorners.topLeft - 28.0) <= 2.0, "HiDPI desktop corner radius is converted to logical pixels");
+    QImage squareDesktop(QSize(240, 160), QImage::Format_RGBA8888);
+    squareDesktop.fill(QColor(45, 110, 190));
+    const auto squareCorners = hyprcapture::ui::detectScreenCornerRadii(squareDesktop, squareDesktop.size());
+    require(squareCorners.topLeft == 0.0 && squareCorners.topRight == 0.0 && squareCorners.bottomRight == 0.0 && squareCorners.bottomLeft == 0.0,
+            "uniform square desktop does not produce a false rounded corner");
 
     const QImage source = testPattern();
     const QRect  destination(3, 2, 20, 11);

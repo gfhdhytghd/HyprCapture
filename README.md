@@ -313,6 +313,7 @@ plugin {
         confirm_before_capture = 0
         fusion_mode = 0
         capture_fullscreen_clients_as_monitor = 0
+        fullscreen_preview_rounding = auto
         save_dir = $XDG_PICTURES_DIR/Screenshots
         filename_template = Screenshot-%Y-%m-%d-%H%M%S.png
         record_save_dir = $XDG_VIDEOS_DIR/Screenrecords
@@ -362,6 +363,7 @@ hl.config({
             confirm_before_capture = false,
             fusion_mode = false,
             capture_fullscreen_clients_as_monitor = false,
+            fullscreen_preview_rounding = "auto",
             save_dir = "$XDG_PICTURES_DIR/Screenshots",
             filename_template = "Screenshot-%Y-%m-%d-%H%M%S.png",
             record_save_dir = "$XDG_VIDEOS_DIR/Screenrecords",
@@ -443,6 +445,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `fusion_mode` | bool | `0` | Fuse region and window interactions in one overlay: drag anywhere, including from the desktop background, to capture a region; single-click a window to capture that window; or single-click the background to capture the clicked monitor. The toolbar keeps the fullscreen action and configuration controls; fullscreen multi-monitor scope is shown only when multiple monitors are present. |
 | `fushion_mode` | bool | `0` | Legacy compatibility alias for `fusion_mode`. New configs should use `fusion_mode`. |
 | `capture_fullscreen_clients_as_monitor` | bool | `0` | In window and fusion modes, capture the fullscreen client's entire monitor instead of the isolated client. Disabled by default for compatibility. |
+| `fullscreen_preview_rounding` | string | `auto` | Fullscreen preview border rounding. `auto` detects opaque or near-uniform desktop corner masks from each frozen monitor image, a non-negative number forces that logical-pixel radius, and `0` keeps square corners. Low-confidence auto detection falls back to square corners and never crops the captured image. |
 
 ### Output options
 

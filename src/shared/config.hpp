@@ -31,6 +31,7 @@ struct CaptureDefaults {
     bool             confirmBeforeCapture = false;
     bool             fushionMode = false;
     bool             captureFullscreenClientsAsMonitor = false;
+    std::string      fullscreenPreviewRounding = "auto";
     std::string      saveDir = "$XDG_PICTURES_DIR/Screenshots";
     std::string      filenameTemplate = "Screenshot-%Y-%m-%d-%H%M%S.png";
     std::string      helper;

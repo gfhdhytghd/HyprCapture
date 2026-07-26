@@ -40,6 +40,7 @@ int main() {
     require(parseCaptureMode("window") == CaptureMode::Window, "window mode parse");
     require(parseCaptureMode("bad", CaptureMode::Window) == CaptureMode::Window, "mode fallback");
     require(!CaptureDefaults{}.confirmBeforeCapture, "confirm before capture default");
+    require(CaptureDefaults{}.fullscreenPreviewRounding == "auto", "fullscreen preview rounding default");
 
     require(parseFullscreenScope("all-monitors") == FullscreenScope::All, "all monitor scope parse");
     require(parseFullscreenScope("current-monitor") == FullscreenScope::Current, "current monitor scope parse");
@@ -100,6 +101,7 @@ int main() {
     session.defaults.confirmBeforeCapture = true;
     session.defaults.fushionMode = true;
     session.defaults.captureFullscreenClientsAsMonitor = true;
+    session.defaults.fullscreenPreviewRounding = "27";
     session.defaults.thumbnailMonitor = "DP-2";
     session.defaults.windowBackground = WindowBackground::FollowSystem;
     session.defaults.recordTransparentFormat = "webm";
@@ -145,6 +147,7 @@ int main() {
     require(json.find("\"allowQuick\":true") != std::string::npos, "allow quick json");
     require(json.find("\"confirmBeforeCapture\":true") != std::string::npos, "confirm before capture json");
     require(json.find("\"captureFullscreenClientsAsMonitor\":true") != std::string::npos, "fullscreen client behavior json");
+    require(json.find("\"fullscreenPreviewRounding\":\"27\"") != std::string::npos, "fullscreen preview rounding json");
     require(json.find("\"thumbnailMonitor\":\"DP-2\"") != std::string::npos, "thumbnail monitor json");
     require(json.find("\"windowBackground\":\"follow-system\"") != std::string::npos, "window background json");
     require(json.find("\"recordTransparentFormat\":\"webm\"") != std::string::npos, "transparent record format json");
@@ -179,6 +182,7 @@ int main() {
     require(decoded->defaults.allowQuick, "decoded allow quick");
     require(decoded->defaults.confirmBeforeCapture, "decoded confirm before capture");
     require(decoded->defaults.captureFullscreenClientsAsMonitor, "decoded fullscreen client behavior");
+    require(decoded->defaults.fullscreenPreviewRounding == "27", "decoded fullscreen preview rounding");
     require(decoded->defaults.thumbnailMonitor == "DP-2", "decoded thumbnail monitor");
     require(decoded->defaults.fushionMode, "decoded fushion mode");
     require(decoded->defaults.recordTransparentFormat == "webm", "decoded transparent record format");
@@ -206,6 +210,13 @@ int main() {
     const auto legacyOverlayDecoded = decodeSessionJson(legacyOverlayJson);
     require(legacyOverlayDecoded.has_value(), "session without overlay scope decodes");
     require(legacyOverlayDecoded->defaults.overlayScope == OverlayScope::Fix, "missing overlay scope keeps fixed default");
+
+    auto legacyPreviewRoundingJson = json;
+    eraseJsonField(legacyPreviewRoundingJson, "fullscreenPreviewRounding");
+    const auto legacyPreviewRoundingDecoded = decodeSessionJson(legacyPreviewRoundingJson);
+    require(legacyPreviewRoundingDecoded.has_value(), "session without fullscreen preview rounding decodes");
+    require(legacyPreviewRoundingDecoded->defaults.fullscreenPreviewRounding == "auto",
+            "missing fullscreen preview rounding keeps automatic detection");
 
     auto legacyCursorJson = json;
     eraseJsonField(legacyCursorJson, "cursorArtifactPath");

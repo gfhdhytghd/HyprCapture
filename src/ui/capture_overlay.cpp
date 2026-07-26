@@ -1679,6 +1679,8 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         const QString cursorArtifactPath = qString(info.cursorArtifactPath);
         artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes);
         artifact.image = normalizeMonitorArtifactImage(artifact.image, artifact.transform, artifact.logicalGeometry);
+        artifact.previewCornerRadii =
+            hyprcapture::ui::detectScreenCornerRadii(artifact.image, artifact.logicalGeometry.size());
         artifact.cursorImage =
             loadRawRgba(cursorArtifactPath,
                         info.cursorArtifactWidth,
@@ -2658,6 +2660,14 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     const QRect sel = normalizedSelection().intersected(regionCaptureBounds());
     const bool selectionLargeEnough = sel.width() > 4 && sel.height() > 4;
     const bool selectionVisible = selectionLargeEnough || (m_dragging && !fusionTargetPreview);
+    const auto drawFullscreenPreview = [this, &painter](const QRect& cap) {
+        if (!cap.isValid())
+            return;
+        painter.setPen(QPen(QColor(255, 255, 255, 230), 2));
+        painter.setBrush(Qt::NoBrush);
+        const QRectF frame = QRectF(cap.adjusted(0, 0, -1, -1));
+        painter.drawPath(hyprcapture::ui::screenPreviewPath(frame, fullscreenPreviewCornerRadii(cap)));
+    };
     if ((m_mode == hyprcapture::CaptureMode::Region || fusionGesture) && selectionVisible) {
         paintDesktop(painter, sel);
         painter.setPen(QPen(QColor(255, 255, 255, 230), 2));
@@ -2675,17 +2685,12 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
         const QRect cap = fullscreenCaptureRect();
         if (cap.isValid()) {
             paintDesktop(painter, cap);
-            painter.setPen(QPen(QColor(255, 255, 255, 230), 2));
-            painter.drawRect(cap.adjusted(0, 0, -1, -1));
+            drawFullscreenPreview(cap);
         }
     } else if (fusionTargetPreview && !hoveredWindow()) {
         const QPoint localCursor = globalToLocalRect(QRect(cursorLogicalPosition(), QSize(1, 1))).topLeft();
         const QRect  cap = localScreenRectAt(localCursor);
-        if (cap.isValid()) {
-            painter.setPen(QPen(QColor(255, 255, 255, 230), 2));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawRect(cap.adjusted(0, 0, -1, -1));
-        }
+        drawFullscreenPreview(cap);
     } else if (m_mode == hyprcapture::CaptureMode::Window || fusionGesture) {
         const auto* window = hoveredWindow();
         const auto* selected = selectedWindow();
@@ -3033,6 +3038,24 @@ QRect CaptureOverlay::fullscreenCaptureRect() const {
     if (m_desktopGeometry.isValid())
         return globalToLocalRect(m_desktopGeometry);
     return rect();
+}
+
+hyprcapture::ui::ScreenCornerRadii CaptureOverlay::fullscreenPreviewCornerRadii(const QRect& localRect) const {
+    const QString configured = QString::fromStdString(m_defaults.fullscreenPreviewRounding).trimmed();
+    if (configured.compare(QStringLiteral("auto"), Qt::CaseInsensitive) != 0) {
+        bool ok = false;
+        const double radius = configured.toDouble(&ok);
+        if (ok && std::isfinite(radius)) {
+            const double bounded = std::clamp(radius, 0.0, 512.0);
+            return {.topLeft = bounded, .topRight = bounded, .bottomRight = bounded, .bottomLeft = bounded};
+        }
+    }
+
+    const QRect globalRect = localToDesktopLogicalRect(localRect);
+    const auto artifact = std::ranges::find_if(m_monitorArtifacts, [&globalRect](const MonitorArtifact& candidate) {
+        return candidate.logicalGeometry == globalRect;
+    });
+    return artifact == m_monitorArtifacts.end() ? hyprcapture::ui::ScreenCornerRadii{} : artifact->previewCornerRadii;
 }
 
 QRect CaptureOverlay::regionCaptureBounds() const {

@@ -74,6 +74,7 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"confirmBeforeCapture", defaults.confirmBeforeCapture},
         {"fushionMode", defaults.fushionMode},
         {"captureFullscreenClientsAsMonitor", defaults.captureFullscreenClientsAsMonitor},
+        {"fullscreenPreviewRounding", boundedString(defaults.fullscreenPreviewRounding, MAX_METADATA_STRING_BYTES)},
         {"saveDir", boundedString(defaults.saveDir, MAX_PATH_BYTES)},
         {"filenameTemplate", boundedString(defaults.filenameTemplate, MAX_METADATA_STRING_BYTES)},
         {"recordSaveDir", boundedString(defaults.recordSaveDir, MAX_PATH_BYTES)},
@@ -230,6 +231,7 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         boolValue(obj, "allowQuick", defaults.allowQuick, false) && boolValue(obj, "confirmBeforeCapture", defaults.confirmBeforeCapture, false) &&
         boolValue(obj, "fushionMode", defaults.fushionMode, false) &&
         boolValue(obj, "captureFullscreenClientsAsMonitor", defaults.captureFullscreenClientsAsMonitor, false) &&
+        stringValue(obj, "fullscreenPreviewRounding", defaults.fullscreenPreviewRounding, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "saveDir", defaults.saveDir, MAX_PATH_BYTES, false) &&
         stringValue(obj, "filenameTemplate", defaults.filenameTemplate, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "recordSaveDir", defaults.recordSaveDir, MAX_PATH_BYTES, false) &&

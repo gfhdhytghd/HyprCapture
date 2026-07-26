@@ -143,6 +143,7 @@ void registerConfigValues() {
     addBoolConfig("fusion_mode", "Fuse region and window interactions in one overlay", false);
     addBoolConfig("fushion_mode", "Legacy alias for fusion_mode", false);
     addBoolConfig("capture_fullscreen_clients_as_monitor", "Capture a fullscreen client as its whole monitor in window and fusion modes", false);
+    addStringConfig("fullscreen_preview_rounding", "Fullscreen preview corner rounding: auto, 0, or logical pixels", "auto");
     addStringConfig("save_dir", "Capture output directory", "$XDG_PICTURES_DIR/Screenshots");
     addStringConfig("filename_template", "Screenshot filename strftime template with window metadata variables", "Screenshot-%Y-%m-%d-%H%M%S.png");
     addStringConfig("record_save_dir", "Recording output directory", "$XDG_VIDEOS_DIR/Screenrecords");
@@ -196,6 +197,7 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.fushionMode = configBool("fusion_mode", defaults.fushionMode) || configBool("fushion_mode", defaults.fushionMode);
     defaults.captureFullscreenClientsAsMonitor =
         configBool("capture_fullscreen_clients_as_monitor", defaults.captureFullscreenClientsAsMonitor);
+    defaults.fullscreenPreviewRounding = configString("fullscreen_preview_rounding", defaults.fullscreenPreviewRounding);
     defaults.saveDir = configString("save_dir", defaults.saveDir);
     defaults.filenameTemplate = configString("filename_template", defaults.filenameTemplate);
     defaults.helper = configString("helper", defaults.helper);

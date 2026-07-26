@@ -663,6 +663,7 @@ int main(int argc, char** argv) {
         {"confirm-before-capture", "Require explicit confirmation after target selection for normal open captures.", "0|1", "0"},
         {{"fushion-mode", "fusion-mode"}, "Enable fushion toolbar behavior.", "0|1", "0"},
         {"capture-fullscreen-clients-as-monitor", "Capture fullscreen clients as their monitor in window/fusion mode.", "0|1", "0"},
+        {"fullscreen-preview-rounding", "Fullscreen preview rounding: auto, 0, or logical pixels.", "rounding", "auto"},
         {"save-dir", "Save directory.", "path", "$XDG_PICTURES_DIR/Screenshots"},
         {"filename-template", "Filename strftime template with {window_class}/{window_title}.", "template", "Screenshot-%Y-%m-%d-%H%M%S.png"},
         {"record-save-dir", "Recording save directory.", "path", "$XDG_VIDEOS_DIR/Screenrecords"},
@@ -737,6 +738,7 @@ int main(int argc, char** argv) {
     defaults.fushionMode = flagValue(parser, "fushion-mode", defaults.fushionMode);
     defaults.captureFullscreenClientsAsMonitor =
         flagValue(parser, "capture-fullscreen-clients-as-monitor", defaults.captureFullscreenClientsAsMonitor);
+    defaults.fullscreenPreviewRounding = parser.value("fullscreen-preview-rounding").toStdString();
     defaults.saveDir = parser.value("save-dir").toStdString();
     defaults.filenameTemplate = parser.value("filename-template").toStdString();
     defaults.recordSaveDir = parser.value("record-save-dir").toStdString();
