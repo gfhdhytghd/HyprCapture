@@ -136,20 +136,46 @@ std::optional<std::string> trustedExecutablePath(const std::string& candidate) {
     return native;
 }
 
-std::optional<std::string> trustedFfmpegPath() {
-    for (const auto& candidate : {"/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg", "/bin/ffmpeg"}) {
-        if (const auto trusted = trustedExecutablePath(candidate))
+std::vector<std::string> trustedBinDirectories() {
+    std::vector<std::string> directories;
+#ifdef HYPRCAPTURE_TRUSTED_BIN_DIRS
+    std::string_view configured(HYPRCAPTURE_TRUSTED_BIN_DIRS);
+    while (!configured.empty()) {
+        const auto separator = configured.find(':');
+        auto       directory = configured.substr(0, separator);
+        if (!directory.empty())
+            directories.emplace_back(directory);
+        if (separator == std::string_view::npos)
+            break;
+        configured.remove_prefix(separator + 1);
+    }
+#endif
+    if (const char* home = std::getenv("HOME"); home && *home)
+        directories.emplace_back(std::filesystem::path(home) / ".nix-profile/bin");
+    if (const char* user = std::getenv("USER"); user && *user)
+        directories.emplace_back(std::filesystem::path("/etc/profiles/per-user") / user / "bin");
+    directories.emplace_back("/run/current-system/sw/bin");
+    directories.emplace_back("/nix/var/nix/profiles/default/bin");
+    directories.emplace_back("/usr/local/bin");
+    directories.emplace_back("/usr/bin");
+    directories.emplace_back("/bin");
+    return directories;
+}
+
+std::optional<std::string> trustedProgramPath(std::string_view name) {
+    for (const auto& directory : trustedBinDirectories()) {
+        if (const auto trusted = trustedExecutablePath((std::filesystem::path(directory) / name).string()))
             return trusted;
     }
     return std::nullopt;
 }
 
+std::optional<std::string> trustedFfmpegPath() {
+    return trustedProgramPath("ffmpeg");
+}
+
 std::optional<std::string> trustedGpuScreenRecorderPath() {
-    for (const auto& candidate : {"/usr/local/bin/gpu-screen-recorder", "/usr/bin/gpu-screen-recorder", "/bin/gpu-screen-recorder"}) {
-        if (const auto trusted = trustedExecutablePath(candidate))
-            return trusted;
-    }
-    return std::nullopt;
+    return trustedProgramPath("gpu-screen-recorder");
 }
 
 std::optional<std::string> findVaapiRenderDevice() {
@@ -227,7 +253,13 @@ bool allowEnvironmentName(std::string_view name) {
 
 std::vector<std::string> childEnvironment() {
     std::vector<std::string> env;
-    env.push_back("PATH=/usr/local/bin:/usr/bin:/bin");
+    std::string path = "PATH=";
+    for (const auto& directory : trustedBinDirectories()) {
+        if (path.size() > 5)
+            path.push_back(':');
+        path += directory;
+    }
+    env.push_back(std::move(path));
     for (char** item = environ; item && *item; ++item) {
         const std::string entry(*item);
         const auto        separator = entry.find('=');

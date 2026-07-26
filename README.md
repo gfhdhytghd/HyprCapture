@@ -63,6 +63,43 @@ permission = /usr/(bin|local/bin)/hyprpm, plugin, allow
 
 Do not also manually `hyprctl plugin load` the same `.so` if you manage it through `hyprpm`.
 
+### Install on NixOS
+
+Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
+
+```nix
+{
+  inputs = {
+    hyprland.url = "github:hyprwm/Hyprland";
+    hyprcapture = {
+      url = "github:gfhdhytghd/HyprCapture";
+      inputs.hyprland.follows = "hyprland";
+    };
+  };
+}
+```
+
+With the Home Manager Hyprland module:
+
+```nix
+{ inputs, pkgs, ... }:
+{
+  wayland.windowManager.hyprland.plugins = [
+    inputs.hyprcapture.packages.${pkgs.stdenv.hostPlatform.system}.hyprcapture
+  ];
+}
+```
+
+The Nix package contains both `lib/libhyprcapture.so` and `bin/hyprcapture-ui`. It embeds the matching helper path and trusted Nix store paths for its runtime tools, so no manual helper setting is needed.
+
+Install the optional runtime tools you use (`ffmpeg`, `gpu-screen-recorder`, `wl-clipboard`, `grim`, `libnotify`, and `xdg-utils`) in your NixOS or Home Manager profile. HyprCapture accepts executables from the standard system and per-user Nix profiles after applying the same ownership and permission checks as other trusted paths.
+
+You can also build it directly:
+
+```sh
+nix build github:gfhdhytghd/HyprCapture
+```
+
 ### Helper install path
 
 The `hyprpm` manifest installs the helper automatically:

@@ -8,7 +8,16 @@ set(CMAKE_AUTOMOC ON)
 include(CTest)
 include(GNUInstallDirs)
 
+set(HYPRCAPTURE_DEFAULT_HELPER_PATH "" CACHE FILEPATH "Optional trusted default path to hyprcapture-ui")
+set(HYPRCAPTURE_TRUSTED_BIN_DIRS "" CACHE STRING "Colon-separated extra trusted program directories")
+
 add_compile_definitions(WLR_USE_UNSTABLE)
+if(HYPRCAPTURE_DEFAULT_HELPER_PATH)
+  add_compile_definitions(HYPRCAPTURE_DEFAULT_HELPER_PATH="${HYPRCAPTURE_DEFAULT_HELPER_PATH}")
+endif()
+if(HYPRCAPTURE_TRUSTED_BIN_DIRS)
+  add_compile_definitions(HYPRCAPTURE_TRUSTED_BIN_DIRS="${HYPRCAPTURE_TRUSTED_BIN_DIRS}")
+endif()
 add_compile_options(
   -g
   -Wall

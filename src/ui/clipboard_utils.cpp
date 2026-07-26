@@ -76,7 +76,19 @@ QString trustedExecutablePath(const QString& path) {
 }
 
 QString trustedSystemProgramImpl(const QString& name) {
-    for (const QString& dir : {QStringLiteral("/usr/local/bin"), QStringLiteral("/usr/bin"), QStringLiteral("/bin")}) {
+    QStringList directories;
+#ifdef HYPRCAPTURE_TRUSTED_BIN_DIRS
+    directories.append(QString::fromUtf8(HYPRCAPTURE_TRUSTED_BIN_DIRS).split(QLatin1Char(':'), Qt::SkipEmptyParts));
+#endif
+    if (const QString home = QDir::homePath(); !home.isEmpty())
+        directories.append(QDir(home).filePath(QStringLiteral(".nix-profile/bin")));
+    if (const QString user = qEnvironmentVariable("USER"); !user.isEmpty())
+        directories.append(QDir(QStringLiteral("/etc/profiles/per-user")).filePath(user + QStringLiteral("/bin")));
+    directories.append({QStringLiteral("/run/current-system/sw/bin"), QStringLiteral("/nix/var/nix/profiles/default/bin")});
+    directories.append({QStringLiteral("/usr/local/bin"), QStringLiteral("/usr/bin"), QStringLiteral("/bin")});
+    directories.removeDuplicates();
+
+    for (const QString& dir : directories) {
         const QString trusted = trustedExecutablePath(QDir(dir).filePath(name));
         if (!trusted.isEmpty())
             return trusted;
@@ -427,7 +439,18 @@ QString trustedSystemProgram(const QString& name) {
 QProcessEnvironment trustedProcessEnvironment() {
     const auto source = QProcessEnvironment::systemEnvironment();
     QProcessEnvironment env;
-    env.insert(QStringLiteral("PATH"), QStringLiteral("/usr/local/bin:/usr/bin:/bin"));
+    QStringList directories;
+#ifdef HYPRCAPTURE_TRUSTED_BIN_DIRS
+    directories.append(QString::fromUtf8(HYPRCAPTURE_TRUSTED_BIN_DIRS).split(QLatin1Char(':'), Qt::SkipEmptyParts));
+#endif
+    if (const QString home = QDir::homePath(); !home.isEmpty())
+        directories.append(QDir(home).filePath(QStringLiteral(".nix-profile/bin")));
+    if (const QString user = qEnvironmentVariable("USER"); !user.isEmpty())
+        directories.append(QDir(QStringLiteral("/etc/profiles/per-user")).filePath(user + QStringLiteral("/bin")));
+    directories.append({QStringLiteral("/run/current-system/sw/bin"), QStringLiteral("/nix/var/nix/profiles/default/bin")});
+    directories.append({QStringLiteral("/usr/local/bin"), QStringLiteral("/usr/bin"), QStringLiteral("/bin")});
+    directories.removeDuplicates();
+    env.insert(QStringLiteral("PATH"), directories.join(QLatin1Char(':')));
     for (const QString& name : source.keys()) {
         if (allowEnvironmentName(name))
             env.insert(name, source.value(name));
