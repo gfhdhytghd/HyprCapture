@@ -72,6 +72,7 @@ add_library(hyprcapture SHARED
   src/plugin/timing.cpp
   src/shared/config.cpp
   src/shared/protocol.cpp
+  src/shared/rgba_transform.cpp
 )
 
 target_include_directories(hyprcapture BEFORE PRIVATE src ${HYPRLAND_DERIVED_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS})
@@ -139,6 +140,13 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-recording-state-test PRIVATE src)
   target_link_libraries(hyprcapture-recording-state-test PRIVATE nlohmann_json::nlohmann_json)
   add_test(NAME hyprcapture-recording-state-test COMMAND hyprcapture-recording-state-test)
+
+  add_executable(hyprcapture-rgba-transform-test
+    tests/rgba_transform_test.cpp
+    src/shared/rgba_transform.cpp
+  )
+  target_include_directories(hyprcapture-rgba-transform-test PRIVATE src)
+  add_test(NAME hyprcapture-rgba-transform-test COMMAND hyprcapture-rgba-transform-test)
 endif()
 
 install(TARGETS hyprcapture LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

@@ -2,6 +2,7 @@
 
 #include "plugin/session_launcher.hpp"
 #include "plugin/timing.hpp"
+#include "shared/rgba_transform.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
@@ -199,6 +200,7 @@ struct ShadowRenderGeometry {
 ShadowColorBytes shadowColorBytes(const PHLWINDOW& window);
 void             repairTransparentShadow(RgbaReadback& readback, const CBox& artifactBox, const CBox& visibleBox, const PHLWINDOW& window);
 void             expandReadbackToShadowBounds(RgbaReadback& readback, CBox& artifactBox, const CBox& visibleBox, const PHLWINDOW& window);
+RgbaReadback     normalizeMonitorReadbackToLogicalOrientation(RgbaReadback readback, int transform);
 
 struct ArtifactBudget {
     std::size_t remaining = MAX_SESSION_ARTIFACT_BYTES;
@@ -1729,6 +1731,14 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     height = positiveIntFromDouble(sourceCropBox.h);
     const int framebufferWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
     const int framebufferHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+    const int monitorTransform = std::clamp(static_cast<int>(monitor->m_transform), 0, 7);
+    // Static artifacts read the full physical framebuffer, then normalize it
+    // before alpha cropping. Keep the recording path on its direct async crop.
+    const bool normalizeWindowArtifact = trimToAlphaBounds && monitorTransform != 0;
+    const int renderCanvasWidth =
+        normalizeWindowArtifact ? positiveRoundedIntFromDouble(monitor->m_transformedSize.x) : framebufferWidth;
+    const int renderCanvasHeight =
+        normalizeWindowArtifact ? positiveRoundedIntFromDouble(monitor->m_transformedSize.y) : framebufferHeight;
     std::size_t framebufferBytes = 0;
     if (!checkedRgbaByteSize(framebufferWidth, framebufferHeight, framebufferBytes))
         return {};
@@ -1739,8 +1749,8 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         return {};
 
     const double scale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
-    const int targetCropX = width < framebufferWidth ? (framebufferWidth - width) / 2 : 0;
-    const int targetCropY = height < framebufferHeight ? (framebufferHeight - height) / 2 : 0;
+    const int targetCropX = width < renderCanvasWidth ? (renderCanvasWidth - width) / 2 : 0;
+    const int targetCropY = height < renderCanvasHeight ? (renderCanvasHeight - height) / 2 : 0;
     const Vector2D renderOffset = monitor->m_position + Vector2D{targetCropX / scale, targetCropY / scale} - fullBox.pos();
     windowGoal.setPositionOffset(renderOffset);
     CBox renderCropBox = fullBox.copy().translate(renderOffset).translate(-monitor->m_position).scale(scale).round();
@@ -1759,7 +1769,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         if (!targetFramebuffer)
             return false;
         ScopedTiming timing("window.render");
-        CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
+        CRegion fakeDamage{0, 0, renderCanvasWidth, renderCanvasHeight};
         g_pHyprOpenGL->makeEGLCurrent();
         g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
         if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, targetFramebuffer)) {
@@ -1838,6 +1848,11 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         return {};
 
     if (trimToAlphaBounds) {
+        if (normalizeWindowArtifact)
+            readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), monitorTransform);
+        if (readback.pixels.empty())
+            return {};
+
         PixelBounds bounds;
         if (findAlphaBounds(readback, bounds))
             readback = cropReadback(readback, bounds);
@@ -2243,73 +2258,15 @@ bool readbackHasSize(const RgbaReadback& frame, int width, int height) {
     return frame.width == width && frame.height == height && checkedRgbaByteSize(width, height, bytes) && frame.pixels.size() == bytes;
 }
 
-template <typename SourcePixelFn>
-RgbaReadback remapReadbackPixels(const RgbaReadback& source, int targetWidth, int targetHeight, SourcePixelFn sourcePixel) {
-    if (!readbackHasSize(source, source.width, source.height) || targetWidth <= 0 || targetHeight <= 0)
-        return {};
-
-    std::size_t bytes = 0;
-    if (!checkedRgbaByteSize(targetWidth, targetHeight, bytes))
-        return {};
-
-    RgbaReadback target;
-    target.width = targetWidth;
-    target.height = targetHeight;
-    target.pixels.assign(bytes, 0);
-
-    for (int y = 0; y < targetHeight; ++y) {
-        for (int x = 0; x < targetWidth; ++x) {
-            const auto [srcX, srcY] = sourcePixel(x, y);
-            if (srcX < 0 || srcX >= source.width || srcY < 0 || srcY >= source.height)
-                return {};
-
-            const auto src = (static_cast<std::size_t>(srcY) * source.width + srcX) * RGBA_BYTES_PER_PIXEL;
-            const auto dst = (static_cast<std::size_t>(y) * targetWidth + x) * RGBA_BYTES_PER_PIXEL;
-            std::copy(source.pixels.data() + src, source.pixels.data() + src + RGBA_BYTES_PER_PIXEL, target.pixels.data() + dst);
-        }
-    }
-
-    return target;
-}
-
-RgbaReadback rotateReadback90Clockwise(const RgbaReadback& source) {
-    return remapReadbackPixels(source, source.height, source.width, [&](int x, int y) {
-        return std::pair<int, int>{y, source.height - 1 - x};
-    });
-}
-
-RgbaReadback rotateReadback180(const RgbaReadback& source) {
-    return remapReadbackPixels(source, source.width, source.height, [&](int x, int y) {
-        return std::pair<int, int>{source.width - 1 - x, source.height - 1 - y};
-    });
-}
-
-RgbaReadback rotateReadback90CounterClockwise(const RgbaReadback& source) {
-    return remapReadbackPixels(source, source.height, source.width, [&](int x, int y) {
-        return std::pair<int, int>{source.width - 1 - y, x};
-    });
-}
-
-RgbaReadback flipReadbackHorizontal(const RgbaReadback& source) {
-    return remapReadbackPixels(source, source.width, source.height, [&](int x, int y) {
-        return std::pair<int, int>{source.width - 1 - x, y};
-    });
-}
-
 RgbaReadback normalizeMonitorReadbackToLogicalOrientation(RgbaReadback readback, int transform) {
-    if (readback.pixels.empty())
-        return {};
-
-    switch (std::clamp(transform, 0, 7)) {
-        case 1: return rotateReadback90Clockwise(readback);
-        case 2: return rotateReadback180(readback);
-        case 3: return rotateReadback90CounterClockwise(readback);
-        case 4: return flipReadbackHorizontal(readback);
-        case 5: return flipReadbackHorizontal(rotateReadback90Clockwise(readback));
-        case 6: return flipReadbackHorizontal(rotateReadback180(readback));
-        case 7: return flipReadbackHorizontal(rotateReadback90CounterClockwise(readback));
-        default: return readback;
-    }
+    auto frame = normalizeRgbaFrameToLogicalOrientation(
+        {.pixels = std::move(readback.pixels), .width = readback.width, .height = readback.height},
+        transform);
+    return {
+        .pixels = std::move(frame.pixels),
+        .width = frame.width,
+        .height = frame.height,
+    };
 }
 
 RgbaReadback solidBackgroundReadback(int width, int height, unsigned char r, unsigned char g, unsigned char b) {
