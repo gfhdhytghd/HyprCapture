@@ -2663,10 +2663,17 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     const auto drawFullscreenPreview = [this, &painter](const QRect& cap) {
         if (!cap.isValid())
             return;
-        painter.setPen(QPen(QColor(255, 255, 255, 230), 2));
+        constexpr qreal penWidth = 2.0;
+        constexpr qreal inset = penWidth / 2.0;
+        auto            radii = fullscreenPreviewCornerRadii(cap);
+        radii.topLeft = std::max(0.0, radii.topLeft - inset);
+        radii.topRight = std::max(0.0, radii.topRight - inset);
+        radii.bottomRight = std::max(0.0, radii.bottomRight - inset);
+        radii.bottomLeft = std::max(0.0, radii.bottomLeft - inset);
+        painter.setPen(QPen(QColor(255, 255, 255, 230), penWidth));
         painter.setBrush(Qt::NoBrush);
-        const QRectF frame = QRectF(cap.adjusted(0, 0, -1, -1));
-        painter.drawPath(hyprcapture::ui::screenPreviewPath(frame, fullscreenPreviewCornerRadii(cap)));
+        const QRectF frame = QRectF(cap).adjusted(inset, inset, -inset, -inset);
+        painter.drawPath(hyprcapture::ui::screenPreviewPath(frame, radii));
     };
     if ((m_mode == hyprcapture::CaptureMode::Region || fusionGesture) && selectionVisible) {
         paintDesktop(painter, sel);
