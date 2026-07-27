@@ -2,6 +2,7 @@
 
 #include "plugin/artifact_capture.hpp"
 #include "shared/protocol.hpp"
+#include "shared/trusted_path.hpp"
 
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -76,48 +77,6 @@ std::string defaultInstalledHelperPath() {
     return {};
 }
 
-bool isTrustedOwner(uid_t uid) {
-    return uid == 0 || uid == geteuid();
-}
-
-bool hasWritableGroupOrOther(mode_t mode) {
-    return (mode & 0022) != 0;
-}
-
-bool parentChainTrusted(const std::filesystem::path& path) {
-    for (auto current = path.parent_path(); !current.empty(); current = current.parent_path()) {
-        struct stat st {};
-        const auto  native = current.string();
-        if (stat(native.c_str(), &st) != 0 || !S_ISDIR(st.st_mode) || !isTrustedOwner(st.st_uid) || hasWritableGroupOrOther(st.st_mode))
-            return false;
-        if (current == current.root_path())
-            break;
-    }
-    return true;
-}
-
-std::optional<std::string> trustedExecutablePath(const std::string& candidate) {
-    if (candidate.empty())
-        return std::nullopt;
-
-    std::error_code ec;
-    auto            path = std::filesystem::path(candidate);
-    if (!path.is_absolute())
-        return std::nullopt;
-
-    path = std::filesystem::weakly_canonical(path, ec);
-    if (ec || !path.is_absolute() || !parentChainTrusted(path))
-        return std::nullopt;
-
-    const auto native = path.string();
-    struct stat st {};
-    if (stat(native.c_str(), &st) != 0 || !S_ISREG(st.st_mode) || !isTrustedOwner(st.st_uid) || hasWritableGroupOrOther(st.st_mode))
-        return std::nullopt;
-    if (access(native.c_str(), X_OK) != 0)
-        return std::nullopt;
-    return native;
-}
-
 std::vector<std::string> helperCandidates(const std::string& configured) {
     std::vector<std::string> candidates;
     if (!configured.empty())
@@ -146,7 +105,7 @@ std::vector<std::string> helperCandidates(const std::string& configured) {
 
 std::optional<std::string> firstRunnableHelper(const std::string& configured) {
     for (const auto& candidate : helperCandidates(configured)) {
-        if (const auto trusted = trustedExecutablePath(candidate))
+        if (const auto trusted = security::trustedExecutablePath(candidate))
             return trusted;
     }
     return std::nullopt;
@@ -180,7 +139,7 @@ std::vector<std::string> trustedBinDirectories() {
 
 std::string trustedProgramPath(std::string_view name) {
     for (const auto& directory : trustedBinDirectories()) {
-        if (const auto trusted = trustedExecutablePath((std::filesystem::path(directory) / name).string()))
+        if (const auto trusted = security::trustedExecutablePath((std::filesystem::path(directory) / name).string()))
             return *trusted;
     }
     return {};

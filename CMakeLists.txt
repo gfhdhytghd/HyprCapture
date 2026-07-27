@@ -82,6 +82,7 @@ add_library(hyprcapture SHARED
   src/shared/config.cpp
   src/shared/protocol.cpp
   src/shared/rgba_transform.cpp
+  src/shared/trusted_path.cpp
 )
 
 target_include_directories(hyprcapture BEFORE PRIVATE src ${HYPRLAND_DERIVED_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS})
@@ -98,6 +99,7 @@ add_executable(hyprcapture-ui
   src/ui/watermark.cpp
   src/shared/config.cpp
   src/shared/protocol.cpp
+  src/shared/trusted_path.cpp
 )
 
 target_include_directories(hyprcapture-ui PRIVATE src)
@@ -129,6 +131,7 @@ if(BUILD_TESTING)
   add_executable(hyprcapture-security-test
     tests/security_test.cpp
     src/ui/clipboard_utils.cpp
+    src/shared/trusted_path.cpp
   )
   target_include_directories(hyprcapture-security-test PRIVATE src)
   target_link_libraries(hyprcapture-security-test PRIVATE Qt6::Core Qt6::Gui)
@@ -156,6 +159,13 @@ if(BUILD_TESTING)
   )
   target_include_directories(hyprcapture-rgba-transform-test PRIVATE src)
   add_test(NAME hyprcapture-rgba-transform-test COMMAND hyprcapture-rgba-transform-test)
+
+  add_executable(hyprcapture-trusted-path-test
+    tests/trusted_path_test.cpp
+    src/shared/trusted_path.cpp
+  )
+  target_include_directories(hyprcapture-trusted-path-test PRIVATE src)
+  add_test(NAME hyprcapture-trusted-path-test COMMAND hyprcapture-trusted-path-test)
 endif()
 
 install(TARGETS hyprcapture LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})

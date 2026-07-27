@@ -1,4 +1,5 @@
 #include "ui/clipboard_utils.hpp"
+#include "shared/trusted_path.hpp"
 
 #include <QBuffer>
 #include <QClipboard>
@@ -36,43 +37,9 @@ constexpr qint64 kMaxClipboardTextBytes = 4 * 1024 * 1024;
 constexpr qint64 kMaxClipboardUrlBytes = 1024 * 1024;
 constexpr int    kMaxClipboardUrls = 128;
 
-bool isTrustedOwner(uid_t uid) {
-    return uid == 0 || uid == geteuid();
-}
-
-bool hasWritableGroupOrOther(mode_t mode) {
-    return (mode & 0022) != 0;
-}
-
-bool parentChainTrusted(const QString& path) {
-    QFileInfo info(path);
-    QDir      current = info.absoluteDir();
-    while (!current.path().isEmpty()) {
-        const QByteArray native = QFile::encodeName(current.absolutePath());
-        struct stat      st {};
-        if (stat(native.constData(), &st) != 0 || !S_ISDIR(st.st_mode) || !isTrustedOwner(st.st_uid) || hasWritableGroupOrOther(st.st_mode))
-            return false;
-        if (current.isRoot())
-            break;
-        if (!current.cdUp())
-            break;
-    }
-    return true;
-}
-
 QString trustedExecutablePath(const QString& path) {
-    const QFileInfo info(path);
-    const QString   canonical = info.canonicalFilePath();
-    if (canonical.isEmpty() || !QFileInfo(canonical).isAbsolute() || !parentChainTrusted(canonical))
-        return {};
-
-    const QByteArray native = QFile::encodeName(canonical);
-    struct stat      st {};
-    if (stat(native.constData(), &st) != 0 || !S_ISREG(st.st_mode) || !isTrustedOwner(st.st_uid) || hasWritableGroupOrOther(st.st_mode))
-        return {};
-    if (access(native.constData(), X_OK) != 0)
-        return {};
-    return canonical;
+    const auto trusted = security::trustedExecutablePath(QFile::encodeName(path).toStdString());
+    return trusted ? QFile::decodeName(trusted->c_str()) : QString{};
 }
 
 QString trustedSystemProgramImpl(const QString& name) {
