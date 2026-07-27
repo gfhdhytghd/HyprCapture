@@ -107,6 +107,14 @@ QRect clippedSelectionGeometry(const QRect& selection, const QRect& clip) {
     return selection.intersected(clip);
 }
 
+QRect selectionOutlineGeometry(const QRect& selection, const QRect& clip, const QRect& output) {
+    if (!selection.isValid())
+        return {};
+    if (clip.isValid() && output.isValid() && !clip.intersects(output))
+        return {};
+    return selection;
+}
+
 QRect mapLogicalRectToPixels(const QRect& logicalRect, const QRect& logicalBounds, const QRect& pixelBounds) {
     const QRect clipped = logicalRect.intersected(logicalBounds);
     if (!clipped.isValid() || !logicalBounds.isValid() || !pixelBounds.isValid())

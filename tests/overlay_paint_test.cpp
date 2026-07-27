@@ -49,6 +49,14 @@ int main(int argc, char** argv) {
             "scrolling selection is clipped to its output");
     require(hyprcapture::ui::clippedSelectionGeometry(QRect(900, 100, 300, 500), QRect{}) == QRect(900, 100, 300, 500),
             "ordinary cross-output selection remains unchanged");
+    require(hyprcapture::ui::selectionOutlineGeometry(QRect(-200, 100, 500, 500), QRect(0, 0, 1000, 800), QRect(0, 0, 1000, 800)) ==
+                QRect(-200, 100, 500, 500),
+            "scrolling outline keeps its off-screen window geometry on the owning output");
+    require(!hyprcapture::ui::selectionOutlineGeometry(QRect(900, 100, 300, 500), QRect(0, 0, 1000, 800), QRect(1000, 0, 1000, 800)).isValid(),
+            "scrolling outline is not painted on an adjacent output");
+    require(hyprcapture::ui::selectionOutlineGeometry(QRect(900, 100, 300, 500), QRect{}, QRect(1000, 0, 1000, 800)) ==
+                QRect(900, 100, 300, 500),
+            "ordinary cross-output outline remains available on adjacent outputs");
 
     require(hyprcapture::ui::mapLogicalRectToPixels(QRect(110, 55, 20, 10), QRect(100, 50, 200, 100), QRect(0, 0, 400, 200)) ==
                 QRect(20, 10, 40, 20),

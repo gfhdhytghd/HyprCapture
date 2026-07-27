@@ -2702,7 +2702,13 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
         const auto* window = hoveredWindow();
         const auto* selected = selectedWindow();
         for (const auto& candidate : m_windowArtifacts) {
-            const QRect target = globalToLocalRect(windowSelectionGeometry(candidate));
+            const QRect outline =
+                hyprcapture::ui::selectionOutlineGeometry(candidate.selectionGeometry.isValid() ? candidate.selectionGeometry : windowFrameGeometry(candidate),
+                                                          candidate.selectionClipGeometry,
+                                                          m_overlayLogicalGeometry);
+            if (!outline.isValid())
+                continue;
+            const QRect target = globalToLocalRect(outline);
             const bool isSelected = &candidate == selected;
             const bool isHovered = &candidate == window;
             const int penWidth = isSelected ? 3 : (isHovered ? 2 : 1);

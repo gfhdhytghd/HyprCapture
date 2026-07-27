@@ -16,6 +16,7 @@ struct ScreenCornerRadii {
 };
 
 QRect             clippedSelectionGeometry(const QRect& selection, const QRect& clip);
+QRect             selectionOutlineGeometry(const QRect& selection, const QRect& clip, const QRect& output);
 QRect             mapLogicalRectToPixels(const QRect& logicalRect, const QRect& logicalBounds, const QRect& pixelBounds);
 ScreenCornerRadii detectScreenCornerRadii(const QImage& image, const QSize& logicalSize, int maxLogicalRadius = 96);
 QPainterPath      screenPreviewPath(const QRectF& rect, const ScreenCornerRadii& radii);
