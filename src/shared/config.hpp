@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -31,6 +32,7 @@ struct CaptureDefaults {
     bool             confirmBeforeCapture = false;
     bool             fushionMode = false;
     bool             captureFullscreenClientsAsMonitor = false;
+    bool             dynamicWindowMetadata = true;
     std::string      fullscreenPreviewRounding = "auto";
     std::string      saveDir = "$XDG_PICTURES_DIR/Screenshots";
     std::string      filenameTemplate = "Screenshot-%Y-%m-%d-%H%M%S.png";
@@ -59,6 +61,11 @@ struct CaptureDefaults {
     std::string      watermarkOffset = "0 0";
 };
 
+struct FilenameMetadata {
+    std::string windowClass;
+    std::string windowTitle;
+};
+
 CaptureMode parseCaptureMode(std::string_view value, CaptureMode fallback = CaptureMode::Region);
 FullscreenScope parseFullscreenScope(std::string_view value, FullscreenScope fallback = FullscreenScope::All);
 OverlayScope parseOverlayScope(std::string_view value, OverlayScope fallback = OverlayScope::Fix);
@@ -81,6 +88,12 @@ std::string toString(WatermarkPosition value);
 
 std::filesystem::path expandUserPath(std::string_view path);
 std::string sanitizeFilenameVariable(std::string_view value);
+FilenameMetadata resolveFilenameMetadata(bool dynamicWindowMetadata,
+                                         CaptureMode mode,
+                                         const FilenameMetadata& selectedWindow,
+                                         const FilenameMetadata& legacyWindow,
+                                         std::size_t fullscreenWindowCount,
+                                         const FilenameMetadata& singleFullscreenWindow);
 std::string makeTimestampedFilename(std::string_view filenameTemplate,
                                     std::string_view windowClass = {},
                                     std::string_view windowTitle = {});

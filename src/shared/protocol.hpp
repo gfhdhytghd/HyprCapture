@@ -35,6 +35,9 @@ struct MonitorInfo {
     int         cursorArtifactWidth = 0;
     int         cursorArtifactHeight = 0;
     bool        cursorArtifactTopDown = true;
+    std::optional<int> workspaceWindowCount;
+    std::string        singleWorkspaceWindowClass;
+    std::string        singleWorkspaceWindowTitle;
 };
 
 struct WindowInfo {

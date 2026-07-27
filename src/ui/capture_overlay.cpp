@@ -1639,6 +1639,9 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.logicalGeometry = protocolRect(info.logicalGeometry);
         artifact.transform = info.transform;
         artifact.focused = info.focused;
+        artifact.workspaceWindowCount = info.workspaceWindowCount;
+        artifact.singleWorkspaceWindowClass = qString(info.singleWorkspaceWindowClass);
+        artifact.singleWorkspaceWindowTitle = qString(info.singleWorkspaceWindowTitle);
         const QString artifactPath = qString(info.artifactPath);
         const QString cursorArtifactPath = qString(info.cursorArtifactPath);
         artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes);
@@ -3229,6 +3232,55 @@ const CaptureOverlay::WindowArtifact* CaptureOverlay::filenameWindow() const {
     return focused == m_windowArtifacts.end() ? nullptr : &*focused;
 }
 
+hyprcapture::FilenameMetadata CaptureOverlay::resolvedFilenameMetadata() const {
+    const auto metadataForWindow = [](const WindowArtifact* window) {
+        return window ? hyprcapture::FilenameMetadata{.windowClass = window->appClass.toStdString(), .windowTitle = window->title.toStdString()}
+                      : hyprcapture::FilenameMetadata{};
+    };
+
+    const auto* selected = selectedWindow();
+    if (!selected && m_mode == hyprcapture::CaptureMode::Window)
+        selected = hoveredWindow();
+
+    std::size_t fullscreenWindowCount = 0;
+    hyprcapture::FilenameMetadata singleFullscreenWindow;
+    bool fullscreenMetadataComplete = true;
+    const QRect fullscreenGeometry =
+        m_mode == hyprcapture::CaptureMode::Fullscreen ? localToDesktopLogicalRect(fullscreenCaptureRect()) : QRect{};
+    if (m_mode == hyprcapture::CaptureMode::Fullscreen) {
+        bool matchedMonitor = false;
+        for (const auto& monitor : m_monitorArtifacts) {
+            if (!monitor.logicalGeometry.intersects(fullscreenGeometry))
+                continue;
+            matchedMonitor = true;
+            if (!monitor.workspaceWindowCount) {
+                fullscreenMetadataComplete = false;
+                break;
+            }
+            fullscreenWindowCount += static_cast<std::size_t>(*monitor.workspaceWindowCount);
+            if (*monitor.workspaceWindowCount == 1) {
+                singleFullscreenWindow = {
+                    .windowClass = monitor.singleWorkspaceWindowClass.toStdString(),
+                    .windowTitle = monitor.singleWorkspaceWindowTitle.toStdString(),
+                };
+            }
+        }
+        fullscreenMetadataComplete = fullscreenMetadataComplete && matchedMonitor;
+    }
+
+    if (!fullscreenMetadataComplete) {
+        fullscreenWindowCount = 0;
+        singleFullscreenWindow = {};
+    }
+
+    return hyprcapture::resolveFilenameMetadata(m_defaults.dynamicWindowMetadata,
+                                                m_mode,
+                                                metadataForWindow(selected),
+                                                metadataForWindow(filenameWindow()),
+                                                fullscreenWindowCount,
+                                                singleFullscreenWindow);
+}
+
 bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
     if (!window.image.isNull())
         return true;
@@ -3811,9 +3863,10 @@ void CaptureOverlay::renderAndSaveCapture() {
     hyprcapture::ui::applyWatermark(image, m_defaults);
     traceTiming(QStringLiteral("apply_watermark"), watermarkTimer.elapsed());
 
-    const auto* filenameTarget = filenameWindow();
-    const QString plannedOutputPath =
-        plannedCaptureOutputPath(m_defaults, filenameTarget ? filenameTarget->appClass : QString{}, filenameTarget ? filenameTarget->title : QString{});
+    const auto filenameMetadata = resolvedFilenameMetadata();
+    const QString plannedOutputPath = plannedCaptureOutputPath(m_defaults,
+                                                               QString::fromStdString(filenameMetadata.windowClass),
+                                                               QString::fromStdString(filenameMetadata.windowTitle));
     const QString targetPath = thumbnailTargetPath(m_defaults, plannedOutputPath);
     const QString restoreClipboardPath =
         (m_defaults.clipboard && m_defaults.showThumbnail) ? hyprcapture::ui::runtimeFile("clipboard", ".json") : QString{};

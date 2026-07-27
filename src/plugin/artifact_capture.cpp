@@ -2289,6 +2289,32 @@ std::vector<PHLWINDOW> windowsInRenderOrder() {
     return ordered;
 }
 
+void populateWorkspaceWindowMetadata(const PHLMONITOR& monitor, MonitorInfo& info) {
+    if (!monitor)
+        return;
+
+    std::vector<PHLWINDOW> workspaceWindows;
+    workspaceWindows.reserve(Desktop::windowState()->windows().size());
+    for (const auto& window : Desktop::windowState()->windows()) {
+        if (!window || !window->m_isMapped || window->isHidden() || !window->m_workspace)
+            continue;
+
+        const auto windowMonitor = window->m_monitor.lock();
+        const bool onActiveWorkspace = window->m_workspace == monitor->m_activeWorkspace;
+        const bool onActiveSpecialWorkspace =
+            monitor->m_activeSpecialWorkspace && window->m_workspace == monitor->m_activeSpecialWorkspace;
+        const bool pinnedOnMonitor = window->m_pinned && windowMonitor && windowMonitor == monitor;
+        if (onActiveWorkspace || onActiveSpecialWorkspace || pinnedOnMonitor)
+            workspaceWindows.push_back(window);
+    }
+
+    info.workspaceWindowCount = static_cast<int>(std::min(workspaceWindows.size(), MAX_SESSION_WINDOWS));
+    if (workspaceWindows.size() == 1) {
+        info.singleWorkspaceWindowClass = boundedString(workspaceWindows.front()->m_class, MAX_WINDOW_METADATA_BYTES);
+        info.singleWorkspaceWindowTitle = boundedString(workspaceWindows.front()->m_title, MAX_WINDOW_METADATA_BYTES);
+    }
+}
+
 void blitScaledRgba(const RgbaReadback& source,
                     std::vector<unsigned char>& target,
                     int targetWidth,
@@ -3113,6 +3139,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.scale = monitor->m_scale;
         info.transform = static_cast<int>(monitor->m_transform);
         info.focused = monitor == Desktop::focusState()->monitor();
+        populateWorkspaceWindowMetadata(monitor, info);
         const int artifactIndex = monitorIndex++;
         const auto path = root / ("monitor-" + std::to_string(artifactIndex) + ".rgba");
         if (captureMonitorArtifacts && renderMonitorArtifact(monitor, frozenTime, path, info.artifactWidth, info.artifactHeight, artifactBudget))

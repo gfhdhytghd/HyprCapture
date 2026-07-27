@@ -382,6 +382,28 @@ std::string sanitizeFilenameVariable(std::string_view value) {
     return out.empty() ? "unknown" : out;
 }
 
+FilenameMetadata resolveFilenameMetadata(bool dynamicWindowMetadata,
+                                         CaptureMode mode,
+                                         const FilenameMetadata& selectedWindow,
+                                         const FilenameMetadata& legacyWindow,
+                                         std::size_t fullscreenWindowCount,
+                                         const FilenameMetadata& singleFullscreenWindow) {
+    if (!dynamicWindowMetadata)
+        return legacyWindow;
+
+    switch (mode) {
+        case CaptureMode::Region:
+            return {.windowClass = "region", .windowTitle = "region"};
+        case CaptureMode::Window:
+            return selectedWindow;
+        case CaptureMode::Fullscreen:
+            if (fullscreenWindowCount == 1)
+                return singleFullscreenWindow;
+            return {.windowClass = "fullscreen", .windowTitle = "fullscreen"};
+    }
+    return {};
+}
+
 std::string makeTimestampedFilename(std::string_view filenameTemplate, std::string_view windowClass, std::string_view windowTitle) {
     const std::string sanitizedClass = sanitizeFilenameVariable(windowClass);
     const std::string sanitizedTitle = sanitizeFilenameVariable(windowTitle);

@@ -311,6 +311,7 @@ hl.config({
             confirm_before_capture = false,
             fusion_mode = false,
             capture_fullscreen_clients_as_monitor = false,
+            dynamic_window_metadata = true,
             fullscreen_preview_rounding = "auto",
             save_dir = "$XDG_PICTURES_DIR/Screenshots",
             filename_template = "Screenshot-%Y-%m-%d-%H%M%S.png",
@@ -377,6 +378,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `fusion_mode` | bool | `false` | Fuse region and window interactions in one overlay: drag anywhere, including from the desktop background, to capture a region; single-click a window to capture that window; or single-click the background to capture the clicked monitor. The toolbar keeps the fullscreen action and configuration controls; fullscreen multi-monitor scope is shown only when multiple monitors are present. |
 | `fushion_mode` | bool | `false` | Legacy compatibility alias for `fusion_mode`. New configs should use `fusion_mode`. |
 | `capture_fullscreen_clients_as_monitor` | bool | `false` | In window and fusion modes, capture the fullscreen client's entire monitor instead of the isolated client. Disabled by default for compatibility. |
+| `dynamic_window_metadata` | bool | `true` | Resolve `{window_class}` and `{window_title}` from the final screenshot mode. Region captures use `region`; window captures use the selected window; fullscreen captures use the only window in the captured workspace scope, or `fullscreen` when there are zero or multiple windows. Set to `false` to restore the focused-window fallback. |
 | `fullscreen_preview_rounding` | string | `auto` | Fullscreen preview border rounding. `auto` detects opaque or near-uniform desktop corner masks from each frozen monitor image, a non-negative number forces that logical-pixel radius, and `0` keeps square corners. Low-confidence auto detection falls back to square corners and never crops the captured image. |
 
 ### Output options
@@ -387,7 +389,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `clipboard` | bool | `true` | Copy the output image to the clipboard. Uses `wl-copy` when available so the clipboard survives helper exit. |
 | `show_thumbnail` | bool | `true` | Show the result thumbnail after capture. |
 | `save_dir` | string | `$XDG_PICTURES_DIR/Screenshots` | Output directory. `~` is expanded against `HOME`; `$XDG_PICTURES_DIR` is read from XDG user-dirs with `~/Pictures` as fallback. |
-| `filename_template` | string | `Screenshot-%Y-%m-%d-%H%M%S.png` | `strftime` template for saved screenshot filenames. `{window_class}` and `{window_title}` expand to the selected window, or the focused window when there is no selected target. Values are filename-sanitized; missing metadata expands to `unknown`. Existing `strftime` directives, including `%w`, keep their original meaning. |
+| `filename_template` | string | `Screenshot-%Y-%m-%d-%H%M%S.png` | `strftime` template for saved screenshot filenames. `{window_class}` and `{window_title}` follow `dynamic_window_metadata`; values are filename-sanitized and missing metadata expands to `unknown`. Existing `strftime` directives, including `%w`, keep their original meaning. |
 | `record_save_dir` | string | `$XDG_VIDEOS_DIR/Screenrecords` | Output directory for recordings. `$XDG_VIDEOS_DIR` is read from XDG user-dirs with `~/Videos` as fallback. Finished recordings can be copied to the clipboard as local file URIs and shown in the thumbnail when those global output settings are enabled. |
 | `record_filename_template` | string | `Recording-%Y-%m-%d-%H%M%S.mp4` | `strftime` template for saved recording filenames. |
 | `record_format` | string | `mp4` | Default recording format shown in the overlay for non-transparent window backgrounds, fullscreen recording, and region recording. Supports `mp4`, `mov`, `webm`, `mkv`, `gif`, `apng`, and `webp`; the selected value replaces the filename extension. |

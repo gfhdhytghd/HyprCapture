@@ -40,6 +40,7 @@ int main() {
     require(parseCaptureMode("window") == CaptureMode::Window, "window mode parse");
     require(parseCaptureMode("bad", CaptureMode::Window) == CaptureMode::Window, "mode fallback");
     require(!CaptureDefaults{}.confirmBeforeCapture, "confirm before capture default");
+    require(CaptureDefaults{}.dynamicWindowMetadata, "dynamic window metadata default");
     require(CaptureDefaults{}.fullscreenPreviewRounding == "auto", "fullscreen preview rounding default");
 
     require(parseFullscreenScope("all-monitors") == FullscreenScope::All, "all monitor scope parse");
@@ -93,6 +94,49 @@ int main() {
                 .find("org.mozilla-firefox-Private-Window.png") != std::string::npos,
             "window filename template variables");
 
+    const FilenameMetadata selectedMetadata{.windowClass = "selected.class", .windowTitle = "Selected Title"};
+    const FilenameMetadata focusedMetadata{.windowClass = "focused.class", .windowTitle = "Focused Title"};
+    const FilenameMetadata fullscreenMetadata{.windowClass = "single.class", .windowTitle = "Single Title"};
+    const auto regionMetadata =
+        resolveFilenameMetadata(true, CaptureMode::Region, selectedMetadata, focusedMetadata, 1, fullscreenMetadata);
+    require(regionMetadata.windowClass == "region" && regionMetadata.windowTitle == "region", "region filename metadata");
+    const auto windowMetadata =
+        resolveFilenameMetadata(true, CaptureMode::Window, selectedMetadata, focusedMetadata, 0, {});
+    require(windowMetadata.windowClass == "selected.class" && windowMetadata.windowTitle == "Selected Title", "window filename metadata");
+    const auto oneWindowFullscreen =
+        resolveFilenameMetadata(true, CaptureMode::Fullscreen, selectedMetadata, focusedMetadata, 1, fullscreenMetadata);
+    require(oneWindowFullscreen.windowClass == "single.class" && oneWindowFullscreen.windowTitle == "Single Title",
+            "single-window fullscreen filename metadata");
+    const auto emptyFullscreen =
+        resolveFilenameMetadata(true, CaptureMode::Fullscreen, selectedMetadata, focusedMetadata, 0, {});
+    require(emptyFullscreen.windowClass == "fullscreen" && emptyFullscreen.windowTitle == "fullscreen",
+            "empty fullscreen filename metadata");
+    const std::size_t firstMonitorWindowCount = 1;
+    const std::size_t secondMonitorWindowCount = 1;
+    const auto multiMonitorFullscreen =
+        resolveFilenameMetadata(true,
+                                CaptureMode::Fullscreen,
+                                selectedMetadata,
+                                focusedMetadata,
+                                firstMonitorWindowCount + secondMonitorWindowCount,
+                                fullscreenMetadata);
+    require(multiMonitorFullscreen.windowClass == "fullscreen" && multiMonitorFullscreen.windowTitle == "fullscreen",
+            "multi-monitor fullscreen aggregates workspace window counts");
+    const auto legacyMetadata =
+        resolveFilenameMetadata(false, CaptureMode::Region, selectedMetadata, focusedMetadata, 0, {});
+    require(legacyMetadata.windowClass == "focused.class" && legacyMetadata.windowTitle == "Focused Title",
+            "legacy focused filename metadata");
+    const auto missingWindowMetadata =
+        resolveFilenameMetadata(true, CaptureMode::Window, {}, focusedMetadata, 0, {});
+    require(makeTimestampedFilename("{window_class}-{window_title}.png",
+                                    missingWindowMetadata.windowClass,
+                                    missingWindowMetadata.windowTitle) == "unknown-unknown.png",
+            "missing selected window metadata falls back to unknown");
+    require(makeTimestampedFilename("{window_class}-{window_title}.png", "selected.class", {}) == "selected.class-unknown.png",
+            "missing window title falls back independently");
+    require(makeTimestampedFilename("{window_class}-{window_title}.png", {}, "Selected Title") == "unknown-Selected-Title.png",
+            "missing window class falls back independently");
+
     CaptureSession session;
     session.id = "test-session";
     session.defaults.mode = CaptureMode::Window;
@@ -101,6 +145,7 @@ int main() {
     session.defaults.confirmBeforeCapture = true;
     session.defaults.fushionMode = true;
     session.defaults.captureFullscreenClientsAsMonitor = true;
+    session.defaults.dynamicWindowMetadata = false;
     session.defaults.fullscreenPreviewRounding = "27";
     session.defaults.thumbnailMonitor = "DP-2";
     session.defaults.windowBackground = WindowBackground::FollowSystem;
@@ -120,6 +165,9 @@ int main() {
     session.monitors.back().cursorArtifactPath = "/tmp/cursor.rgba";
     session.monitors.back().cursorArtifactWidth = 3840;
     session.monitors.back().cursorArtifactHeight = 2160;
+    session.monitors.back().workspaceWindowCount = 1;
+    session.monitors.back().singleWorkspaceWindowClass = "Class";
+    session.monitors.back().singleWorkspaceWindowTitle = "Title";
     session.windows.push_back({.address = "0x1",
                                .title = "Title",
                                .appClass = "Class",
@@ -147,6 +195,7 @@ int main() {
     require(json.find("\"allowQuick\":true") != std::string::npos, "allow quick json");
     require(json.find("\"confirmBeforeCapture\":true") != std::string::npos, "confirm before capture json");
     require(json.find("\"captureFullscreenClientsAsMonitor\":true") != std::string::npos, "fullscreen client behavior json");
+    require(json.find("\"dynamicWindowMetadata\":false") != std::string::npos, "dynamic window metadata json");
     require(json.find("\"fullscreenPreviewRounding\":\"27\"") != std::string::npos, "fullscreen preview rounding json");
     require(json.find("\"thumbnailMonitor\":\"DP-2\"") != std::string::npos, "thumbnail monitor json");
     require(json.find("\"windowBackground\":\"follow-system\"") != std::string::npos, "window background json");
@@ -171,6 +220,9 @@ int main() {
     require(json.find("\"artifactTopDown\":true") != std::string::npos, "artifact orientation json");
     require(json.find("\"cursorArtifactPath\":\"/tmp/cursor.rgba\"") != std::string::npos, "cursor artifact path json");
     require(json.find("\"cursorArtifactWidth\":3840") != std::string::npos, "cursor artifact width json");
+    require(json.find("\"workspaceWindowCount\":1") != std::string::npos, "workspace window count json");
+    require(json.find("\"singleWorkspaceWindowClass\":\"Class\"") != std::string::npos, "single workspace window class json");
+    require(json.find("\"singleWorkspaceWindowTitle\":\"Title\"") != std::string::npos, "single workspace window title json");
     require(json.find("\"realBackgroundPath\":\"/tmp/window-real.rgba\"") != std::string::npos, "real background path json");
     require(json.find("\"realBackgroundWidth\":200") != std::string::npos, "real background width json");
     require(json.find("Title\\u0001") != std::string::npos, "control byte json escaping");
@@ -182,6 +234,7 @@ int main() {
     require(decoded->defaults.allowQuick, "decoded allow quick");
     require(decoded->defaults.confirmBeforeCapture, "decoded confirm before capture");
     require(decoded->defaults.captureFullscreenClientsAsMonitor, "decoded fullscreen client behavior");
+    require(!decoded->defaults.dynamicWindowMetadata, "decoded dynamic window metadata");
     require(decoded->defaults.fullscreenPreviewRounding == "27", "decoded fullscreen preview rounding");
     require(decoded->defaults.thumbnailMonitor == "DP-2", "decoded thumbnail monitor");
     require(decoded->defaults.fushionMode, "decoded fushion mode");
@@ -195,6 +248,9 @@ int main() {
     require(decoded->monitors.front().cursorArtifactPath == "/tmp/cursor.rgba", "decoded cursor artifact path");
     require(decoded->monitors.front().cursorArtifactWidth == 3840 && decoded->monitors.front().cursorArtifactHeight == 2160,
             "decoded cursor artifact dimensions");
+    require(decoded->monitors.front().workspaceWindowCount == 1, "decoded workspace window count");
+    require(decoded->monitors.front().singleWorkspaceWindowClass == "Class", "decoded single workspace window class");
+    require(decoded->monitors.front().singleWorkspaceWindowTitle == "Title", "decoded single workspace window title");
     require(decoded->windows.front().artifactPath == "/tmp/window.rgba", "decoded artifact path");
     require(decoded->windows.front().selectionGeometry.has_value(), "decoded selection geometry exists");
     require(decoded->windows.front().selectionClipGeometry.has_value(), "decoded selection clip geometry exists");
@@ -217,6 +273,32 @@ int main() {
     require(legacyPreviewRoundingDecoded.has_value(), "session without fullscreen preview rounding decodes");
     require(legacyPreviewRoundingDecoded->defaults.fullscreenPreviewRounding == "auto",
             "missing fullscreen preview rounding keeps automatic detection");
+
+    auto legacyDynamicMetadataJson = json;
+    eraseJsonField(legacyDynamicMetadataJson, "dynamicWindowMetadata");
+    const auto legacyDynamicMetadataDecoded = decodeSessionJson(legacyDynamicMetadataJson);
+    require(legacyDynamicMetadataDecoded.has_value(), "session without dynamic window metadata decodes");
+    require(legacyDynamicMetadataDecoded->defaults.dynamicWindowMetadata,
+            "missing dynamic window metadata keeps enabled default");
+
+    auto legacyWorkspaceMetadataJson = json;
+    eraseJsonField(legacyWorkspaceMetadataJson, "workspaceWindowCount");
+    eraseJsonField(legacyWorkspaceMetadataJson, "singleWorkspaceWindowClass");
+    eraseJsonField(legacyWorkspaceMetadataJson, "singleWorkspaceWindowTitle");
+    const auto legacyWorkspaceMetadataDecoded = decodeSessionJson(legacyWorkspaceMetadataJson);
+    require(legacyWorkspaceMetadataDecoded.has_value(), "session without workspace window metadata decodes");
+    require(!legacyWorkspaceMetadataDecoded->monitors.front().workspaceWindowCount,
+            "missing workspace window metadata stays unavailable");
+
+    CaptureSession boundedWorkspaceMetadataSession = session;
+    boundedWorkspaceMetadataSession.monitors.front().singleWorkspaceWindowClass = std::string(5000, 'c');
+    boundedWorkspaceMetadataSession.monitors.front().singleWorkspaceWindowTitle = std::string(5000, 't');
+    const auto boundedWorkspaceMetadataDecoded = decodeSessionJson(encodeSessionJson(boundedWorkspaceMetadataSession));
+    require(boundedWorkspaceMetadataDecoded.has_value(), "bounded workspace metadata session decodes");
+    require(boundedWorkspaceMetadataDecoded->monitors.front().singleWorkspaceWindowClass.size() == 4096,
+            "workspace window class is bounded");
+    require(boundedWorkspaceMetadataDecoded->monitors.front().singleWorkspaceWindowTitle.size() == 4096,
+            "workspace window title is bounded");
 
     auto legacyCursorJson = json;
     eraseJsonField(legacyCursorJson, "cursorArtifactPath");

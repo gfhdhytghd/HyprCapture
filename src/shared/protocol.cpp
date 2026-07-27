@@ -74,6 +74,7 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"confirmBeforeCapture", defaults.confirmBeforeCapture},
         {"fushionMode", defaults.fushionMode},
         {"captureFullscreenClientsAsMonitor", defaults.captureFullscreenClientsAsMonitor},
+        {"dynamicWindowMetadata", defaults.dynamicWindowMetadata},
         {"fullscreenPreviewRounding", boundedString(defaults.fullscreenPreviewRounding, MAX_METADATA_STRING_BYTES)},
         {"saveDir", boundedString(defaults.saveDir, MAX_PATH_BYTES)},
         {"filenameTemplate", boundedString(defaults.filenameTemplate, MAX_METADATA_STRING_BYTES)},
@@ -225,6 +226,8 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         defaults.recordWindowBackend = parseRecordWindowBackend(value, defaults.recordWindowBackend);
     else
         return false;
+    if (obj.contains("dynamicWindowMetadata") && !boolValue(obj, "dynamicWindowMetadata", defaults.dynamicWindowMetadata, false))
+        return false;
 
     return boolValue(obj, "save", defaults.save, false) && boolValue(obj, "clipboard", defaults.clipboard, false) &&
         boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
@@ -281,6 +284,14 @@ bool monitorValue(const Json& obj, MonitorInfo& out) {
         return false;
     if (!monitor.cursorArtifactPath.empty() && (monitor.cursorArtifactWidth <= 0 || monitor.cursorArtifactHeight <= 0))
         return false;
+    if (obj.contains("workspaceWindowCount")) {
+        int count = 0;
+        if (!intValue(obj, "workspaceWindowCount", count, 0, MAX_SESSION_WINDOWS, false) ||
+            !stringValue(obj, "singleWorkspaceWindowClass", monitor.singleWorkspaceWindowClass, MAX_METADATA_STRING_BYTES, false) ||
+            !stringValue(obj, "singleWorkspaceWindowTitle", monitor.singleWorkspaceWindowTitle, MAX_METADATA_STRING_BYTES, false))
+            return false;
+        monitor.workspaceWindowCount = count;
+    }
     out = std::move(monitor);
     return true;
 }
@@ -350,7 +361,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
     for (const auto& mon : session.monitors) {
         if (root["monitors"].size() >= MAX_SESSION_MONITORS)
             break;
-        root["monitors"].push_back(Json{
+        Json monitorJson{
             {"name", boundedString(mon.name, MAX_METADATA_STRING_BYTES)},
             {"geometry", rectJson(mon.logicalGeometry)},
             {"scale", boundedDouble(mon.scale, 0.01, 100.0, 1.0)},
@@ -364,7 +375,13 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"cursorArtifactWidth", boundedDimension(mon.cursorArtifactWidth)},
             {"cursorArtifactHeight", boundedDimension(mon.cursorArtifactHeight)},
             {"cursorArtifactTopDown", mon.cursorArtifactTopDown},
-        });
+        };
+        if (mon.workspaceWindowCount) {
+            monitorJson["workspaceWindowCount"] = std::clamp(*mon.workspaceWindowCount, 0, static_cast<int>(MAX_SESSION_WINDOWS));
+            monitorJson["singleWorkspaceWindowClass"] = boundedString(mon.singleWorkspaceWindowClass, MAX_METADATA_STRING_BYTES);
+            monitorJson["singleWorkspaceWindowTitle"] = boundedString(mon.singleWorkspaceWindowTitle, MAX_METADATA_STRING_BYTES);
+        }
+        root["monitors"].push_back(std::move(monitorJson));
     }
 
     root["windows"] = Json::array();

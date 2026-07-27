@@ -10,6 +10,7 @@
 #include <QRect>
 #include <QString>
 #include <functional>
+#include <optional>
 #include <vector>
 
 class QButtonGroup;
@@ -67,6 +68,9 @@ class CaptureOverlay final : public QMainWindow {
         QString name;
         int     transform = 0;
         bool    focused = false;
+        std::optional<int> workspaceWindowCount;
+        QString singleWorkspaceWindowClass;
+        QString singleWorkspaceWindowTitle;
         hyprcapture::ui::ScreenCornerRadii previewCornerRadii;
     };
 
@@ -176,6 +180,7 @@ class CaptureOverlay final : public QMainWindow {
     WindowArtifact* selectedWindow();
     const WindowArtifact* selectedWindow() const;
     const WindowArtifact* filenameWindow() const;
+    hyprcapture::FilenameMetadata resolvedFilenameMetadata() const;
     bool windowCaptureAvailable() const;
     void updateStatus();
     void relayoutToolbar();
