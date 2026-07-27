@@ -547,38 +547,11 @@ QString compactProcessErrorText(const QByteArray& stderrData, const QByteArray& 
     return error.left(160);
 }
 
-bool hyprctlDispatchOutputHasError(const QByteArray& stderrData, const QByteArray& stdoutData) {
+bool hyprctlOutputHasError(const QByteArray& stderrData, const QByteArray& stdoutData) {
     const QString stderrText = QString::fromUtf8(stderrData).trimmed();
     const QString stdoutText = QString::fromUtf8(stdoutData).trimmed();
     return stderrText.startsWith(QStringLiteral("error:"), Qt::CaseInsensitive) ||
         stdoutText.startsWith(QStringLiteral("error:"), Qt::CaseInsensitive);
-}
-
-DispatchCommandResult dispatchHyprcaptureCommand(const QString& dispatcher, const QString& argument = {}) {
-    const QString hyprctl = hyprcapture::ui::trustedSystemProgram(QStringLiteral("hyprctl"));
-    if (hyprctl.isEmpty() || dispatcher.isEmpty())
-        return {.success = false, .error = QStringLiteral("hyprctl unavailable")};
-
-    QProcess process;
-    process.setProgram(hyprctl);
-    QStringList args{QStringLiteral("dispatch"), dispatcher};
-    if (!argument.isEmpty())
-        args.push_back(argument);
-    process.setArguments(args);
-    process.setProcessEnvironment(hyprcapture::ui::trustedProcessEnvironment());
-    process.start();
-    if (!process.waitForStarted(1000))
-        return {.success = false, .error = QStringLiteral("hyprctl start failed")};
-    if (!process.waitForFinished(5000)) {
-        process.kill();
-        process.waitForFinished(500);
-        return {.success = false, .error = QStringLiteral("hyprctl timeout")};
-    }
-    const QByteArray stderrData = process.readAllStandardError();
-    const QByteArray stdoutData = process.readAllStandardOutput();
-    if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && !hyprctlDispatchOutputHasError(stderrData, stdoutData))
-        return {.success = true};
-    return {.success = false, .error = compactProcessErrorText(stderrData, stdoutData, QStringLiteral("dispatch failed"))};
 }
 
 DispatchCommandResult evalHyprcaptureExpression(const QString& expression) {
@@ -600,7 +573,7 @@ DispatchCommandResult evalHyprcaptureExpression(const QString& expression) {
     }
     const QByteArray stderrData = process.readAllStandardError();
     const QByteArray stdoutData = process.readAllStandardOutput();
-    if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && !hyprctlDispatchOutputHasError(stderrData, stdoutData))
+    if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && !hyprctlOutputHasError(stderrData, stdoutData))
         return {.success = true};
     return {.success = false, .error = compactProcessErrorText(stderrData, stdoutData, QStringLiteral("eval failed"))};
 }
@@ -627,7 +600,7 @@ DispatchCommandResult runHymissionCaptureInputCommand(const QString& action, con
     const QByteArray stdoutData = process.readAllStandardOutput();
     const QString    stdoutText = QString::fromUtf8(stdoutData).trimmed();
     if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && stdoutText.startsWith(QStringLiteral("ok")) &&
-        !hyprctlDispatchOutputHasError(stderrData, stdoutData))
+        !hyprctlOutputHasError(stderrData, stdoutData))
         return {.success = true};
 
     return {.success = false, .error = compactProcessErrorText(stderrData, stdoutData, QStringLiteral("hymission capture input failed"))};
@@ -654,9 +627,6 @@ DispatchCommandResult dispatchRecordingStart(const QString& requestPath) {
     if (requestPath.isEmpty())
         return {.success = false, .error = QStringLiteral("record request missing")};
 
-    const auto legacyResult = dispatchHyprcaptureCommand(QStringLiteral("hyprcapture:record-start"), requestPath);
-    if (legacyResult.success)
-        return legacyResult;
     return evalHyprcaptureLuaFunction(QStringLiteral("record_start"), requestPath);
 }
 
@@ -664,16 +634,10 @@ DispatchCommandResult dispatchWindowCapture(const QString& requestPath) {
     if (requestPath.isEmpty())
         return {.success = false, .error = QStringLiteral("window capture request missing")};
 
-    const auto legacyResult = dispatchHyprcaptureCommand(QStringLiteral("hyprcapture:window-capture"), requestPath);
-    if (legacyResult.success)
-        return legacyResult;
     return evalHyprcaptureLuaFunction(QStringLiteral("window_capture"), requestPath);
 }
 
 DispatchCommandResult dispatchRecordingStop() {
-    const auto legacyResult = dispatchHyprcaptureCommand(QStringLiteral("hyprcapture:record-stop"));
-    if (legacyResult.success)
-        return legacyResult;
     return evalHyprcaptureLuaFunction(QStringLiteral("record_stop"));
 }
 

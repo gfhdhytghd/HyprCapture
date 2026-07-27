@@ -138,7 +138,7 @@ QString compactProcessErrorText(const QByteArray& stderrData, const QByteArray& 
     return error.left(160);
 }
 
-bool hyprctlDispatchOutputHasError(const QByteArray& stderrData, const QByteArray& stdoutData) {
+bool hyprctlOutputHasError(const QByteArray& stderrData, const QByteArray& stdoutData) {
     const QString stderrText = QString::fromUtf8(stderrData).trimmed();
     const QString stdoutText = QString::fromUtf8(stdoutData).trimmed();
     return stderrText.startsWith(QStringLiteral("error:"), Qt::CaseInsensitive) ||
@@ -164,19 +164,9 @@ DispatchCommandResult runHyprctl(const QStringList& args, const QString& fallbac
     }
     const QByteArray stderrData = process.readAllStandardError();
     const QByteArray stdoutData = process.readAllStandardOutput();
-    if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && !hyprctlDispatchOutputHasError(stderrData, stdoutData))
+    if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0 && !hyprctlOutputHasError(stderrData, stdoutData))
         return {.success = true};
     return {.success = false, .error = compactProcessErrorText(stderrData, stdoutData, fallbackError)};
-}
-
-DispatchCommandResult dispatchHyprcaptureCommand(const QString& dispatcher, const QString& argument = {}) {
-    if (dispatcher.isEmpty())
-        return {.success = false, .error = QStringLiteral("dispatcher missing")};
-
-    QStringList args{QStringLiteral("dispatch"), dispatcher};
-    if (!argument.isEmpty())
-        args.push_back(argument);
-    return runHyprctl(args, QStringLiteral("dispatch failed"));
 }
 
 QString luaStringLiteral(const QString& value) {
@@ -202,9 +192,6 @@ DispatchCommandResult dispatchRecordingStart(const QString& requestPath) {
     if (!hyprcapture::ui::isPrivateRuntimeFile(requestPath, MAX_RECORD_REQUEST_BYTES))
         return {.success = false, .error = QStringLiteral("invalid record request")};
 
-    const auto legacyResult = dispatchHyprcaptureCommand(QStringLiteral("hyprcapture:record-start"), requestPath);
-    if (legacyResult.success)
-        return legacyResult;
     return evalHyprcaptureLuaFunction(QStringLiteral("record_start"), requestPath);
 }
 
