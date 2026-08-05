@@ -37,8 +37,8 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <array>
+#include <atomic>
 #include <cerrno>
 #include <cctype>
 #include <chrono>
@@ -181,7 +181,6 @@ struct WindowRenderOptions {
     bool       asyncReadback = false;
     bool       clipBackgroundToWindow = false;
     bool       postprocessAlpha = true;
-    bool       recoverAlphaFromMattes = false;
 };
 
 struct ShadowColorBytes {
@@ -1390,28 +1389,6 @@ void unpremultiplyAlpha(RgbaReadback& readback) {
     }
 }
 
-bool recoverAlphaFromMattes(RgbaReadback& black, const RgbaReadback& white) {
-    if (black.width != white.width || black.height != white.height || black.pixels.size() != white.pixels.size() || black.pixels.empty())
-        return false;
-
-    for (std::size_t i = 0; i + 3 < black.pixels.size(); i += RGBA_BYTES_PER_PIXEL) {
-        std::array<int, 3> transmission{};
-        for (int channel = 0; channel < 3; ++channel)
-            transmission[channel] = std::clamp(static_cast<int>(white.pixels[i + channel]) - static_cast<int>(black.pixels[i + channel]), 0, 255);
-        std::sort(transmission.begin(), transmission.end());
-
-        const int alpha = 255 - transmission[1];
-        black.pixels[i + 3] = static_cast<unsigned char>(alpha);
-        if (alpha == 0) {
-            black.pixels[i] = 0;
-            black.pixels[i + 1] = 0;
-            black.pixels[i + 2] = 0;
-        }
-    }
-
-    return true;
-}
-
 SP<CFramebuffer> createFramebuffer(const std::string& name, int width, int height, DRMFormat preferredFormat = DRM_FORMAT_ABGR8888) {
     if (!g_pHyprRenderer || width <= 0 || height <= 0)
         return {};
@@ -1863,23 +1840,23 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
     const bool previousRenderingSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
 
-    const auto renderIntoFramebuffer = [&](SP<CFramebuffer> targetFramebuffer,
-                                           SP<CFramebuffer> backgroundMatte = {},
-                                           std::optional<CHyprColor> clearColor = std::nullopt) {
+    const auto renderIntoFramebuffer = [&](SP<CFramebuffer> targetFramebuffer, SP<CFramebuffer> backgroundMatte = {}) {
         if (!targetFramebuffer)
             return false;
         ScopedTiming timing("window.render");
         CRegion fakeDamage{0, 0, renderCanvasWidth, renderCanvasHeight};
         g_pHyprOpenGL->makeEGLCurrent();
         g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-        if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, targetFramebuffer)) {
+        targetFramebuffer->setImageDescription(monitor->workBufferImageDescription());
+        if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
             g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
             return false;
         }
 
         g_pHyprRenderer->m_bRenderingSnapshot = true;
         FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
-        g_pHyprRenderer->draw(CClearPassElement::SClearData{clearColor.value_or(options.clearColor)});
+        g_pHyprRenderer->draw(CClearPassElement::SClearData{options.clearColor});
+        g_pHyprRenderer->startRenderPass();
         if (options.backgroundTexture) {
             if (backgroundMatte)
                 renderTextureWithAlphaMatte(options.backgroundTexture, renderCropBox, backgroundMatte);
@@ -1900,20 +1877,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     const int cropY = clampedIntFromDouble(renderCropBox.y);
 
     RgbaReadback readback;
-    if (options.recoverAlphaFromMattes) {
-        // Blur can make a transparent-window render opaque when the target is
-        // cleared transparent. Recover source alpha from the RGB difference
-        // between identical renders over black and white instead.
-        if (options.backgroundTexture || !renderIntoFramebuffer(framebuffer, {}, CHyprColor{0.0, 0.0, 0.0, 1.0}))
-            return {};
-        auto black = readRgbaFramebufferRegion(*framebuffer, 0, 0, framebufferWidth, framebufferHeight);
-        if (black.pixels.empty() || !renderIntoFramebuffer(framebuffer, {}, CHyprColor{1.0, 1.0, 1.0, 1.0}))
-            return {};
-        auto white = readRgbaFramebufferRegion(*framebuffer, 0, 0, framebufferWidth, framebufferHeight);
-        if (!recoverAlphaFromMattes(black, white))
-            return {};
-        readback = std::move(black);
-    } else if (options.backgroundTexture && options.clipBackgroundToWindow) {
+    if (options.backgroundTexture && options.clipBackgroundToWindow) {
         auto& fullMaskFramebuffer = reusableWindowRecordingFullMaskFramebuffer();
         if (!ensureFramebuffer(fullMaskFramebuffer, "hyprcapture-window-full-mask", framebufferWidth, framebufferHeight, drmFormat))
             return {};
@@ -1927,7 +1891,8 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
             g_pHyprOpenGL->makeEGLCurrent();
             g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-            if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, fullMaskFramebuffer)) {
+            fullMaskFramebuffer->setImageDescription(monitor->workBufferImageDescription());
+            if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, fullMaskFramebuffer)) {
                 g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
                 return false;
             }
@@ -1935,6 +1900,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             g_pHyprRenderer->m_bRenderingSnapshot = true;
             FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
             g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
+            g_pHyprRenderer->startRenderPass();
             g_pHyprRenderer->renderWindow(window, monitor, frozenTime, decorate, RENDER_PASS_ALL, false, false);
             g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
 
@@ -1952,11 +1918,9 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         return {};
     }
 
-    if (!options.recoverAlphaFromMattes) {
-        ScopedTiming timing("window.readback");
-        readback = trimToAlphaBounds ? readRgbaFramebufferRegion(*framebuffer, 0, 0, framebufferWidth, framebufferHeight) :
-                                       readRgbaFramebufferRegion(*framebuffer, cropX, cropY, width, height, false, options.asyncReadback);
-    }
+    ScopedTiming timing("window.readback");
+    readback = trimToAlphaBounds ? readRgbaFramebufferRegion(*framebuffer, 0, 0, framebufferWidth, framebufferHeight) :
+                                   readRgbaFramebufferRegion(*framebuffer, cropX, cropY, width, height, false, options.asyncReadback);
     if (readback.pixels.empty())
         return {};
 
@@ -1997,9 +1961,7 @@ bool renderWindowArtifact(const PHLWINDOW& window,
                           int& height,
                           CBox& artifactBox,
                           ArtifactBudget& budget) {
-    WindowRenderOptions options;
-    options.recoverAlphaFromMattes = true;
-    auto readback = renderWindowArtifactReadback(window, monitor, frozenTime, decorate, width, height, artifactBox, &budget, true, options);
+    auto readback = renderWindowArtifactReadback(window, monitor, frozenTime, decorate, width, height, artifactBox, &budget, true);
     if (decorate && !readback.pixels.empty()) {
         expandReadbackToShadowBounds(readback, artifactBox, renderedWindowGoalMainSurfaceBox(window), window);
         repairTransparentShadow(readback, artifactBox, renderedWindowGoalMainSurfaceBox(window), window);
