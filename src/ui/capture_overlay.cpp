@@ -1166,6 +1166,41 @@ void reconstructRealWindowBackground(QImage& background, const QImage& artifact,
     }
 }
 
+void clipWindowBackgroundToFrame(QImage& background,
+                                 const QRect& capturedLogicalGeometry,
+                                 const QRect& visibleLogicalGeometry,
+                                 double rounding,
+                                 double roundingPower) {
+    if (background.isNull() || !capturedLogicalGeometry.isValid() || !visibleLogicalGeometry.isValid())
+        return;
+
+    const QRect frame = logicalRectToImageRect(visibleLogicalGeometry, capturedLogicalGeometry, background.size());
+    if (!frame.isValid()) {
+        background.fill(Qt::transparent);
+        return;
+    }
+
+    const double scaleX = static_cast<double>(background.width()) / std::max(1, capturedLogicalGeometry.width());
+    const double scaleY = static_cast<double>(background.height()) / std::max(1, capturedLogicalGeometry.height());
+    const double radius = std::max(0.0, rounding) * std::min(scaleX, scaleY);
+
+    QImage mask = boundedImage(background.size(), QImage::Format_ARGB32_Premultiplied);
+    if (mask.isNull()) {
+        background.fill(Qt::transparent);
+        return;
+    }
+    mask.fill(Qt::transparent);
+    {
+        QPainter maskPainter(&mask);
+        maskPainter.setRenderHint(QPainter::Antialiasing, true);
+        maskPainter.fillPath(roundedWindowFramePath(QRectF(frame), radius, roundingPower), Qt::white);
+    }
+
+    QPainter backgroundPainter(&background);
+    backgroundPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+    backgroundPainter.drawImage(QPoint(0, 0), mask);
+}
+
 int transparentPixelsInRow(const QImage& image, const QRect& span, int y) {
     if (image.format() != QImage::Format_RGBA8888 || y < 0 || y >= image.height())
         return 0;
@@ -3569,6 +3604,11 @@ QImage CaptureOverlay::renderResultImage() {
             paintedBackground = true;
         }
         if (paintedBackground) {
+            clipWindowBackgroundToFrame(background,
+                                        logicalSource,
+                                        windowArtifact->visibleGeometry,
+                                        windowArtifact->rounding,
+                                        windowArtifact->roundingPower);
             painter.drawImage(QPoint(0, 0), background);
         }
 
