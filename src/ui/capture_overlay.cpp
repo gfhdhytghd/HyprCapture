@@ -91,10 +91,6 @@ class InlineSelect final : public QWidget {
 namespace {
 
 InlineSelect* g_openSelect = nullptr;
-constexpr int kWindowBackgroundMinAlpha = 32;
-constexpr int kWindowShadowMaxRgb = 32;
-constexpr int kWindowShadowMaxAlpha = 223;
-constexpr int kWindowBackgroundInteriorRadius = 1;
 constexpr double kWindowFrameFallbackRadius = 8.0;
 constexpr int kOverlayFadeDurationMs = 100;
 constexpr int kModeIconSize = 24;
@@ -1166,72 +1162,6 @@ void reconstructRealWindowBackground(QImage& background, const QImage& artifact,
                 dstPx[channel] = static_cast<uchar>(std::clamp(value, 0, 255));
             }
             dstPx[3] = 255;
-        }
-    }
-}
-
-bool isWindowContentPixel(const uchar* px) {
-    const int alpha = px[3];
-    if (alpha < kWindowBackgroundMinAlpha)
-        return false;
-
-    const int maxRgb = std::max({px[0], px[1], px[2]});
-    return maxRgb > kWindowShadowMaxRgb || alpha > kWindowShadowMaxAlpha;
-}
-
-bool isWindowContentPixelAt(const QImage& artifact, int x, int y) {
-    if (x < 0 || x >= artifact.width() || y < 0 || y >= artifact.height())
-        return false;
-
-    const auto* px = artifact.constScanLine(y) + static_cast<qsizetype>(x) * 4;
-    return isWindowContentPixel(px);
-}
-
-bool isWindowInteriorPixel(const QImage& artifact, int x, int y) {
-    if (!isWindowContentPixelAt(artifact, x, y))
-        return false;
-
-    for (int dy = -kWindowBackgroundInteriorRadius; dy <= kWindowBackgroundInteriorRadius; ++dy) {
-        for (int dx = -kWindowBackgroundInteriorRadius; dx <= kWindowBackgroundInteriorRadius; ++dx) {
-            if (!isWindowContentPixelAt(artifact, x + dx, y + dy))
-                return false;
-        }
-    }
-
-    return true;
-}
-
-void applyWindowContentAlphaMask(QImage& background, const QImage& artifact, const QRect& artifactSource) {
-    if (background.format() != QImage::Format_RGBA8888 || artifact.format() != QImage::Format_RGBA8888 || background.isNull() || artifact.isNull())
-        return;
-
-    for (int y = 0; y < background.height(); ++y) {
-        auto* dst = background.scanLine(y);
-        const int sy = artifactSource.y() + y;
-        if (sy < 0 || sy >= artifact.height()) {
-            std::fill(dst, dst + static_cast<qsizetype>(background.width()) * 4, 0);
-            continue;
-        }
-
-        for (int x = 0; x < background.width(); ++x) {
-            auto* dstPx = dst + static_cast<qsizetype>(x) * 4;
-            const int sx = artifactSource.x() + x;
-            if (sx < 0 || sx >= artifact.width()) {
-                dstPx[0] = 0;
-                dstPx[1] = 0;
-                dstPx[2] = 0;
-                dstPx[3] = 0;
-                continue;
-            }
-
-            if (!isWindowInteriorPixel(artifact, sx, sy)) {
-                dstPx[0] = 0;
-                dstPx[1] = 0;
-                dstPx[2] = 0;
-                dstPx[3] = 0;
-            } else {
-                dstPx[3] = 255;
-            }
         }
     }
 }
@@ -3639,7 +3569,6 @@ QImage CaptureOverlay::renderResultImage() {
             paintedBackground = true;
         }
         if (paintedBackground) {
-            applyWindowContentAlphaMask(background, maskArtifact, artifactSource);
             painter.drawImage(QPoint(0, 0), background);
         }
 
