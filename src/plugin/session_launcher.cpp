@@ -1,6 +1,7 @@
 #include "plugin/session_launcher.hpp"
 
 #include "plugin/artifact_capture.hpp"
+#include "shared/process_environment.hpp"
 #include "shared/protocol.hpp"
 #include "shared/trusted_path.hpp"
 
@@ -145,18 +146,6 @@ std::string trustedProgramPath(std::string_view name) {
     return {};
 }
 
-bool allowEnvironmentName(std::string_view name) {
-    static constexpr std::string_view allowed[] = {
-        "HOME", "USER", "LOGNAME", "LANG",
-        "XDG_RUNTIME_DIR", "XDG_CURRENT_DESKTOP", "XDG_SESSION_TYPE",
-        "WAYLAND_DISPLAY", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS",
-        "QT_QPA_PLATFORM", "QT_QPA_PLATFORMTHEME", "QT_SCALE_FACTOR",
-        "QT_AUTO_SCREEN_SCALE_FACTOR", "QT_ENABLE_HIGHDPI_SCALING",
-        "HYPRCAPTURE_TIMING", "HYPRLAND_INSTANCE_SIGNATURE",
-    };
-    return std::find(std::begin(allowed), std::end(allowed), name) != std::end(allowed) || name.starts_with("LC_");
-}
-
 std::vector<std::string> childEnvironment() {
     std::vector<std::string> env;
     std::string path = "PATH=";
@@ -171,7 +160,7 @@ std::vector<std::string> childEnvironment() {
         const auto        separator = entry.find('=');
         if (separator == std::string::npos)
             continue;
-        if (allowEnvironmentName(std::string_view(entry).substr(0, separator)))
+        if (desktopEnvironmentNameAllowed(std::string_view(entry).substr(0, separator)))
             env.push_back(entry);
     }
     return env;

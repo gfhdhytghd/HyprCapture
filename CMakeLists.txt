@@ -80,6 +80,7 @@ add_library(hyprcapture SHARED
   src/plugin/session_launcher.cpp
   src/plugin/timing.cpp
   src/shared/config.cpp
+  src/shared/process_environment.cpp
   src/shared/protocol.cpp
   src/shared/rgba_transform.cpp
   src/shared/trusted_path.cpp
@@ -98,6 +99,7 @@ add_executable(hyprcapture-ui
   src/ui/result_thumbnail.cpp
   src/ui/watermark.cpp
   src/shared/config.cpp
+  src/shared/process_environment.cpp
   src/shared/protocol.cpp
   src/shared/trusted_path.cpp
 )
@@ -131,11 +133,19 @@ if(BUILD_TESTING)
   add_executable(hyprcapture-security-test
     tests/security_test.cpp
     src/ui/clipboard_utils.cpp
+    src/shared/process_environment.cpp
     src/shared/trusted_path.cpp
   )
   target_include_directories(hyprcapture-security-test PRIVATE src)
   target_link_libraries(hyprcapture-security-test PRIVATE Qt6::Core Qt6::Gui)
   add_test(NAME hyprcapture-security-test COMMAND hyprcapture-security-test)
+
+  add_executable(hyprcapture-process-environment-test
+    tests/process_environment_test.cpp
+    src/shared/process_environment.cpp
+  )
+  target_include_directories(hyprcapture-process-environment-test PRIVATE src)
+  add_test(NAME hyprcapture-process-environment-test COMMAND hyprcapture-process-environment-test)
 
   add_executable(hyprcapture-overlay-paint-test
     tests/overlay_paint_test.cpp

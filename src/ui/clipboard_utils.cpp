@@ -1,4 +1,5 @@
 #include "ui/clipboard_utils.hpp"
+#include "shared/process_environment.hpp"
 #include "shared/trusted_path.hpp"
 
 #include <QBuffer>
@@ -19,7 +20,6 @@
 #include <QPixmap>
 #include <QProcess>
 #include <QProcessEnvironment>
-#include <QSet>
 #include <QUrl>
 
 #include <atomic>
@@ -157,32 +157,6 @@ bool urlsWithinLimit(const QList<QUrl>& urls) {
         totalBytes += urlBytes;
     }
     return true;
-}
-
-bool allowEnvironmentName(const QString& name) {
-    static const QSet<QString> allowed{
-        QStringLiteral("HOME"),
-        QStringLiteral("USER"),
-        QStringLiteral("LOGNAME"),
-        QStringLiteral("LANG"),
-        QStringLiteral("XDG_RUNTIME_DIR"),
-        QStringLiteral("XDG_CURRENT_DESKTOP"),
-        QStringLiteral("XDG_SESSION_TYPE"),
-        QStringLiteral("XDG_DATA_HOME"),
-        QStringLiteral("XDG_CONFIG_HOME"),
-        QStringLiteral("XDG_DATA_DIRS"),
-        QStringLiteral("DESKTOP_SESSION"),
-        QStringLiteral("WAYLAND_DISPLAY"),
-        QStringLiteral("DISPLAY"),
-        QStringLiteral("DBUS_SESSION_BUS_ADDRESS"),
-        QStringLiteral("QT_QPA_PLATFORM"),
-        QStringLiteral("QT_SCALE_FACTOR"),
-        QStringLiteral("QT_AUTO_SCREEN_SCALE_FACTOR"),
-        QStringLiteral("QT_ENABLE_HIGHDPI_SCALING"),
-        QStringLiteral("HYPRCAPTURE_TIMING"),
-        QStringLiteral("HYPRLAND_INSTANCE_SIGNATURE"),
-    };
-    return allowed.contains(name) || name.startsWith(QStringLiteral("LC_"));
 }
 
 bool copyBytesWithWlCopy(const QByteArray& bytes, const QString& mimeType) {
@@ -419,7 +393,7 @@ QProcessEnvironment trustedProcessEnvironment() {
     directories.removeDuplicates();
     env.insert(QStringLiteral("PATH"), directories.join(QLatin1Char(':')));
     for (const QString& name : source.keys()) {
-        if (allowEnvironmentName(name))
+        if (desktopEnvironmentNameAllowed(name.toStdString()))
             env.insert(name, source.value(name));
     }
     return env;
