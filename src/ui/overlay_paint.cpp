@@ -170,6 +170,72 @@ QPainterPath screenPreviewPath(const QRectF& rect, const ScreenCornerRadii& radi
     return path;
 }
 
+std::vector<int> orderedWindowSelectionCandidates(const std::vector<WindowSelectionCandidate>& windows, const QRect& output) {
+    std::vector<WindowSelectionCandidate> filtered;
+    filtered.reserve(windows.size());
+    for (const auto& window : windows) {
+        if (window.index >= 0 && window.geometry.isValid() && output.isValid() && window.geometry.intersects(output))
+            filtered.push_back(window);
+    }
+
+    std::stable_sort(filtered.begin(), filtered.end(), [](const auto& left, const auto& right) {
+        if (left.zIndex != right.zIndex)
+            return left.zIndex > right.zIndex;
+        return left.index > right.index;
+    });
+
+    std::vector<int> ordered;
+    ordered.reserve(filtered.size());
+    for (const auto& window : filtered)
+        ordered.push_back(window.index);
+    return ordered;
+}
+
+int windowSelectionStartPosition(const std::vector<int>& orderedCandidates, int focusedWindowIndex) {
+    if (orderedCandidates.empty())
+        return -1;
+
+    const auto focused = std::find(orderedCandidates.begin(), orderedCandidates.end(), focusedWindowIndex);
+    return focused == orderedCandidates.end() ? 0 : static_cast<int>(std::distance(orderedCandidates.begin(), focused));
+}
+
+int stepWindowSelectionPosition(int currentPosition, int steps, int candidateCount) {
+    if (candidateCount <= 0)
+        return -1;
+    const int boundedCurrent = std::clamp(currentPosition, 0, candidateCount - 1);
+    return std::clamp(boundedCurrent + steps, 0, candidateCount - 1);
+}
+
+int consumeWindowWheelSteps(const QPoint& angleDelta, const QPoint& pixelDelta, bool inverted, WindowWheelStepState& state) {
+    const bool useAngle = angleDelta.y() != 0;
+    const QPoint delta = useAngle ? angleDelta : pixelDelta;
+    if (delta.y() == 0 || std::abs(delta.x()) > std::abs(delta.y()))
+        return 0;
+
+    const auto source = useAngle ? WindowWheelDeltaSource::Angle : WindowWheelDeltaSource::Pixel;
+    if (state.source != source) {
+        state.remainder = 0.0;
+        state.source = source;
+    }
+
+    double vertical = static_cast<double>(delta.y());
+    if (inverted)
+        vertical = -vertical;
+    if (state.remainder != 0.0 && std::signbit(state.remainder) != std::signbit(vertical))
+        state.remainder = 0.0;
+    state.remainder += vertical;
+
+    const double threshold = useAngle ? 120.0 : 40.0;
+    const int physicalSteps = static_cast<int>(state.remainder / threshold);
+    if (physicalSteps == 0)
+        return 0;
+
+    state.remainder -= physicalSteps * threshold;
+    // Qt reports wheel-up as positive. Candidate positions grow toward the
+    // bottom of the window stack, so wheel-down produces positive steps.
+    return -physicalSteps;
+}
+
 void paintClippedImage(QPainter& painter, const QRect& clip, const QRect& destination, const QImage& image) {
     if (!clip.isValid() || !destination.isValid() || image.isNull())
         return;

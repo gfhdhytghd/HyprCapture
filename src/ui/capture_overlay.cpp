@@ -49,6 +49,7 @@
 #include <QVBoxLayout>
 #include <QTimer>
 #include <QTransform>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -1635,6 +1636,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.address = qString(info.address);
         artifact.title = qString(info.title);
         artifact.appClass = qString(info.appClass);
+        artifact.zIndex = info.zIndex;
         artifact.focused = info.focused;
         artifact.fullscreen = info.fullscreen;
         artifact.visibleGeometry = protocolRect(info.visibleGeometry);
@@ -2121,8 +2123,10 @@ void CaptureOverlay::beginPendingConfirm(hyprcapture::CaptureMode mode) {
     m_pendingConfirm = true;
     m_confirmDragMode = ConfirmDragMode::None;
     m_dragging = false;
-    if (mode != hyprcapture::CaptureMode::Window)
+    if (mode != hyprcapture::CaptureMode::Window) {
         m_selectedWindowIndex = -1;
+        resetWindowCycle();
+    }
     updateToolbarControlsForMode();
     updateStatus();
     update();
@@ -2133,6 +2137,7 @@ void CaptureOverlay::clearPendingConfirm() {
     m_confirmDragMode = ConfirmDragMode::None;
     m_dragging = false;
     m_selectedWindowIndex = -1;
+    resetWindowCycle();
     setCursor(Qt::CrossCursor);
     updateConfirmButtonVisibility();
 }
@@ -2746,6 +2751,7 @@ void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
                 if (regionSelectionValid(normalizedSelection())) {
                     m_mode = hyprcapture::CaptureMode::Region;
                     m_selectedWindowIndex = -1;
+                    resetWindowCycle();
                     updateToolbarControlsForMode();
                     updateConfirmCursor(event->pos());
                 }
@@ -2803,6 +2809,7 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
                     m_mode = hyprcapture::CaptureMode::Region;
                     m_confirmDragMode = ConfirmDragMode::None;
                     m_selectedWindowIndex = -1;
+                    resetWindowCycle();
                     updateToolbarControlsForMode();
                     updateConfirmCursor(event->pos());
                     updateStatus();
@@ -2812,7 +2819,8 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
                 m_confirmDragMode = ConfirmDragMode::None;
             }
 
-            const int index = hoveredWindowIndex();
+            const int index = rawHoveredWindowIndex();
+            resetWindowCycle();
             if (index >= 0)
                 m_selectedWindowIndex = index;
             if (selectedWindowUsesOverviewSelection()) {
@@ -2837,6 +2845,7 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         const QRect selection = normalizedSelection().intersected(regionCaptureBounds());
         if (selection.width() > 4 && selection.height() > 4) {
             m_mode = hyprcapture::CaptureMode::Region;
+            resetWindowCycle(true);
             if (confirmBeforeCaptureEnabled())
                 beginPendingConfirm(hyprcapture::CaptureMode::Region);
             else
@@ -2911,6 +2920,81 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         else
             finishCapture();
     }
+}
+
+void CaptureOverlay::wheelEvent(QWheelEvent* event) {
+    if (!requestActivation()) {
+        event->accept();
+        return;
+    }
+
+    const QPoint localPosition = event->position().toPoint();
+    if (m_toolbar && m_toolbar->geometry().contains(localPosition)) {
+        QMainWindow::wheelEvent(event);
+        return;
+    }
+
+    rememberCursorLocalPosition(event->position());
+    if (!windowWheelSelectionEnabled()) {
+        QMainWindow::wheelEvent(event);
+        return;
+    }
+
+    const QPoint angleDelta = event->angleDelta();
+    const QPoint pixelDelta = event->pixelDelta();
+    const QPoint effectiveDelta = angleDelta.y() != 0 ? angleDelta : pixelDelta;
+    if (effectiveDelta.y() == 0 || std::abs(effectiveDelta.x()) > std::abs(effectiveDelta.y())) {
+        QMainWindow::wheelEvent(event);
+        return;
+    }
+
+    const auto candidates = currentMonitorWindowCandidates();
+    if (candidates.size() < 2) {
+        resetWindowCycle(m_windowCycleActive);
+        QMainWindow::wheelEvent(event);
+        return;
+    }
+
+    if (candidates != m_windowCycleCandidates) {
+        const bool clearSelectedWindow = m_windowCycleActive;
+        resetWindowCycle(clearSelectedWindow);
+        m_windowCycleCandidates = candidates;
+    }
+    if (event->phase() == Qt::ScrollBegin)
+        m_windowWheelStepState = {};
+
+    const int steps = hyprcapture::ui::consumeWindowWheelSteps(angleDelta, pixelDelta, event->inverted(), m_windowWheelStepState);
+    event->accept();
+    if (steps == 0)
+        return;
+
+    if (!m_windowCycleActive) {
+        int focusedWindowIndex = -1;
+        for (const int candidate : m_windowCycleCandidates) {
+            if (candidate >= 0 && candidate < static_cast<int>(m_windowArtifacts.size()) &&
+                m_windowArtifacts[static_cast<std::size_t>(candidate)].focused) {
+                focusedWindowIndex = candidate;
+                break;
+            }
+        }
+        m_windowCyclePosition =
+            hyprcapture::ui::windowSelectionStartPosition(m_windowCycleCandidates, focusedWindowIndex);
+        m_windowCycleActive = m_windowCyclePosition >= 0;
+    }
+
+    m_windowCyclePosition = hyprcapture::ui::stepWindowSelectionPosition(
+        m_windowCyclePosition, steps, static_cast<int>(m_windowCycleCandidates.size()));
+    const int targetIndex = windowCycleTargetIndex();
+    if (targetIndex < 0) {
+        resetWindowCycle(true);
+        updateStatus();
+        update();
+        return;
+    }
+
+    m_selectedWindowIndex = targetIndex;
+    updateStatus();
+    update();
 }
 
 void CaptureOverlay::keyPressEvent(QKeyEvent* event) {
@@ -3158,13 +3242,19 @@ double CaptureOverlay::windowFrameRadius(const WindowArtifact& window) const {
     return std::max(0.0, window.rounding + border - correction);
 }
 
-int CaptureOverlay::hoveredWindowIndex() const {
+int CaptureOverlay::rawHoveredWindowIndex() const {
     const QPoint global = cursorLogicalPosition();
-    for (int i = static_cast<int>(m_windowArtifacts.size()) - 1; i >= 0; --i) {
-        if (windowSelectionGeometry(m_windowArtifacts[static_cast<std::size_t>(i)]).contains(global))
-            return i;
+    for (const int candidate : currentMonitorWindowCandidates()) {
+        if (candidate >= 0 && candidate < static_cast<int>(m_windowArtifacts.size()) &&
+            windowSelectionGeometry(m_windowArtifacts[static_cast<std::size_t>(candidate)]).contains(global))
+            return candidate;
     }
     return -1;
+}
+
+int CaptureOverlay::hoveredWindowIndex() const {
+    const int cycled = windowCycleTargetIndex();
+    return cycled >= 0 ? cycled : rawHoveredWindowIndex();
 }
 
 const CaptureOverlay::WindowArtifact* CaptureOverlay::hoveredWindow() const {
@@ -3306,6 +3396,7 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         capturedWindow.address = qString(info.address);
         capturedWindow.title = qString(info.title);
         capturedWindow.appClass = qString(info.appClass);
+        capturedWindow.zIndex = window.zIndex;
         capturedWindow.focused = info.focused;
         capturedWindow.fullscreen = info.fullscreen;
         capturedWindow.visibleGeometry = protocolRect(info.visibleGeometry);
@@ -3338,6 +3429,62 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
 
 bool CaptureOverlay::windowCaptureAvailable() const {
     return !m_windowArtifacts.empty();
+}
+
+bool CaptureOverlay::windowWheelSelectionEnabled() const {
+    if (pendingConfirmActive())
+        return m_mode == hyprcapture::CaptureMode::Window;
+    return m_mode == hyprcapture::CaptureMode::Window ||
+        (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen);
+}
+
+std::vector<int> CaptureOverlay::currentMonitorWindowCandidates() const {
+    std::vector<hyprcapture::ui::WindowSelectionCandidate> windows;
+    windows.reserve(m_windowArtifacts.size());
+    for (std::size_t i = 0; i < m_windowArtifacts.size(); ++i) {
+        const auto& window = m_windowArtifacts[i];
+        windows.push_back({
+            .index = static_cast<int>(i),
+            .geometry = windowSelectionGeometry(window),
+            .zIndex = window.zIndex,
+        });
+    }
+    return hyprcapture::ui::orderedWindowSelectionCandidates(windows, m_overlayLogicalGeometry);
+}
+
+int CaptureOverlay::windowCycleTargetIndex() const {
+    if (!m_windowCycleActive || m_windowCyclePosition < 0 ||
+        m_windowCyclePosition >= static_cast<int>(m_windowCycleCandidates.size()))
+        return -1;
+    const int index = m_windowCycleCandidates[static_cast<std::size_t>(m_windowCyclePosition)];
+    return index >= 0 && index < static_cast<int>(m_windowArtifacts.size()) ? index : -1;
+}
+
+void CaptureOverlay::resetWindowCycle(bool clearSelectedWindow) {
+    if (clearSelectedWindow)
+        m_selectedWindowIndex = -1;
+    m_windowCycleActive = false;
+    m_windowCyclePosition = -1;
+    m_windowCycleCandidates.clear();
+    m_windowWheelStepState = {};
+}
+
+QString CaptureOverlay::windowCycleStatusText() const {
+    const int index = windowCycleTargetIndex();
+    if (!m_status || index < 0 || m_windowCycleCandidates.size() < 2)
+        return {};
+
+    const auto& window = m_windowArtifacts[static_cast<std::size_t>(index)];
+    QString title = window.title.trimmed();
+    if (title.isEmpty())
+        title = window.appClass.trimmed();
+    if (title.isEmpty())
+        title = QStringLiteral("unknown");
+
+    const QString prefix = QStringLiteral("%1/%2 · ").arg(m_windowCyclePosition + 1).arg(m_windowCycleCandidates.size());
+    const int availableWidth = std::clamp(width() / 3, 120, 320);
+    const int titleWidth = std::max(60, availableWidth - m_status->fontMetrics().horizontalAdvance(prefix));
+    return prefix + m_status->fontMetrics().elidedText(title, Qt::ElideRight, titleWidth);
 }
 
 void CaptureOverlay::updateStatus() {
@@ -3390,6 +3537,8 @@ void CaptureOverlay::updateStatus() {
             setStatusText("choose window");
         } else if (m_mode == hyprcapture::CaptureMode::Region && !regionSelectionValid(normalizedSelection())) {
             setStatusText("choose area");
+        } else if (const QString cycleStatus = windowCycleStatusText(); !cycleStatus.isEmpty()) {
+            setStatusText(cycleStatus);
         } else {
             setStatusText(QString{});
         }
@@ -3399,6 +3548,12 @@ void CaptureOverlay::updateStatus() {
     }
 
     updateConfirmButtonVisibility();
+
+    if (const QString cycleStatus = windowCycleStatusText(); !cycleStatus.isEmpty()) {
+        setStatusText(cycleStatus);
+        relayoutToolbar();
+        return;
+    }
 
     if (m_mode != hyprcapture::CaptureMode::Window) {
         setStatusText(QString{});

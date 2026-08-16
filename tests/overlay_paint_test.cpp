@@ -58,6 +58,38 @@ int main(int argc, char** argv) {
                 QRect(900, 100, 300, 500),
             "ordinary cross-output outline remains available on adjacent outputs");
 
+    const std::vector<hyprcapture::ui::WindowSelectionCandidate> windowCandidates{
+        {.index = 0, .geometry = QRect(100, 100, 300, 300), .zIndex = 1},
+        {.index = 1, .geometry = QRect(120, 120, 300, 300), .zIndex = 9},
+        {.index = 2, .geometry = QRect(1100, 100, 300, 300), .zIndex = 12},
+        {.index = 3, .geometry = QRect(900, 100, 300, 300), .zIndex = 5},
+        {.index = 4, .geometry = QRect{}, .zIndex = 20},
+    };
+    const auto orderedCandidates =
+        hyprcapture::ui::orderedWindowSelectionCandidates(windowCandidates, QRect(0, 0, 1000, 800));
+    require(orderedCandidates == std::vector<int>({1, 3, 0}), "current-output candidates follow descending z order");
+    require(hyprcapture::ui::windowSelectionStartPosition(orderedCandidates, 3) == 1, "focused candidate is the cycle start");
+    require(hyprcapture::ui::windowSelectionStartPosition(orderedCandidates, 2) == 0, "off-output focus falls back to topmost candidate");
+    require(hyprcapture::ui::windowSelectionStartPosition({}, 3) == -1, "empty candidate list has no cycle start");
+    require(hyprcapture::ui::stepWindowSelectionPosition(1, 1, 3) == 2, "wheel down moves deeper in the stack");
+    require(hyprcapture::ui::stepWindowSelectionPosition(1, -1, 3) == 0, "wheel up moves toward the top of the stack");
+    require(hyprcapture::ui::stepWindowSelectionPosition(0, -4, 3) == 0, "top of stack does not wrap");
+    require(hyprcapture::ui::stepWindowSelectionPosition(2, 4, 3) == 2, "bottom of stack does not wrap");
+    require(hyprcapture::ui::stepWindowSelectionPosition(0, 1, 0) == -1, "empty stack cannot be stepped");
+
+    hyprcapture::ui::WindowWheelStepState wheelState;
+    require(hyprcapture::ui::consumeWindowWheelSteps(QPoint(0, -60), {}, false, wheelState) == 0, "partial angle delta is accumulated");
+    require(hyprcapture::ui::consumeWindowWheelSteps(QPoint(0, -60), {}, false, wheelState) == 1, "angle wheel down selects a deeper window");
+    require(hyprcapture::ui::consumeWindowWheelSteps(QPoint(0, 120), {}, false, wheelState) == -1, "angle direction change resets the remainder");
+    require(hyprcapture::ui::consumeWindowWheelSteps(QPoint(0, -240), {}, true, wheelState) == -2, "inverted angle scrolling reverses selection");
+    require(hyprcapture::ui::consumeWindowWheelSteps(QPoint(160, 80), {}, false, wheelState) == 0, "horizontal-dominant wheel input is ignored");
+
+    wheelState = {};
+    require(hyprcapture::ui::consumeWindowWheelSteps({}, QPoint(0, -20), false, wheelState) == 0, "partial pixel delta is accumulated");
+    require(hyprcapture::ui::consumeWindowWheelSteps({}, QPoint(0, -20), false, wheelState) == 1, "pixel wheel down selects a deeper window");
+    require(hyprcapture::ui::consumeWindowWheelSteps(QPoint(0, -120), QPoint(0, 80), false, wheelState) == 1,
+            "angle delta takes precedence and resets pixel accumulation");
+
     require(hyprcapture::ui::mapLogicalRectToPixels(QRect(110, 55, 20, 10), QRect(100, 50, 200, 100), QRect(0, 0, 400, 200)) ==
                 QRect(20, 10, 40, 20),
             "HiDPI cursor layer mapping");

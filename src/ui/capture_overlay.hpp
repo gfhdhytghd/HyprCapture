@@ -21,6 +21,7 @@ class QPainter;
 class QPushButton;
 class QResizeEvent;
 class QShowEvent;
+class QWheelEvent;
 class QPropertyAnimation;
 class QScreen;
 class InlineSelect;
@@ -55,6 +56,7 @@ class CaptureOverlay final : public QMainWindow {
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
     void keyPressEvent(QKeyEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
 
@@ -87,6 +89,7 @@ class CaptureOverlay final : public QMainWindow {
         QString address;
         QString title;
         QString appClass;
+        int     zIndex = 0;
         bool    focused = false;
         bool    fullscreen = false;
     };
@@ -174,6 +177,12 @@ class CaptureOverlay final : public QMainWindow {
     void endHymissionCaptureInputSuppression();
     double windowFrameRadius(const WindowArtifact& window) const;
     bool hydrateWindowArtifact(WindowArtifact& window);
+    bool windowWheelSelectionEnabled() const;
+    std::vector<int> currentMonitorWindowCandidates() const;
+    int windowCycleTargetIndex() const;
+    void resetWindowCycle(bool clearSelectedWindow = false);
+    QString windowCycleStatusText() const;
+    int rawHoveredWindowIndex() const;
     int hoveredWindowIndex() const;
     WindowArtifact* hoveredWindow();
     const WindowArtifact* hoveredWindow() const;
@@ -240,6 +249,10 @@ class CaptureOverlay final : public QMainWindow {
     int          m_sessionMonitorCount = 0;
     int          m_sessionWindowCount = 0;
     int          m_selectedWindowIndex = -1;
+    bool         m_windowCycleActive = false;
+    int          m_windowCyclePosition = -1;
+    std::vector<int> m_windowCycleCandidates;
+    hyprcapture::ui::WindowWheelStepState m_windowWheelStepState;
     std::vector<MonitorArtifact> m_monitorArtifacts;
     std::vector<WindowArtifact>  m_windowArtifacts;
 };

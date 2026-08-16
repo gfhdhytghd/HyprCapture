@@ -11,7 +11,7 @@ authors = ["wilf"]
 output = "build-hyprpm/libhyprcapture.so"
 build = [
     "cmake -S . -B build-hyprpm -DCMAKE_BUILD_TYPE=Release",
-    "cmake --build build-hyprpm",
+    "cmake --build build-hyprpm --parallel 8",
     "ctest --test-dir build-hyprpm --output-on-failure",
     "install -Dm755 build-hyprpm/hyprcapture-ui \"$HOME/.local/bin/hyprcapture-ui\""
 ]

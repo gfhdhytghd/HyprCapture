@@ -224,8 +224,8 @@ Use lowercase `s` for `SUPER + s`. In Lua config key strings, uppercase `S` mean
 
 - Region mode: drag a rectangle, then release or press Enter.
 - Fullscreen mode: captures according to `fullscreen_scope`.
-- Window mode: hover a window and press Enter or click it.
-- Fusion mode: the toolbar keeps the fullscreen action and configuration controls; drag anywhere to capture a region, or single-click a window to capture that window.
+- Window mode: hover a window and press Enter or click it. Scroll down to select a lower window on the pointer's current monitor, or scroll up to move back toward the top; selection stops at each end of the stack.
+- Fusion mode: the toolbar keeps the fullscreen action and configuration controls; drag anywhere to capture a region, single-click a window to capture that window, or use the same wheel selection before clicking. A region drag still takes precedence over a wheel-selected window.
 - Esc cancels the helper.
 - The toolbar is anchored near the bottom of the screen and only shows controls relevant to the active mode.
 
