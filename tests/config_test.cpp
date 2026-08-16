@@ -41,6 +41,7 @@ int main() {
     require(parseCaptureMode("bad", CaptureMode::Window) == CaptureMode::Window, "mode fallback");
     require(!CaptureDefaults{}.confirmBeforeCapture, "confirm before capture default");
     require(CaptureDefaults{}.dynamicWindowMetadata, "dynamic window metadata default");
+    require(CaptureDefaults{}.windowWheelScroll, "window wheel scroll default");
     require(CaptureDefaults{}.windowWheelScope == WindowWheelScope::Workspace, "window wheel scope default");
     require(CaptureDefaults{}.fullscreenPreviewRounding == "auto", "fullscreen preview rounding default");
 
@@ -151,6 +152,7 @@ int main() {
     session.defaults.fushionMode = true;
     session.defaults.captureFullscreenClientsAsMonitor = true;
     session.defaults.dynamicWindowMetadata = false;
+    session.defaults.windowWheelScroll = false;
     session.defaults.windowWheelScope = WindowWheelScope::UnderCursor;
     session.defaults.fullscreenPreviewRounding = "27";
     session.defaults.thumbnailMonitor = "DP-2";
@@ -202,6 +204,7 @@ int main() {
     require(json.find("\"confirmBeforeCapture\":true") != std::string::npos, "confirm before capture json");
     require(json.find("\"captureFullscreenClientsAsMonitor\":true") != std::string::npos, "fullscreen client behavior json");
     require(json.find("\"dynamicWindowMetadata\":false") != std::string::npos, "dynamic window metadata json");
+    require(json.find("\"windowWheelScroll\":false") != std::string::npos, "window wheel scroll json");
     require(json.find("\"windowWheelScope\":\"under-cursor\"") != std::string::npos, "window wheel scope json");
     require(json.find("\"fullscreenPreviewRounding\":\"27\"") != std::string::npos, "fullscreen preview rounding json");
     require(json.find("\"thumbnailMonitor\":\"DP-2\"") != std::string::npos, "thumbnail monitor json");
@@ -242,6 +245,7 @@ int main() {
     require(decoded->defaults.confirmBeforeCapture, "decoded confirm before capture");
     require(decoded->defaults.captureFullscreenClientsAsMonitor, "decoded fullscreen client behavior");
     require(!decoded->defaults.dynamicWindowMetadata, "decoded dynamic window metadata");
+    require(!decoded->defaults.windowWheelScroll, "decoded window wheel scroll");
     require(decoded->defaults.windowWheelScope == WindowWheelScope::UnderCursor, "decoded window wheel scope");
     require(decoded->defaults.fullscreenPreviewRounding == "27", "decoded fullscreen preview rounding");
     require(decoded->defaults.thumbnailMonitor == "DP-2", "decoded thumbnail monitor");
@@ -288,6 +292,13 @@ int main() {
     require(legacyDynamicMetadataDecoded.has_value(), "session without dynamic window metadata decodes");
     require(legacyDynamicMetadataDecoded->defaults.dynamicWindowMetadata,
             "missing dynamic window metadata keeps enabled default");
+
+    auto legacyWindowWheelScrollJson = json;
+    eraseJsonField(legacyWindowWheelScrollJson, "windowWheelScroll");
+    const auto legacyWindowWheelScrollDecoded = decodeSessionJson(legacyWindowWheelScrollJson);
+    require(legacyWindowWheelScrollDecoded.has_value(), "session without window wheel scroll decodes");
+    require(legacyWindowWheelScrollDecoded->defaults.windowWheelScroll,
+            "missing window wheel scroll keeps enabled default");
 
     auto legacyWindowWheelScopeJson = json;
     eraseJsonField(legacyWindowWheelScopeJson, "windowWheelScope");

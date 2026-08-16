@@ -75,6 +75,7 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"fushionMode", defaults.fushionMode},
         {"captureFullscreenClientsAsMonitor", defaults.captureFullscreenClientsAsMonitor},
         {"dynamicWindowMetadata", defaults.dynamicWindowMetadata},
+        {"windowWheelScroll", defaults.windowWheelScroll},
         {"windowWheelScope", toString(defaults.windowWheelScope)},
         {"fullscreenPreviewRounding", boundedString(defaults.fullscreenPreviewRounding, MAX_METADATA_STRING_BYTES)},
         {"saveDir", boundedString(defaults.saveDir, MAX_PATH_BYTES)},
@@ -228,6 +229,8 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
     else
         return false;
     if (obj.contains("dynamicWindowMetadata") && !boolValue(obj, "dynamicWindowMetadata", defaults.dynamicWindowMetadata, false))
+        return false;
+    if (obj.contains("windowWheelScroll") && !boolValue(obj, "windowWheelScroll", defaults.windowWheelScroll, false))
         return false;
     if (obj.contains("windowWheelScope")) {
         if (!stringValue(obj, "windowWheelScope", value, MAX_METADATA_STRING_BYTES))

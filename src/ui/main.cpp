@@ -651,6 +651,7 @@ int main(int argc, char** argv) {
         {{"fushion-mode", "fusion-mode"}, "Enable fushion toolbar behavior.", "0|1", "0"},
         {"capture-fullscreen-clients-as-monitor", "Capture fullscreen clients as their monitor in window/fusion mode.", "0|1", "0"},
         {"dynamic-window-metadata", "Use capture-aware window metadata in screenshot filename templates.", "0|1", "1"},
+        {"window-wheel-scroll", "Enable wheel-based window selection.", "0|1", "1"},
         {"window-wheel-scope", "Window wheel selection scope: workspace or under-cursor.", "scope", "workspace"},
         {"fullscreen-preview-rounding", "Fullscreen preview rounding: auto, 0, or logical pixels.", "rounding", "auto"},
         {"save-dir", "Save directory.", "path", "$XDG_PICTURES_DIR/Screenshots"},
@@ -728,6 +729,7 @@ int main(int argc, char** argv) {
     defaults.captureFullscreenClientsAsMonitor =
         flagValue(parser, "capture-fullscreen-clients-as-monitor", defaults.captureFullscreenClientsAsMonitor);
     defaults.dynamicWindowMetadata = flagValue(parser, "dynamic-window-metadata", defaults.dynamicWindowMetadata);
+    defaults.windowWheelScroll = flagValue(parser, "window-wheel-scroll", defaults.windowWheelScroll);
     defaults.windowWheelScope =
         hyprcapture::parseWindowWheelScope(parser.value("window-wheel-scope").toStdString(), defaults.windowWheelScope);
     defaults.fullscreenPreviewRounding = parser.value("fullscreen-preview-rounding").toStdString();

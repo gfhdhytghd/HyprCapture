@@ -34,6 +34,7 @@ struct CaptureDefaults {
     bool             fushionMode = false;
     bool             captureFullscreenClientsAsMonitor = false;
     bool             dynamicWindowMetadata = true;
+    bool             windowWheelScroll = true;
     WindowWheelScope windowWheelScope = WindowWheelScope::Workspace;
     std::string      fullscreenPreviewRounding = "auto";
     std::string      saveDir = "$XDG_PICTURES_DIR/Screenshots";

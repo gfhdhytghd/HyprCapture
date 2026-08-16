@@ -3432,6 +3432,8 @@ bool CaptureOverlay::windowCaptureAvailable() const {
 }
 
 bool CaptureOverlay::windowWheelSelectionEnabled() const {
+    if (!m_defaults.windowWheelScroll)
+        return false;
     if (pendingConfirmActive())
         return m_mode == hyprcapture::CaptureMode::Window;
     return m_mode == hyprcapture::CaptureMode::Window ||
