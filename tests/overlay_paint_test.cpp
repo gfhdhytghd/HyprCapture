@@ -68,6 +68,12 @@ int main(int argc, char** argv) {
     const auto orderedCandidates =
         hyprcapture::ui::orderedWindowSelectionCandidates(windowCandidates, QRect(0, 0, 1000, 800));
     require(orderedCandidates == std::vector<int>({1, 3, 0}), "current-output candidates follow descending z order");
+    const auto underCursorCandidates =
+        hyprcapture::ui::orderedWindowSelectionCandidates(windowCandidates, QRect(0, 0, 1000, 800), QPoint(130, 130));
+    require(underCursorCandidates == std::vector<int>({1, 0}), "under-cursor candidates exclude non-overlapping windows");
+    const auto emptyUnderCursorCandidates =
+        hyprcapture::ui::orderedWindowSelectionCandidates(windowCandidates, QRect(0, 0, 1000, 800), QPoint(700, 700));
+    require(emptyUnderCursorCandidates.empty(), "under-cursor scope can have no candidates");
     require(hyprcapture::ui::windowSelectionStartPosition(orderedCandidates, 3) == 1, "focused candidate is the cycle start");
     require(hyprcapture::ui::windowSelectionStartPosition(orderedCandidates, 2) == 0, "off-output focus falls back to topmost candidate");
     require(hyprcapture::ui::windowSelectionStartPosition({}, 3) == -1, "empty candidate list has no cycle start");

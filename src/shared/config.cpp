@@ -179,6 +179,15 @@ DecorationPolicy parseDecorationPolicy(std::string_view value, DecorationPolicy 
     return fallback;
 }
 
+WindowWheelScope parseWindowWheelScope(std::string_view value, WindowWheelScope fallback) {
+    const auto v = normalized(value);
+    if (v == "workspace")
+        return WindowWheelScope::Workspace;
+    if (v == "under-cursor" || v == "cursor")
+        return WindowWheelScope::UnderCursor;
+    return fallback;
+}
+
 RecordWindowBackend parseRecordWindowBackend(std::string_view value, RecordWindowBackend fallback) {
     const auto v = normalized(value);
     if (v == "compositor" || v == "hyprcapture" || v == "exact")
@@ -288,6 +297,14 @@ std::string toString(DecorationPolicy value) {
         case DecorationPolicy::Remove: return "remove";
     }
     return "keep";
+}
+
+std::string toString(WindowWheelScope value) {
+    switch (value) {
+        case WindowWheelScope::Workspace: return "workspace";
+        case WindowWheelScope::UnderCursor: return "under-cursor";
+    }
+    return "workspace";
 }
 
 std::string toString(RecordWindowBackend value) {

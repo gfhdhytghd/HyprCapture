@@ -170,11 +170,14 @@ QPainterPath screenPreviewPath(const QRectF& rect, const ScreenCornerRadii& radi
     return path;
 }
 
-std::vector<int> orderedWindowSelectionCandidates(const std::vector<WindowSelectionCandidate>& windows, const QRect& output) {
+std::vector<int> orderedWindowSelectionCandidates(const std::vector<WindowSelectionCandidate>& windows,
+                                                  const QRect& output,
+                                                  std::optional<QPoint> cursor) {
     std::vector<WindowSelectionCandidate> filtered;
     filtered.reserve(windows.size());
     for (const auto& window : windows) {
-        if (window.index >= 0 && window.geometry.isValid() && output.isValid() && window.geometry.intersects(output))
+        if (window.index >= 0 && window.geometry.isValid() && output.isValid() && window.geometry.intersects(output) &&
+            (!cursor || window.geometry.contains(*cursor)))
             filtered.push_back(window);
     }
 

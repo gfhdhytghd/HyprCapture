@@ -41,6 +41,7 @@ int main() {
     require(parseCaptureMode("bad", CaptureMode::Window) == CaptureMode::Window, "mode fallback");
     require(!CaptureDefaults{}.confirmBeforeCapture, "confirm before capture default");
     require(CaptureDefaults{}.dynamicWindowMetadata, "dynamic window metadata default");
+    require(CaptureDefaults{}.windowWheelScope == WindowWheelScope::Workspace, "window wheel scope default");
     require(CaptureDefaults{}.fullscreenPreviewRounding == "auto", "fullscreen preview rounding default");
 
     require(parseFullscreenScope("all-monitors") == FullscreenScope::All, "all monitor scope parse");
@@ -53,6 +54,10 @@ int main() {
     require(parseWindowBackground("follow_system") == WindowBackground::FollowSystem, "follow system background parse");
     require(parseWindowBackground("transparent") == WindowBackground::Transparent, "transparent background parse");
     require(parseDecorationPolicy("strip") == DecorationPolicy::Remove, "decoration policy parse");
+    require(parseWindowWheelScope("workspace") == WindowWheelScope::Workspace, "workspace window wheel scope parse");
+    require(parseWindowWheelScope("under_cursor") == WindowWheelScope::UnderCursor, "under cursor window wheel scope parse");
+    require(parseWindowWheelScope("cursor") == WindowWheelScope::UnderCursor, "cursor window wheel scope alias");
+    require(parseWindowWheelScope("bad", WindowWheelScope::UnderCursor) == WindowWheelScope::UnderCursor, "window wheel scope fallback");
     require(parseRecordWindowBackend("visible_gsr") == RecordWindowBackend::GsrVisible, "visible gsr backend parse");
     require(parseNotificationBackend("libnotify") == NotificationBackend::System, "libnotify notification backend alias");
     require(parseNotificationBackend("dbus") == NotificationBackend::System, "dbus notification backend alias");
@@ -146,6 +151,7 @@ int main() {
     session.defaults.fushionMode = true;
     session.defaults.captureFullscreenClientsAsMonitor = true;
     session.defaults.dynamicWindowMetadata = false;
+    session.defaults.windowWheelScope = WindowWheelScope::UnderCursor;
     session.defaults.fullscreenPreviewRounding = "27";
     session.defaults.thumbnailMonitor = "DP-2";
     session.defaults.windowBackground = WindowBackground::FollowSystem;
@@ -196,6 +202,7 @@ int main() {
     require(json.find("\"confirmBeforeCapture\":true") != std::string::npos, "confirm before capture json");
     require(json.find("\"captureFullscreenClientsAsMonitor\":true") != std::string::npos, "fullscreen client behavior json");
     require(json.find("\"dynamicWindowMetadata\":false") != std::string::npos, "dynamic window metadata json");
+    require(json.find("\"windowWheelScope\":\"under-cursor\"") != std::string::npos, "window wheel scope json");
     require(json.find("\"fullscreenPreviewRounding\":\"27\"") != std::string::npos, "fullscreen preview rounding json");
     require(json.find("\"thumbnailMonitor\":\"DP-2\"") != std::string::npos, "thumbnail monitor json");
     require(json.find("\"windowBackground\":\"follow-system\"") != std::string::npos, "window background json");
@@ -235,6 +242,7 @@ int main() {
     require(decoded->defaults.confirmBeforeCapture, "decoded confirm before capture");
     require(decoded->defaults.captureFullscreenClientsAsMonitor, "decoded fullscreen client behavior");
     require(!decoded->defaults.dynamicWindowMetadata, "decoded dynamic window metadata");
+    require(decoded->defaults.windowWheelScope == WindowWheelScope::UnderCursor, "decoded window wheel scope");
     require(decoded->defaults.fullscreenPreviewRounding == "27", "decoded fullscreen preview rounding");
     require(decoded->defaults.thumbnailMonitor == "DP-2", "decoded thumbnail monitor");
     require(decoded->defaults.fushionMode, "decoded fushion mode");
@@ -280,6 +288,13 @@ int main() {
     require(legacyDynamicMetadataDecoded.has_value(), "session without dynamic window metadata decodes");
     require(legacyDynamicMetadataDecoded->defaults.dynamicWindowMetadata,
             "missing dynamic window metadata keeps enabled default");
+
+    auto legacyWindowWheelScopeJson = json;
+    eraseJsonField(legacyWindowWheelScopeJson, "windowWheelScope");
+    const auto legacyWindowWheelScopeDecoded = decodeSessionJson(legacyWindowWheelScopeJson);
+    require(legacyWindowWheelScopeDecoded.has_value(), "session without window wheel scope decodes");
+    require(legacyWindowWheelScopeDecoded->defaults.windowWheelScope == WindowWheelScope::Workspace,
+            "missing window wheel scope keeps workspace default");
 
     auto legacyWorkspaceMetadataJson = json;
     eraseJsonField(legacyWorkspaceMetadataJson, "workspaceWindowCount");

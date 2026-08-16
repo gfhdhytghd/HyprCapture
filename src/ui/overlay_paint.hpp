@@ -3,6 +3,7 @@
 #include <QPainterPath>
 #include <QRect>
 
+#include <optional>
 #include <vector>
 
 class QImage;
@@ -35,7 +36,9 @@ QRect             selectionOutlineGeometry(const QRect& selection, const QRect& 
 QRect             mapLogicalRectToPixels(const QRect& logicalRect, const QRect& logicalBounds, const QRect& pixelBounds);
 ScreenCornerRadii detectScreenCornerRadii(const QImage& image, const QSize& logicalSize, int maxLogicalRadius = 96);
 QPainterPath      screenPreviewPath(const QRectF& rect, const ScreenCornerRadii& radii);
-std::vector<int>  orderedWindowSelectionCandidates(const std::vector<WindowSelectionCandidate>& windows, const QRect& output);
+std::vector<int>  orderedWindowSelectionCandidates(const std::vector<WindowSelectionCandidate>& windows,
+                                                   const QRect& output,
+                                                   std::optional<QPoint> cursor = std::nullopt);
 int               windowSelectionStartPosition(const std::vector<int>& orderedCandidates, int focusedWindowIndex);
 int               stepWindowSelectionPosition(int currentPosition, int steps, int candidateCount);
 int               consumeWindowWheelSteps(const QPoint& angleDelta, const QPoint& pixelDelta, bool inverted, WindowWheelStepState& state);

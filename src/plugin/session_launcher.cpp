@@ -364,6 +364,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(boolArg(request.defaults.captureFullscreenClientsAsMonitor));
     args.push_back("--dynamic-window-metadata");
     args.push_back(boolArg(request.defaults.dynamicWindowMetadata));
+    args.push_back("--window-wheel-scope");
+    args.push_back(toString(request.defaults.windowWheelScope));
     args.push_back("--fullscreen-preview-rounding");
     args.push_back(request.defaults.fullscreenPreviewRounding);
     args.push_back("--save-dir");

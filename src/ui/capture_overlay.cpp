@@ -3449,7 +3449,9 @@ std::vector<int> CaptureOverlay::currentMonitorWindowCandidates() const {
             .zIndex = window.zIndex,
         });
     }
-    return hyprcapture::ui::orderedWindowSelectionCandidates(windows, m_overlayLogicalGeometry);
+    const std::optional<QPoint> cursor = m_defaults.windowWheelScope == hyprcapture::WindowWheelScope::UnderCursor ?
+        std::optional<QPoint>{cursorLogicalPosition()} : std::nullopt;
+    return hyprcapture::ui::orderedWindowSelectionCandidates(windows, m_overlayLogicalGeometry, cursor);
 }
 
 int CaptureOverlay::windowCycleTargetIndex() const {

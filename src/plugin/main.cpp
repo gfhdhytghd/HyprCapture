@@ -142,6 +142,7 @@ void registerConfigValues() {
     addBoolConfig("fushion_mode", "Legacy alias for fusion_mode", false);
     addBoolConfig("capture_fullscreen_clients_as_monitor", "Capture a fullscreen client as its whole monitor in window and fusion modes", false);
     addBoolConfig("dynamic_window_metadata", "Use capture-aware window metadata in screenshot filename templates", true);
+    addStringConfig("window_wheel_scope", "Window wheel selection scope (workspace or under-cursor)", "workspace");
     addStringConfig("fullscreen_preview_rounding", "Fullscreen preview corner rounding: auto, 0, or logical pixels", "auto");
     addStringConfig("save_dir", "Capture output directory", "$XDG_PICTURES_DIR/Screenshots");
     addStringConfig("filename_template", "Screenshot filename strftime template with window metadata variables", "Screenshot-%Y-%m-%d-%H%M%S.png");
@@ -197,6 +198,8 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.captureFullscreenClientsAsMonitor =
         configBool("capture_fullscreen_clients_as_monitor", defaults.captureFullscreenClientsAsMonitor);
     defaults.dynamicWindowMetadata = configBool("dynamic_window_metadata", defaults.dynamicWindowMetadata);
+    defaults.windowWheelScope =
+        hyprcapture::parseWindowWheelScope(configString("window_wheel_scope", hyprcapture::toString(defaults.windowWheelScope)), defaults.windowWheelScope);
     defaults.fullscreenPreviewRounding = configString("fullscreen_preview_rounding", defaults.fullscreenPreviewRounding);
     defaults.saveDir = configString("save_dir", defaults.saveDir);
     defaults.filenameTemplate = configString("filename_template", defaults.filenameTemplate);

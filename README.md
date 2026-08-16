@@ -224,7 +224,7 @@ Use lowercase `s` for `SUPER + s`. In Lua config key strings, uppercase `S` mean
 
 - Region mode: drag a rectangle, then release or press Enter.
 - Fullscreen mode: captures according to `fullscreen_scope`.
-- Window mode: hover a window and press Enter or click it. Scroll down to select a lower window on the pointer's current monitor, or scroll up to move back toward the top; selection stops at each end of the stack.
+- Window mode: hover a window and press Enter or click it. Scroll down to select a lower window, or scroll up to move back toward the top; selection stops at each end of the stack. `window_wheel_scope` chooses between every window on the pointer's current workspace/output and only windows directly under the pointer.
 - Fusion mode: the toolbar keeps the fullscreen action and configuration controls; drag anywhere to capture a region, single-click a window to capture that window, or use the same wheel selection before clicking. A region drag still takes precedence over a wheel-selected window.
 - Esc cancels the helper.
 - The toolbar is anchored near the bottom of the screen and only shows controls relevant to the active mode.
@@ -312,6 +312,7 @@ hl.config({
             fusion_mode = false,
             capture_fullscreen_clients_as_monitor = false,
             dynamic_window_metadata = true,
+            window_wheel_scope = "workspace",
             fullscreen_preview_rounding = "auto",
             save_dir = "$XDG_PICTURES_DIR/Screenshots",
             filename_template = "Screenshot-%Y-%m-%d-%H%M%S.png",
@@ -379,6 +380,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `fushion_mode` | bool | `false` | Legacy compatibility alias for `fusion_mode`. New configs should use `fusion_mode`. |
 | `capture_fullscreen_clients_as_monitor` | bool | `false` | In window and fusion modes, capture the fullscreen client's entire monitor instead of the isolated client. Disabled by default for compatibility. |
 | `dynamic_window_metadata` | bool | `true` | Resolve `{window_class}` and `{window_title}` from the final screenshot mode. Region captures use `region`; window captures use the selected window; fullscreen captures use the only window in the captured workspace scope, or `fullscreen` when there are zero or multiple windows. Set to `false` to restore the focused-window fallback. |
+| `window_wheel_scope` | string | `workspace` | Controls wheel-based window cycling in window and fusion modes. `workspace` cycles every selectable window on the pointer's current workspace/output; `under-cursor` cycles only windows whose selectable geometry contains the pointer. Both modes follow window z-order and stop at the top and bottom instead of wrapping. |
 | `fullscreen_preview_rounding` | string | `auto` | Fullscreen preview border rounding. `auto` detects opaque or near-uniform desktop corner masks from each frozen monitor image, a non-negative number forces that logical-pixel radius, and `0` keeps square corners. Low-confidence auto detection falls back to square corners and never crops the captured image. |
 
 ### Output options
