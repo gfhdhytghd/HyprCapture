@@ -2260,6 +2260,10 @@ bool shouldCaptureWindow(const PHLWINDOW& window) {
     return window->m_pinned || window->m_workspace->isVisible();
 }
 
+bool isLiveWindowCaptureTarget(const PHLWINDOW& window) {
+    return window && window->m_isMapped && !window->isHidden() && window->m_workspace;
+}
+
 std::vector<PHLWINDOW> windowsInRenderOrder() {
     std::vector<PHLWINDOW> ordered;
     if (!g_pCompositor)
@@ -3246,7 +3250,10 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
         return {.success = false, .error = "invalid window capture metadata"};
 
     const auto window = findWindowByAddress(request->windowAddress);
-    if (!window || !shouldCaptureWindow(window))
+    // The overview may close after the UI records this address. A live window
+    // can then return to an inactive workspace, but direct framebuffer capture
+    // can still render it independently of normal workspace visibility.
+    if (!isLiveWindowCaptureTarget(window))
         return {.success = false, .error = "window capture target unavailable"};
 
     const auto monitor = window->m_monitor.lock();
