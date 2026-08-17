@@ -127,7 +127,9 @@ class CaptureOverlay final : public QMainWindow {
                    hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot,
                    const QString& outputPath,
                    const QString& restoreClipboardPath,
-                   bool thumbnailStarted);
+                   bool thumbnailStarted,
+                   hyprcapture::CaptureMode mode,
+                   hyprcapture::FilenameMetadata filenameMetadata);
     QImage renderResultImage();
     QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect) const;
     void paintDesktop(QPainter& painter, const QRect& target) const;

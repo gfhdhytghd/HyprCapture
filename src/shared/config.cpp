@@ -448,4 +448,34 @@ std::string makeTimestampedFilename(std::string_view filenameTemplate, std::stri
     return filename;
 }
 
+std::string formatScreenshotNotificationTemplate(std::string_view notificationTemplate,
+                                                 CaptureMode mode,
+                                                 std::string_view windowClass,
+                                                 std::string_view windowTitle,
+                                                 std::string_view filename,
+                                                 std::string_view path) {
+    const auto now = std::chrono::system_clock::now();
+    const auto t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm {};
+    localtime_r(&t, &tm);
+
+    std::ostringstream out;
+    out << std::put_time(&tm, std::string(notificationTemplate).c_str());
+    auto value = out.str();
+    const auto replaceVariable = [&value](std::string_view variable, std::string_view replacement) {
+        const std::string resolved = replacement.empty() ? "unknown" : std::string(replacement);
+        std::size_t position = 0;
+        while ((position = value.find(variable, position)) != std::string::npos) {
+            value.replace(position, variable.size(), resolved);
+            position += resolved.size();
+        }
+    };
+    replaceVariable("{mode}", toString(mode));
+    replaceVariable("{window_class}", windowClass);
+    replaceVariable("{window_title}", windowTitle);
+    replaceVariable("{filename}", filename);
+    replaceVariable("{path}", path);
+    return value;
+}
+
 } // namespace hyprcapture

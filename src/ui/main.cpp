@@ -643,9 +643,11 @@ int main(int argc, char** argv) {
         {"window-background", "Window background.", "background", "follow-system"},
         {"window-border", "Window border policy.", "policy", "keep"},
         {"window-shadow", "Window shadow policy.", "policy", "keep"},
+        {"notification-backend", "Notification backend: hyprland or system.", "backend", "hyprland"},
         {"save", "Save output.", "0|1", "1"},
         {"clipboard", "Copy output.", "0|1", "1"},
         {"thumbnail", "Show thumbnail.", "0|1", "1"},
+        {"screenshot-notification", "Show a notification after a successful screenshot.", "0|1", "1"},
         {"include-cursor", "Include cursor.", "0|1", "0"},
         {"confirm-before-capture", "Require explicit confirmation after target selection for normal open captures.", "0|1", "0"},
         {{"fushion-mode", "fusion-mode"}, "Enable fushion toolbar behavior.", "0|1", "0"},
@@ -656,6 +658,8 @@ int main(int argc, char** argv) {
         {"fullscreen-preview-rounding", "Fullscreen preview rounding: auto, 0, or logical pixels.", "rounding", "auto"},
         {"save-dir", "Save directory.", "path", "$XDG_PICTURES_DIR/Screenshots"},
         {"filename-template", "Filename strftime template with {window_class}/{window_title}.", "template", "Screenshot-%Y-%m-%d-%H%M%S.png"},
+        {"notification-title-template", "Screenshot notification title template.", "template", "Screenshot captured"},
+        {"notification-body-template", "Screenshot notification body template.", "template", "Saved {filename} ({window_title})"},
         {"record-save-dir", "Recording save directory.", "path", "$XDG_VIDEOS_DIR/Screenrecords"},
         {"record-filename-template", "Recording filename strftime template.", "template", "Recording-%Y-%m-%d-%H%M%S.mp4"},
         {"record-format", "Recording format.", "format", "mp4"},
@@ -720,9 +724,12 @@ int main(int argc, char** argv) {
     defaults.windowBackground = hyprcapture::parseWindowBackground(parser.value("window-background").toStdString(), defaults.windowBackground);
     defaults.windowBorder = hyprcapture::parseDecorationPolicy(parser.value("window-border").toStdString(), defaults.windowBorder);
     defaults.windowShadow = hyprcapture::parseDecorationPolicy(parser.value("window-shadow").toStdString(), defaults.windowShadow);
+    defaults.notificationBackend =
+        hyprcapture::parseNotificationBackend(parser.value("notification-backend").toStdString(), defaults.notificationBackend);
     defaults.save = flagValue(parser, "save", defaults.save);
     defaults.clipboard = flagValue(parser, "clipboard", defaults.clipboard);
     defaults.showThumbnail = flagValue(parser, "thumbnail", defaults.showThumbnail);
+    defaults.screenshotNotification = flagValue(parser, "screenshot-notification", defaults.screenshotNotification);
     defaults.includeCursor = flagValue(parser, "include-cursor", defaults.includeCursor);
     defaults.confirmBeforeCapture = flagValue(parser, "confirm-before-capture", defaults.confirmBeforeCapture);
     defaults.fushionMode = flagValue(parser, "fushion-mode", defaults.fushionMode);
@@ -735,6 +742,8 @@ int main(int argc, char** argv) {
     defaults.fullscreenPreviewRounding = parser.value("fullscreen-preview-rounding").toStdString();
     defaults.saveDir = parser.value("save-dir").toStdString();
     defaults.filenameTemplate = parser.value("filename-template").toStdString();
+    defaults.notificationTitleTemplate = parser.value("notification-title-template").toStdString();
+    defaults.notificationBodyTemplate = parser.value("notification-body-template").toStdString();
     defaults.recordSaveDir = parser.value("record-save-dir").toStdString();
     defaults.recordFilenameTemplate = parser.value("record-filename-template").toStdString();
     defaults.recordFormat = parser.value("record-format").toStdString();

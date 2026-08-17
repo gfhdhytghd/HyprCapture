@@ -132,6 +132,9 @@ void registerConfigValues() {
     addStringConfig("window_border", "Window capture border policy", "keep");
     addStringConfig("window_shadow", "Window capture shadow policy", "keep");
     addStringConfig("notification_backend", "Backend for non-error notifications (hyprland or system)", "hyprland");
+    addBoolConfig("screenshot_notification", "Show a notification after a successful screenshot", true);
+    addStringConfig("notification_title_template", "Screenshot notification title template", "Screenshot captured");
+    addStringConfig("notification_body_template", "Screenshot notification body template", "Saved {filename} ({window_title})");
     addBoolConfig("save", "Save captures to disk", true);
     addBoolConfig("clipboard", "Copy captures to the clipboard", true);
     addBoolConfig("show_thumbnail", "Show a result thumbnail after capture", true);
@@ -189,9 +192,12 @@ hyprcapture::CaptureDefaults readDefaults() {
         hyprcapture::parseWindowBackground(configString("window_background", hyprcapture::toString(defaults.windowBackground)), defaults.windowBackground);
     defaults.windowBorder = hyprcapture::parseDecorationPolicy(configString("window_border", hyprcapture::toString(defaults.windowBorder)), defaults.windowBorder);
     defaults.windowShadow = hyprcapture::parseDecorationPolicy(configString("window_shadow", hyprcapture::toString(defaults.windowShadow)), defaults.windowShadow);
+    defaults.notificationBackend =
+        hyprcapture::parseNotificationBackend(configString("notification_backend", hyprcapture::toString(defaults.notificationBackend)), defaults.notificationBackend);
     defaults.save = configBool("save", defaults.save);
     defaults.clipboard = configBool("clipboard", defaults.clipboard);
     defaults.showThumbnail = configBool("show_thumbnail", defaults.showThumbnail);
+    defaults.screenshotNotification = configBool("screenshot_notification", defaults.screenshotNotification);
     defaults.includeCursor = configBool("include_cursor", defaults.includeCursor);
     defaults.allowQuick = configBool("allow_quick", defaults.allowQuick);
     defaults.confirmBeforeCapture = configBool("confirm_before_capture", defaults.confirmBeforeCapture);
@@ -205,6 +211,8 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.fullscreenPreviewRounding = configString("fullscreen_preview_rounding", defaults.fullscreenPreviewRounding);
     defaults.saveDir = configString("save_dir", defaults.saveDir);
     defaults.filenameTemplate = configString("filename_template", defaults.filenameTemplate);
+    defaults.notificationTitleTemplate = configString("notification_title_template", defaults.notificationTitleTemplate);
+    defaults.notificationBodyTemplate = configString("notification_body_template", defaults.notificationBodyTemplate);
     defaults.helper = configString("helper", defaults.helper);
     defaults.recordSaveDir = configString("record_save_dir", defaults.recordSaveDir);
     defaults.recordFilenameTemplate = configString("record_filename_template", defaults.recordFilenameTemplate);

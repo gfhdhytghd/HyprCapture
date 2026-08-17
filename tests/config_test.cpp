@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <nlohmann/json.hpp>
 #include <string>
 
 namespace {
@@ -30,6 +31,13 @@ void eraseJsonField(std::string& json, const std::string& key) {
     json.erase(begin - 1, objectEnd - begin + 1);
 }
 
+void eraseDefaultsJsonField(std::string& json, const std::string& key) {
+    auto parsed = nlohmann::ordered_json::parse(json);
+    require(parsed.contains("defaults") && parsed["defaults"].is_object(), "legacy defaults object exists");
+    require(parsed["defaults"].erase(key) == 1, "legacy defaults field exists");
+    json = parsed.dump();
+}
+
 } // namespace
 
 int main() {
@@ -43,6 +51,8 @@ int main() {
     require(CaptureDefaults{}.dynamicWindowMetadata, "dynamic window metadata default");
     require(CaptureDefaults{}.windowWheelScroll, "window wheel scroll default");
     require(CaptureDefaults{}.windowWheelScope == WindowWheelScope::Workspace, "window wheel scope default");
+    require(CaptureDefaults{}.screenshotNotification, "screenshot notification default");
+    require(CaptureDefaults{}.notificationBackend == NotificationBackend::Hyprland, "notification backend default");
     require(CaptureDefaults{}.fullscreenPreviewRounding == "auto", "fullscreen preview rounding default");
 
     require(parseFullscreenScope("all-monitors") == FullscreenScope::All, "all monitor scope parse");
@@ -99,6 +109,16 @@ int main() {
     require(makeTimestampedFilename("Shot-%w-{window_class}-{window_title}.png", "org.mozilla/firefox", "Private: Window")
                 .find("org.mozilla-firefox-Private-Window.png") != std::string::npos,
             "window filename template variables");
+    require(formatScreenshotNotificationTemplate("Saved {filename} from {window_title} [{window_class}] in {mode}: {path}",
+                                                 CaptureMode::Window,
+                                                 "org.mozilla.firefox",
+                                                 "Private Window",
+                                                 "shot.png",
+                                                 "/tmp/shot.png") ==
+                "Saved shot.png from Private Window [org.mozilla.firefox] in window: /tmp/shot.png",
+            "screenshot notification template variables");
+    require(formatScreenshotNotificationTemplate("{window_title}/{filename}", CaptureMode::Region, {}, {}, {}, {}) == "unknown/unknown",
+            "screenshot notification missing values");
 
     const FilenameMetadata selectedMetadata{.windowClass = "selected.class", .windowTitle = "Selected Title"};
     const FilenameMetadata focusedMetadata{.windowClass = "focused.class", .windowTitle = "Focused Title"};
@@ -154,6 +174,10 @@ int main() {
     session.defaults.dynamicWindowMetadata = false;
     session.defaults.windowWheelScroll = false;
     session.defaults.windowWheelScope = WindowWheelScope::UnderCursor;
+    session.defaults.notificationBackend = NotificationBackend::System;
+    session.defaults.screenshotNotification = false;
+    session.defaults.notificationTitleTemplate = "Captured {mode}";
+    session.defaults.notificationBodyTemplate = "Saved {filename}";
     session.defaults.fullscreenPreviewRounding = "27";
     session.defaults.thumbnailMonitor = "DP-2";
     session.defaults.windowBackground = WindowBackground::FollowSystem;
@@ -206,6 +230,10 @@ int main() {
     require(json.find("\"dynamicWindowMetadata\":false") != std::string::npos, "dynamic window metadata json");
     require(json.find("\"windowWheelScroll\":false") != std::string::npos, "window wheel scroll json");
     require(json.find("\"windowWheelScope\":\"under-cursor\"") != std::string::npos, "window wheel scope json");
+    require(json.find("\"notificationBackend\":\"system\"") != std::string::npos, "notification backend json");
+    require(json.find("\"screenshotNotification\":false") != std::string::npos, "screenshot notification json");
+    require(json.find("\"notificationTitleTemplate\":\"Captured {mode}\"") != std::string::npos, "notification title template json");
+    require(json.find("\"notificationBodyTemplate\":\"Saved {filename}\"") != std::string::npos, "notification body template json");
     require(json.find("\"fullscreenPreviewRounding\":\"27\"") != std::string::npos, "fullscreen preview rounding json");
     require(json.find("\"thumbnailMonitor\":\"DP-2\"") != std::string::npos, "thumbnail monitor json");
     require(json.find("\"windowBackground\":\"follow-system\"") != std::string::npos, "window background json");
@@ -247,6 +275,10 @@ int main() {
     require(!decoded->defaults.dynamicWindowMetadata, "decoded dynamic window metadata");
     require(!decoded->defaults.windowWheelScroll, "decoded window wheel scroll");
     require(decoded->defaults.windowWheelScope == WindowWheelScope::UnderCursor, "decoded window wheel scope");
+    require(decoded->defaults.notificationBackend == NotificationBackend::System, "decoded notification backend");
+    require(!decoded->defaults.screenshotNotification, "decoded screenshot notification");
+    require(decoded->defaults.notificationTitleTemplate == "Captured {mode}", "decoded notification title template");
+    require(decoded->defaults.notificationBodyTemplate == "Saved {filename}", "decoded notification body template");
     require(decoded->defaults.fullscreenPreviewRounding == "27", "decoded fullscreen preview rounding");
     require(decoded->defaults.thumbnailMonitor == "DP-2", "decoded thumbnail monitor");
     require(decoded->defaults.fushionMode, "decoded fushion mode");
@@ -306,6 +338,28 @@ int main() {
     require(legacyWindowWheelScopeDecoded.has_value(), "session without window wheel scope decodes");
     require(legacyWindowWheelScopeDecoded->defaults.windowWheelScope == WindowWheelScope::Workspace,
             "missing window wheel scope keeps workspace default");
+
+    auto legacyNotificationBackendJson = json;
+    eraseDefaultsJsonField(legacyNotificationBackendJson, "notificationBackend");
+    const auto legacyNotificationBackendDecoded = decodeSessionJson(legacyNotificationBackendJson);
+    require(legacyNotificationBackendDecoded.has_value(), "session without notification backend decodes");
+    require(legacyNotificationBackendDecoded->defaults.notificationBackend == NotificationBackend::Hyprland,
+            "missing notification backend keeps hyprland default");
+
+    auto legacyScreenshotNotificationJson = json;
+    eraseDefaultsJsonField(legacyScreenshotNotificationJson, "screenshotNotification");
+    const auto legacyScreenshotNotificationDecoded = decodeSessionJson(legacyScreenshotNotificationJson);
+    require(legacyScreenshotNotificationDecoded.has_value(), "session without screenshot notification toggle decodes");
+    require(legacyScreenshotNotificationDecoded->defaults.screenshotNotification,
+            "missing screenshot notification keeps enabled default");
+
+    auto legacyNotificationTitleJson = json;
+    eraseDefaultsJsonField(legacyNotificationTitleJson, "notificationTitleTemplate");
+    require(decodeSessionJson(legacyNotificationTitleJson).has_value(), "session without notification title template decodes");
+
+    auto legacyNotificationBodyJson = json;
+    eraseDefaultsJsonField(legacyNotificationBodyJson, "notificationBodyTemplate");
+    require(decodeSessionJson(legacyNotificationBodyJson).has_value(), "session without notification body template decodes");
 
     auto legacyWorkspaceMetadataJson = json;
     eraseJsonField(legacyWorkspaceMetadataJson, "workspaceWindowCount");

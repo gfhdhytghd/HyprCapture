@@ -25,9 +25,11 @@ struct CaptureDefaults {
     WindowBackground windowBackground = WindowBackground::FollowSystem;
     DecorationPolicy windowBorder = DecorationPolicy::Keep;
     DecorationPolicy windowShadow = DecorationPolicy::Keep;
+    NotificationBackend notificationBackend = NotificationBackend::Hyprland;
     bool             save = true;
     bool             clipboard = true;
     bool             showThumbnail = true;
+    bool             screenshotNotification = true;
     bool             includeCursor = false;
     bool             allowQuick = false;
     bool             confirmBeforeCapture = false;
@@ -39,6 +41,8 @@ struct CaptureDefaults {
     std::string      fullscreenPreviewRounding = "auto";
     std::string      saveDir = "$XDG_PICTURES_DIR/Screenshots";
     std::string      filenameTemplate = "Screenshot-%Y-%m-%d-%H%M%S.png";
+    std::string      notificationTitleTemplate = "Screenshot captured";
+    std::string      notificationBodyTemplate = "Saved {filename} ({window_title})";
     std::string      helper;
     std::string      recordSaveDir = "$XDG_VIDEOS_DIR/Screenrecords";
     std::string      recordFilenameTemplate = "Recording-%Y-%m-%d-%H%M%S.mp4";
@@ -102,5 +106,11 @@ FilenameMetadata resolveFilenameMetadata(bool dynamicWindowMetadata,
 std::string makeTimestampedFilename(std::string_view filenameTemplate,
                                     std::string_view windowClass = {},
                                     std::string_view windowTitle = {});
+std::string formatScreenshotNotificationTemplate(std::string_view notificationTemplate,
+                                                 CaptureMode mode,
+                                                 std::string_view windowClass,
+                                                 std::string_view windowTitle,
+                                                 std::string_view filename,
+                                                 std::string_view path);
 
 } // namespace hyprcapture

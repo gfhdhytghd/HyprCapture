@@ -304,6 +304,9 @@ hl.config({
             window_border = "keep",
             window_shadow = "keep",
             notification_backend = "hyprland",
+            screenshot_notification = true,
+            notification_title_template = "Screenshot captured",
+            notification_body_template = "Saved {filename} ({window_title})",
             save = true,
             clipboard = true,
             show_thumbnail = true,
@@ -373,7 +376,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `window_background` | string | `follow-system` | Background behind transparent window pixels. Supports `follow-system`, `white`, `black`, `real`, and `transparent`. |
 | `window_border` | string | `keep` | Window border policy. Supports `keep` and `remove`. |
 | `window_shadow` | string | `keep` | Window shadow policy. Supports `keep` and `remove`. Transparent window recordings keep shadows and normalize the alpha falloff so the shadow fades out instead of encoding as a hard border. |
-| `notification_backend` | string | `hyprland` | Backend for non-error recording status and warning notifications. `hyprland` uses Hyprland's overlay; `system` uses the desktop notification service through `notify-send` (libnotify) and falls back to the Hyprland overlay when the command cannot be launched. Errors always use the Hyprland overlay so missing external notification infrastructure cannot hide failures. |
+| `notification_backend` | string | `hyprland` | Backend for screenshot notifications plus non-error recording status and warnings. `hyprland` uses Hyprland's overlay; `system` uses the desktop notification service through `notify-send` (libnotify), includes the saved screenshot as its image/icon hint, and falls back to the Hyprland overlay when the command cannot be launched. Errors always use the Hyprland overlay so missing external notification infrastructure cannot hide failures. |
 | `include_cursor` | bool | `false` | Include the cursor visible when the capture session starts in fullscreen, region, and window screenshots. The interactive overlay cursor is not baked into the output. |
 | `allow_quick` | bool | `false` | Enable no-confirmation `hl.plugin.hyprcapture.quick()` calls. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |
 | `confirm_before_capture` | bool | `false` | For `hl.plugin.hyprcapture.open()`, require an explicit confirmation after choosing a fullscreen, region, or window target. Region targets can be moved or resized; window targets can be switched before confirming. `quick()` and direct `record()` calls keep their existing no-extra-confirmation behavior. |
@@ -392,8 +395,11 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `save` | bool | `true` | Save the output image to `save_dir` as an owner-only file. |
 | `clipboard` | bool | `true` | Copy the output image to the clipboard. Uses `wl-copy` when available so the clipboard survives helper exit. |
 | `show_thumbnail` | bool | `true` | Show the result thumbnail after capture. |
+| `screenshot_notification` | bool | `true` | Show a notification after a screenshot is successfully saved. Disable this independently of recording status notifications. |
 | `save_dir` | string | `$XDG_PICTURES_DIR/Screenshots` | Output directory. `~` is expanded against `HOME`; `$XDG_PICTURES_DIR` is read from XDG user-dirs with `~/Pictures` as fallback. |
 | `filename_template` | string | `Screenshot-%Y-%m-%d-%H%M%S.png` | `strftime` template for saved screenshot filenames. `{window_class}` and `{window_title}` follow `dynamic_window_metadata`; values are filename-sanitized and missing metadata expands to `unknown`. Existing `strftime` directives, including `%w`, keep their original meaning. |
+| `notification_title_template` | string | `Screenshot captured` | Screenshot notification title. Supports `strftime` directives and `{mode}`, `{window_class}`, `{window_title}`, `{filename}`, and `{path}`. Window metadata is not filename-sanitized. |
+| `notification_body_template` | string | `Saved {filename} ({window_title})` | Screenshot notification body. Supports the same placeholders and `strftime` directives as `notification_title_template`. |
 | `record_save_dir` | string | `$XDG_VIDEOS_DIR/Screenrecords` | Output directory for recordings. `$XDG_VIDEOS_DIR` is read from XDG user-dirs with `~/Videos` as fallback. Finished recordings can be copied to the clipboard as local file URIs and shown in the thumbnail when those global output settings are enabled. |
 | `record_filename_template` | string | `Recording-%Y-%m-%d-%H%M%S.mp4` | `strftime` template for saved recording filenames. |
 | `record_format` | string | `mp4` | Default recording format shown in the overlay for non-transparent window backgrounds, fullscreen recording, and region recording. Supports `mp4`, `mov`, `webm`, `mkv`, `gif`, `apng`, and `webp`; the selected value replaces the filename extension. |

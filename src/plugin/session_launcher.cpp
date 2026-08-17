@@ -348,12 +348,16 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(toString(request.defaults.windowBorder));
     args.push_back("--window-shadow");
     args.push_back(toString(request.defaults.windowShadow));
+    args.push_back("--notification-backend");
+    args.push_back(toString(request.defaults.notificationBackend));
     args.push_back("--save");
     args.push_back(boolArg(request.defaults.save));
     args.push_back("--clipboard");
     args.push_back(boolArg(request.defaults.clipboard));
     args.push_back("--thumbnail");
     args.push_back(boolArg(request.defaults.showThumbnail));
+    args.push_back("--screenshot-notification");
+    args.push_back(boolArg(request.defaults.screenshotNotification));
     args.push_back("--include-cursor");
     args.push_back(boolArg(request.defaults.includeCursor));
     args.push_back("--confirm-before-capture");
@@ -374,6 +378,10 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(request.defaults.saveDir);
     args.push_back("--filename-template");
     args.push_back(request.defaults.filenameTemplate);
+    args.push_back("--notification-title-template");
+    args.push_back(request.defaults.notificationTitleTemplate);
+    args.push_back("--notification-body-template");
+    args.push_back(request.defaults.notificationBodyTemplate);
     args.push_back("--record-save-dir");
     args.push_back(request.defaults.recordSaveDir);
     args.push_back("--record-filename-template");

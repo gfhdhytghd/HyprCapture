@@ -66,9 +66,11 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"windowBackground", toString(defaults.windowBackground)},
         {"windowBorder", toString(defaults.windowBorder)},
         {"windowShadow", toString(defaults.windowShadow)},
+        {"notificationBackend", toString(defaults.notificationBackend)},
         {"save", defaults.save},
         {"clipboard", defaults.clipboard},
         {"showThumbnail", defaults.showThumbnail},
+        {"screenshotNotification", defaults.screenshotNotification},
         {"includeCursor", defaults.includeCursor},
         {"allowQuick", defaults.allowQuick},
         {"confirmBeforeCapture", defaults.confirmBeforeCapture},
@@ -80,6 +82,8 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"fullscreenPreviewRounding", boundedString(defaults.fullscreenPreviewRounding, MAX_METADATA_STRING_BYTES)},
         {"saveDir", boundedString(defaults.saveDir, MAX_PATH_BYTES)},
         {"filenameTemplate", boundedString(defaults.filenameTemplate, MAX_METADATA_STRING_BYTES)},
+        {"notificationTitleTemplate", boundedString(defaults.notificationTitleTemplate, MAX_METADATA_STRING_BYTES)},
+        {"notificationBodyTemplate", boundedString(defaults.notificationBodyTemplate, MAX_METADATA_STRING_BYTES)},
         {"recordSaveDir", boundedString(defaults.recordSaveDir, MAX_PATH_BYTES)},
         {"recordFilenameTemplate", boundedString(defaults.recordFilenameTemplate, MAX_METADATA_STRING_BYTES)},
         {"recordFormat", boundedString(defaults.recordFormat, MAX_METADATA_STRING_BYTES)},
@@ -224,6 +228,11 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         defaults.windowShadow = parseDecorationPolicy(value, defaults.windowShadow);
     else
         return false;
+    if (obj.contains("notificationBackend")) {
+        if (!stringValue(obj, "notificationBackend", value, MAX_METADATA_STRING_BYTES))
+            return false;
+        defaults.notificationBackend = parseNotificationBackend(value, defaults.notificationBackend);
+    }
     if (stringValue(obj, "recordWindowBackend", value, MAX_METADATA_STRING_BYTES, false))
         defaults.recordWindowBackend = parseRecordWindowBackend(value, defaults.recordWindowBackend);
     else
@@ -237,6 +246,14 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
             return false;
         defaults.windowWheelScope = parseWindowWheelScope(value, defaults.windowWheelScope);
     }
+    if (obj.contains("screenshotNotification") && !boolValue(obj, "screenshotNotification", defaults.screenshotNotification, false))
+        return false;
+    if (obj.contains("notificationTitleTemplate") &&
+        !stringValue(obj, "notificationTitleTemplate", defaults.notificationTitleTemplate, MAX_METADATA_STRING_BYTES, false))
+        return false;
+    if (obj.contains("notificationBodyTemplate") &&
+        !stringValue(obj, "notificationBodyTemplate", defaults.notificationBodyTemplate, MAX_METADATA_STRING_BYTES, false))
+        return false;
 
     return boolValue(obj, "save", defaults.save, false) && boolValue(obj, "clipboard", defaults.clipboard, false) &&
         boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&

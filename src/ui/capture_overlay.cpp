@@ -3,6 +3,7 @@
 #include "ui/clipboard_utils.hpp"
 #include "ui/overlay_paint.hpp"
 #include "ui/result_thumbnail.hpp"
+#include "ui/screenshot_notification.hpp"
 #include "ui/watermark.hpp"
 #include "shared/protocol.hpp"
 
@@ -4020,27 +4021,45 @@ void CaptureOverlay::renderAndSaveCapture() {
         traceTiming(QStringLiteral("clipboard_snapshot_collect"), snapshotTimer.elapsed());
     }
 
-    saveImage(image, clipboardSnapshot, m_defaults.save ? plannedOutputPath : targetPath, restoreClipboardPath, thumbnailStarted);
+    saveImage(image,
+              clipboardSnapshot,
+              m_defaults.save ? plannedOutputPath : targetPath,
+              restoreClipboardPath,
+              thumbnailStarted,
+              m_mode,
+              filenameMetadata);
 }
 
 void CaptureOverlay::saveImage(const QImage& image,
                                hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot,
                                const QString& outputPath,
                                const QString& restoreClipboardPath,
-                               bool thumbnailStarted) {
+                               bool thumbnailStarted,
+                               hyprcapture::CaptureMode mode,
+                               hyprcapture::FilenameMetadata filenameMetadata) {
     const auto defaults = m_defaults;
-    auto*      worker = QThread::create([this, image, defaults, outputPath, restoreClipboardPath, thumbnailStarted, clipboardSnapshot = std::move(clipboardSnapshot)] {
+    auto*      worker = QThread::create([this,
+                                         image,
+                                         defaults,
+                                         outputPath,
+                                         restoreClipboardPath,
+                                         thumbnailStarted,
+                                         mode,
+                                         filenameMetadata,
+                                         clipboardSnapshot = std::move(clipboardSnapshot)] {
         QElapsedTimer totalTimer;
         totalTimer.start();
         const CaptureOutputResult result = writeCaptureOutput(image, defaults, clipboardSnapshot, outputPath, restoreClipboardPath);
         traceTiming(QStringLiteral("output_worker_total"), totalTimer.elapsed());
         QMetaObject::invokeMethod(
             this,
-            [this, image, result, thumbnailStarted] {
+            [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata] {
                 traceTiming(QStringLiteral("output_ready"));
                 endHymissionCaptureInputSuppression();
                 if (result.clipboardRequested && !result.clipboardCopied)
                     hyprcapture::ui::copyImageToClipboard(image);
+                if (defaults.save)
+                    hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
                 if (result.showThumbnail && !thumbnailStarted) {
                     showThumbnail(result.savedPath, result.savedPath, result.restoreClipboardPath);
                     qApp->quit();
