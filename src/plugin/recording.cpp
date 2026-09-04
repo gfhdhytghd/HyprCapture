@@ -404,12 +404,23 @@ bool recordingTargetIntersectsVirtualMonitor(const Rect& target) {
         return false;
 
     for (const auto& monitor : State::monitorState()->monitors()) {
-        if (!monitor || !monitor->m_createdByUser)
+        if (!monitor || (!monitor->m_createdByUser && !monitor->m_name.starts_with("HEADLESS-")))
             continue;
         if (recordingRectsIntersect(target, recordingMonitorRect(monitor)))
             return true;
     }
     return false;
+}
+
+std::pair<double, double> gsrEncodedDimensions(const RecordingRequest& request) {
+    double scale = 1.0;
+    if (g_pCompositor && recordingRectValid(request.targetGeometry)) {
+        for (const auto& monitor : State::monitorState()->monitors()) {
+            if (monitor && recordingRectsIntersect(request.targetGeometry, recordingMonitorRect(monitor)))
+                scale = std::max(scale, static_cast<double>(monitor->m_scale));
+        }
+    }
+    return {std::ceil(request.targetGeometry.width * scale), std::ceil(request.targetGeometry.height * scale)};
 }
 
 std::string gsrCaptureSource(const RecordingRequest& request) {
@@ -559,8 +570,9 @@ std::string gsrCodec(const RecordingRequest& request) {
     const auto format = request.defaults.recordFormat;
     const auto normalizedCodec = normalizedToken(codec);
     if (normalizedCodec.empty() || normalizedCodec == "auto") {
-        const bool aboveH264Limit = request.targetGeometry.width > GSR_H264_MAX_DIMENSION || request.targetGeometry.height > GSR_H264_MAX_DIMENSION;
-        const bool withinHevcLimit = request.targetGeometry.width <= GSR_HEVC_MAX_DIMENSION && request.targetGeometry.height <= GSR_HEVC_MAX_DIMENSION;
+        const auto [encodedWidth, encodedHeight] = gsrEncodedDimensions(request);
+        const bool aboveH264Limit = encodedWidth > GSR_H264_MAX_DIMENSION || encodedHeight > GSR_H264_MAX_DIMENSION;
+        const bool withinHevcLimit = encodedWidth <= GSR_HEVC_MAX_DIMENSION && encodedHeight <= GSR_HEVC_MAX_DIMENSION;
         if (request.mode == CaptureMode::Fullscreen && sanitizedRecordFormat(format) != "webm" && aboveH264Limit && withinHevcLimit)
             return "hevc";
         return sanitizedRecordFormat(format) == "webm" ? "vp9" : "h264";
@@ -1037,6 +1049,10 @@ class RawVideoEncoder {
         return m_workerFinished.load(std::memory_order_acquire);
     }
 
+    bool succeeded() const {
+        return m_ffmpegSucceeded.load(std::memory_order_acquire);
+    }
+
     void joinIfFinished() {
         if (m_worker.joinable())
             m_worker.join();
@@ -1067,8 +1083,10 @@ class RawVideoEncoder {
             return;
 
         int status = 0;
-        while (waitpid(m_pid, &status, 0) < 0 && errno == EINTR) {
+        pid_t result = -1;
+        while ((result = waitpid(m_pid, &status, 0)) < 0 && errno == EINTR) {
         }
+        m_ffmpegSucceeded.store(result == m_pid && WIFEXITED(status) && WEXITSTATUS(status) == 0, std::memory_order_release);
         m_pid = -1;
         setOwnerOnlyPermissions(m_outputPath);
     }
@@ -1123,6 +1141,7 @@ class RawVideoEncoder {
     std::deque<QueuedEncoderFrame>       m_frames;
     bool                                  m_stopping = false;
     std::atomic_bool                      m_workerFinished = true;
+    std::atomic_bool                      m_ffmpegSucceeded = false;
     std::thread                           m_worker;
 };
 
@@ -1271,6 +1290,16 @@ void completeFinishingRawRecording() {
     if (recording->encoder)
         recording->encoder->joinIfFinished();
 
+    if (!recording->encoder || !recording->encoder->succeeded() || !recordingOutputHasBytes(recording->encoderOutputPath)) {
+        std::error_code ec;
+        std::filesystem::remove(recording->encoderOutputPath, ec);
+        if (recording->encoderOutputPath != recording->outputPath)
+            std::filesystem::remove(recording->outputPath, ec);
+        notifyRecording("ffmpeg encoder produced no valid video data: " + recording->outputPath.string(), NotificationLevel::Error, 7000);
+        g_recordingStateServer.clear();
+        return;
+    }
+
     if (recording->transcodeToApng) {
         startApngTranscodeFromFinishedRecording(*recording);
         g_recordingStateServer.clear();
@@ -1401,6 +1430,11 @@ void captureRecordingTick(SP<CEventLoopTimer> self) {
 
     if (!g_recording || g_recording->timer.get() != self.get())
         return;
+
+    if (g_recording->encoder && g_recording->encoder->finished()) {
+        stopRecordingInternal("stopped after encoder failure", true);
+        return;
+    }
 
     const auto tickStartedAt = Time::steadyNow();
     if (g_recording->request.defaults.recordMaxSeconds > 0 &&
@@ -1674,6 +1708,12 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
 bool recordingCanUseGsr(const RecordingRequest& request) {
     if (isImageAnimationRecordFormat(request.defaults.recordFormat) || recordingTargetIntersectsVirtualMonitor(request.targetGeometry))
         return false;
+    const auto normalizedCodec = normalizedToken(request.defaults.recordCodec);
+    if (request.mode == CaptureMode::Fullscreen && (normalizedCodec.empty() || normalizedCodec == "auto")) {
+        const auto [encodedWidth, encodedHeight] = gsrEncodedDimensions(request);
+        if (encodedWidth > GSR_HEVC_MAX_DIMENSION || encodedHeight > GSR_HEVC_MAX_DIMENSION)
+            return false;
+    }
     if (request.mode != CaptureMode::Window)
         return true;
     return !recordingNeedsAlpha(RecordingFrameRequest{.defaults = request.defaults,
