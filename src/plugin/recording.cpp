@@ -56,6 +56,8 @@ constexpr int         MAX_PENDING_FRAME_REPEATS = 240 * 30;
 constexpr int         MAX_ANIMATION_FRAME_QUEUE = 12;
 constexpr std::size_t MAX_ANIMATION_FRAME_QUEUE_BYTES = 128 * 1024 * 1024;
 constexpr int         RGBA_BYTES_PER_PIXEL = 4;
+constexpr double      GSR_H264_MAX_DIMENSION = 4096.0;
+constexpr double      GSR_HEVC_MAX_DIMENSION = 8192.0;
 
 struct RgbaColor {
     unsigned char r = 0;
@@ -552,10 +554,17 @@ bool recordingEncoderSupportsAlpha(std::string_view format, std::string_view cod
         (normalizedFormat == "mkv" && normalizedCodec == "ffv1");
 }
 
-std::string gsrCodec(std::string codec, std::string_view format) {
+std::string gsrCodec(const RecordingRequest& request) {
+    std::string codec = request.defaults.recordCodec;
+    const auto format = request.defaults.recordFormat;
     const auto normalizedCodec = normalizedToken(codec);
-    if (normalizedCodec.empty() || normalizedCodec == "auto")
+    if (normalizedCodec.empty() || normalizedCodec == "auto") {
+        const bool aboveH264Limit = request.targetGeometry.width > GSR_H264_MAX_DIMENSION || request.targetGeometry.height > GSR_H264_MAX_DIMENSION;
+        const bool withinHevcLimit = request.targetGeometry.width <= GSR_HEVC_MAX_DIMENSION && request.targetGeometry.height <= GSR_HEVC_MAX_DIMENSION;
+        if (request.mode == CaptureMode::Fullscreen && sanitizedRecordFormat(format) != "webm" && aboveH264Limit && withinHevcLimit)
+            return "hevc";
         return sanitizedRecordFormat(format) == "webm" ? "vp9" : "h264";
+    }
 
     codec = sanitizedCodec(std::move(codec));
     if (codec == "h264" || codec == "h264_vaapi" || codec == "libx264" || codec == "libx264rgb")
@@ -1499,7 +1508,7 @@ LaunchResult spawnGpuScreenRecorder(const RecordingRequest& request, const std::
     args.push_back("-c");
     args.push_back(gsrContainerFormat(request.defaults.recordFormat));
     args.push_back("-k");
-    args.push_back(gsrCodec(request.defaults.recordCodec, request.defaults.recordFormat));
+    args.push_back(gsrCodec(request));
     args.push_back("-f");
     args.push_back(std::to_string(fps));
     args.push_back("-cursor");
