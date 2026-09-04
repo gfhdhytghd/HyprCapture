@@ -237,22 +237,16 @@ QStringList recordFpsChoices(const hyprcapture::CaptureDefaults& defaults) {
 
 QString codecChoiceFromConfig(const std::string& codec) {
     const QString value = normalizedChoice(qString(codec));
-    if (value == "libx264" || value == "h264")
+    if (value == "libx264" || value == "h264" || value == "h264-vaapi" || value == "h264-nvenc")
         return QStringLiteral("h264");
-    if (value == "h264-vaapi")
-        return QStringLiteral("h264-vaapi");
-    if (value == "libx265" || value == "h265" || value == "hevc")
+    if (value == "libx265" || value == "h265" || value == "hevc" || value == "hevc-vaapi" || value == "h265-vaapi" ||
+        value == "hevc-nvenc" || value == "h265-nvenc")
         return QStringLiteral("h265");
-    if (value == "hevc-vaapi" || value == "h265-vaapi")
-        return QStringLiteral("h265-vaapi");
-    if (value == "libsvtav1" || value == "libaom-av1" || value == "librav1e" || value == "av1")
+    if (value == "libsvtav1" || value == "libaom-av1" || value == "librav1e" || value == "av1" || value == "av1-vaapi" ||
+        value == "av1-nvenc")
         return QStringLiteral("av1");
-    if (value == "av1-vaapi")
-        return QStringLiteral("av1-vaapi");
-    if (value == "libvpx-vp9" || value == "vp9")
+    if (value == "libvpx-vp9" || value == "vp9" || value == "vp9-vaapi")
         return QStringLiteral("vp9");
-    if (value == "vp9-vaapi")
-        return QStringLiteral("vp9-vaapi");
     if (value == "ffv1")
         return QStringLiteral("ffv1");
     return QStringLiteral("auto");
@@ -267,21 +261,13 @@ QString defaultRecordCodecForBackground(const hyprcapture::CaptureDefaults& defa
 QString codecConfigFromChoice(const QString& choice) {
     const QString value = normalizedChoice(choice);
     if (value == "h264")
-        return QStringLiteral("libx264");
-    if (value == "h264-vaapi")
-        return QStringLiteral("h264_vaapi");
+        return QStringLiteral("h264");
     if (value == "h265")
-        return QStringLiteral("libx265");
-    if (value == "h265-vaapi")
-        return QStringLiteral("hevc_vaapi");
+        return QStringLiteral("h265");
     if (value == "av1")
-        return QStringLiteral("libsvtav1");
-    if (value == "av1-vaapi")
-        return QStringLiteral("av1_vaapi");
+        return QStringLiteral("av1");
     if (value == "vp9")
-        return QStringLiteral("libvpx-vp9");
-    if (value == "vp9-vaapi")
-        return QStringLiteral("vp9_vaapi");
+        return QStringLiteral("vp9");
     if (value == "ffv1")
         return QStringLiteral("ffv1");
     return QStringLiteral("auto");
@@ -435,12 +421,6 @@ bool alphaProbeSucceeded(const QString& format, const QString& codecChoice) {
     const bool preservesAlpha = encoded && (normalizedFormat == "webm" ? webmHasAlphaMode(outputPath) : decodedFrameHasAlpha(outputPath));
     cache[key] = preservesAlpha;
     return preservesAlpha;
-}
-
-bool isHardwareAlphaCandidate(const QString& codecChoice) {
-    const QString codec = normalizedChoice(codecChoice);
-    return codec.endsWith(QStringLiteral("-vaapi")) || codec.endsWith(QStringLiteral("-qsv")) || codec.endsWith(QStringLiteral("-nvenc")) ||
-        codec.endsWith(QStringLiteral("-vulkan")) || codec.endsWith(QStringLiteral("-amf"));
 }
 
 TransparentAutoChoice transparentAutoChoiceForFormat(QString format) {
@@ -1926,7 +1906,7 @@ void CaptureOverlay::buildToolbar() {
 
     m_recordCodec = new InlineSelect(this, m_recordOptions);
     m_recordCodec->setPrefix("Codec");
-    m_recordCodec->addItems(QStringList{"auto", "h264", "h264-vaapi", "h265", "h265-vaapi", "av1", "av1-vaapi", "vp9", "vp9-vaapi", "ffv1"});
+    m_recordCodec->addItems(QStringList{"auto", "h264", "h265", "av1", "vp9", "ffv1"});
     m_recordCodec->setCurrentText(defaultRecordCodecForBackground(m_defaults, currentRecordBackground()));
     m_recordCodec->setOnChanged([this, onRecordOptionChanged] {
         m_recordCodecAuto = false;
@@ -2419,17 +2399,14 @@ QString CaptureOverlay::recordOptionsConflict() const {
         return QStringLiteral("mp4 does not support transparency");
     if (alphaRequested && format == "mov")
         return QStringLiteral("mov alpha is not supported by this encoder");
-    if (format == "webm" && alphaRequested && codec != "auto" && codec != "vp9" && codec != "vp9-vaapi")
+    if (format == "webm" && alphaRequested && codec != "auto" && codec != "vp9")
         return QStringLiteral("webm transparency requires vp9");
-    if (format == "webm" && codec != "auto" && codec != "vp9" && codec != "vp9-vaapi" && codec != "av1" && codec != "av1-vaapi")
+    if (format == "webm" && codec != "auto" && codec != "vp9" && codec != "av1")
         return QStringLiteral("webm requires vp9 or av1");
     if (format == "mkv" && alphaRequested && codec != "auto" && codec != "ffv1")
         return QStringLiteral("mkv transparency requires ffv1");
-    if ((format == "mp4" || format == "mov") && (codec == "vp9" || codec == "vp9-vaapi" || codec == "ffv1"))
+    if ((format == "mp4" || format == "mov") && (codec == "vp9" || codec == "ffv1"))
         return format + QStringLiteral(" requires h264, h265, or av1");
-    if (alphaRequested && isHardwareAlphaCandidate(codec) && !alphaProbeSucceeded(format, codec))
-        return QStringLiteral("selected hardware encoder does not preserve transparency");
-
     return {};
 }
 

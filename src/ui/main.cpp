@@ -664,7 +664,7 @@ int main(int argc, char** argv) {
         {"record-filename-template", "Recording filename strftime template.", "template", "Recording-%Y-%m-%d-%H%M%S.mp4"},
         {"record-format", "Recording format.", "format", "mp4"},
         {"record-transparent-format", "Transparent window recording container format.", "format", "webm"},
-        {"record-codec", "Recording codec.", "codec", "libx264"},
+        {"record-codec", "Recording codec.", "codec", "auto"},
         {"record-transparent-codec", "Transparent window recording codec.", "codec", "auto"},
         {"record-solid-alpha", "Keep alpha outside follow-system/white/black window recording content when supported.", "0|1", "0"},
         {"record-preset", "Recording preset.", "preset", "veryfast"},

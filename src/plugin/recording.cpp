@@ -430,31 +430,100 @@ std::string gsrCaptureSource(const RecordingRequest& request) {
 
 std::string sanitizedCodec(std::string codec) {
     const auto normalized = normalizedToken(codec);
-    if (normalized == "h264")
-        return "libx264";
-    if (normalized == "h264-vaapi")
-        return "h264_vaapi";
-    if (normalized == "h265" || normalized == "hevc")
-        return "libx265";
-    if (normalized == "h265-vaapi" || normalized == "hevc-vaapi")
-        return "hevc_vaapi";
-    if (normalized == "av1")
-        return "libsvtav1";
-    if (normalized == "av1-vaapi")
-        return "av1_vaapi";
+    if (normalized == "h264" || normalized == "libx264" || normalized == "libx264rgb" || normalized == "h264-vaapi" || normalized == "h264-nvenc")
+        return "h264";
+    if (normalized == "h265" || normalized == "hevc" || normalized == "libx265" || normalized == "h265-vaapi" || normalized == "hevc-vaapi" ||
+        normalized == "h265-nvenc" || normalized == "hevc-nvenc")
+        return "h265";
+    if (normalized == "av1" || normalized == "libaom-av1" || normalized == "librav1e" || normalized == "libsvtav1" || normalized == "av1-vaapi" ||
+        normalized == "av1-nvenc")
+        return "av1";
     if (normalized == "auto")
-        return findVaapiRenderDevice() ? "h264_vaapi" : "libx264";
-    if (normalized == "libaom-av1" || normalized == "librav1e" || normalized == "libsvtav1")
-        return codec;
+        return "auto";
     if (normalized == "vp9" || normalized == "libvpx-vp9")
-        return "libvpx-vp9";
+        return "vp9";
     if (normalized == "vp9-vaapi")
-        return "vp9_vaapi";
+        return "vp9";
     if (normalized == "ffv1")
         return "ffv1";
     if (!safeCodecToken(codec))
         return "libx264";
     return codec;
+}
+
+std::vector<std::string> concreteCodecCandidates(std::string_view requested) {
+    const auto codec = normalizedToken(requested);
+    if (codec.empty() || codec == "auto" || codec == "h264")
+        return {"h264_nvenc", "h264_vaapi", "libx264"};
+    if (codec == "h265" || codec == "hevc")
+        return {"hevc_nvenc", "hevc_vaapi", "libx265"};
+    if (codec == "av1")
+        return {"av1_nvenc", "av1_vaapi", "libsvtav1"};
+    if (codec == "vp9")
+        return {"vp9_vaapi", "libvpx-vp9"};
+    return {std::string(requested)};
+}
+
+bool probeHardwareEncoder(std::string_view codec, int width, int height) {
+    if (!isHardwareCodec(codec))
+        return true;
+
+    const auto ffmpeg = trustedFfmpegPath();
+    const auto vaapiDevice = isVaapiCodec(codec) ? findVaapiRenderDevice() : std::optional<std::string>{};
+    if (!ffmpeg || (isVaapiCodec(codec) && !vaapiDevice))
+        return false;
+
+    std::vector<std::string> args{*ffmpeg, "-hide_banner", "-loglevel", "quiet"};
+    if (vaapiDevice) {
+        args.push_back("-vaapi_device");
+        args.push_back(*vaapiDevice);
+    }
+    const std::vector<std::string> inputArgs{"-f", "lavfi", "-i",
+                                              "color=c=black:s=" + std::to_string(width) + "x" + std::to_string(height) + ":r=1",
+                                              "-frames:v", "1"};
+    args.insert(args.end(), inputArgs.begin(), inputArgs.end());
+    if (isVaapiCodec(codec)) {
+        args.push_back("-vf");
+        args.push_back("format=rgba,hwupload,scale_vaapi=format=nv12");
+    }
+    args.push_back("-c:v");
+    args.emplace_back(codec);
+    args.insert(args.end(), {"-f", "null", "-"});
+
+    std::vector<char*> argv;
+    for (auto& arg : args)
+        argv.push_back(arg.data());
+    argv.push_back(nullptr);
+    auto childEnv = childEnvironment();
+    std::vector<char*> envp;
+    for (auto& entry : childEnv)
+        envp.push_back(entry.data());
+    envp.push_back(nullptr);
+
+    posix_spawn_file_actions_t actions {};
+    if (posix_spawn_file_actions_init(&actions) != 0)
+        return false;
+    posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+    posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    pid_t pid = -1;
+    const int spawnError = posix_spawn(&pid, argv[0], &actions, nullptr, argv.data(), envp.data());
+    posix_spawn_file_actions_destroy(&actions);
+    if (spawnError != 0)
+        return false;
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+    }
+    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+}
+
+std::string selectConcreteCodec(std::string_view requested, int width, int height) {
+    const auto candidates = concreteCodecCandidates(requested);
+    for (const auto& candidate : candidates) {
+        if (probeHardwareEncoder(candidate, width, height))
+            return candidate;
+    }
+    return candidates.empty() ? "libx264" : candidates.back();
 }
 
 std::string effectiveRecordingCodec(const RecordingFrameRequest& request, std::string codec) {
@@ -468,7 +537,7 @@ std::string effectiveRecordingCodec(const RecordingFrameRequest& request, std::s
     if (format == "webp")
         return "libwebp_anim";
     if (format == "webm" && (codec.empty() || normalizedCodec == "auto"))
-        return "libvpx-vp9";
+        return "vp9";
     if (needsAlpha && format == "mkv" && (codec.empty() || normalizedCodec == "auto"))
         return "ffv1";
     return sanitizedCodec(std::move(codec));
@@ -479,7 +548,8 @@ bool recordingEncoderSupportsAlpha(std::string_view format, std::string_view cod
     const auto normalizedCodec = normalizedToken(codec);
     if (normalizedFormat == "apng" || normalizedFormat == "webp")
         return true;
-    return (normalizedFormat == "webm" && normalizedCodec == "libvpx-vp9") || (normalizedFormat == "mkv" && normalizedCodec == "ffv1");
+    return (normalizedFormat == "webm" && (normalizedCodec == "vp9" || normalizedCodec == "libvpx-vp9")) ||
+        (normalizedFormat == "mkv" && normalizedCodec == "ffv1");
 }
 
 std::string gsrCodec(std::string codec, std::string_view format) {
@@ -488,13 +558,13 @@ std::string gsrCodec(std::string codec, std::string_view format) {
         return sanitizedRecordFormat(format) == "webm" ? "vp9" : "h264";
 
     codec = sanitizedCodec(std::move(codec));
-    if (codec == "h264_vaapi" || codec == "libx264" || codec == "libx264rgb")
+    if (codec == "h264" || codec == "h264_vaapi" || codec == "libx264" || codec == "libx264rgb")
         return "h264";
-    if (codec == "hevc_vaapi" || codec == "libx265")
+    if (codec == "h265" || codec == "hevc_vaapi" || codec == "libx265")
         return "hevc";
-    if (codec == "av1_vaapi" || codec == "libsvtav1" || codec == "libaom-av1" || codec == "librav1e")
+    if (codec == "av1" || codec == "av1_vaapi" || codec == "libsvtav1" || codec == "libaom-av1" || codec == "librav1e")
         return "av1";
-    if (codec == "libvpx-vp9" || codec == "vp9_vaapi")
+    if (codec == "vp9" || codec == "libvpx-vp9" || codec == "vp9_vaapi")
         return "vp9";
     return codec;
 }
@@ -1517,6 +1587,14 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
     if (!firstFrame || !makeEvenFrame(*firstFrame))
         return {.success = false, .error = "failed to capture first recording frame"};
 
+    std::string concreteCodec = codec;
+    if (format != "gif" && format != "apng" && format != "webp") {
+        if (preserveAlpha && normalizedToken(codec) == "vp9")
+            concreteCodec = "libvpx-vp9";
+        else
+            concreteCodec = selectConcreteCodec(codec, firstFrame->width, firstFrame->height);
+    }
+
     const int requestedFps = std::clamp<int>(static_cast<int>(request.defaults.recordFps), 1, 240);
     const int fps = effectiveRecordingFps(frameRequest, requestedFps);
     std::string outputPathError;
@@ -1526,7 +1604,7 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
 
     auto        encoderOutputPath = *outputPath;
     std::string encoderFormat = format;
-    std::string encoderCodec = codec;
+    std::string encoderCodec = concreteCodec;
     auto        encoderQueueLimit = rawEncoderQueueLimit(firstFrame->width, firstFrame->height, format);
     if (transcodeToApng) {
         const auto intermediatePath = uniqueIntermediateRecordingPath(*outputPath, "mkv", outputPathError);

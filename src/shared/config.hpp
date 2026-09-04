@@ -48,7 +48,7 @@ struct CaptureDefaults {
     std::string      recordFilenameTemplate = "Recording-%Y-%m-%d-%H%M%S.mp4";
     std::string      recordFormat = "mp4";
     std::string      recordTransparentFormat = "webm";
-    std::string      recordCodec = "libx264";
+    std::string      recordCodec = "auto";
     std::string      recordTransparentCodec = "auto";
     bool             recordSolidAlpha = false;
     std::string      recordPreset = "veryfast";

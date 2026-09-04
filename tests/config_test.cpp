@@ -241,6 +241,7 @@ int main() {
     require(json.find("\"thumbnailMonitor\":\"DP-2\"") != std::string::npos, "thumbnail monitor json");
     require(json.find("\"windowBackground\":\"follow-system\"") != std::string::npos, "window background json");
     require(json.find("\"recordTransparentFormat\":\"webm\"") != std::string::npos, "transparent record format json");
+    require(json.find("\"recordCodec\":\"auto\"") != std::string::npos, "record codec default json");
     require(json.find("\"recordTransparentCodec\":\"auto\"") != std::string::npos, "transparent record codec json");
     require(json.find("\"recordSolidAlpha\":true") != std::string::npos, "solid alpha record json");
     require(json.find("\"recordSaveDir\":\"$XDG_VIDEOS_DIR/Screenrecords\"") != std::string::npos, "record save dir json");
@@ -286,6 +287,7 @@ int main() {
     require(decoded->defaults.thumbnailMonitor == "DP-2", "decoded thumbnail monitor");
     require(decoded->defaults.fushionMode, "decoded fushion mode");
     require(decoded->defaults.recordTransparentFormat == "webm", "decoded transparent record format");
+    require(decoded->defaults.recordCodec == "auto", "decoded record codec default");
     require(decoded->defaults.recordTransparentCodec == "auto", "decoded transparent record codec");
     require(decoded->defaults.recordSolidAlpha, "decoded solid alpha record");
     require(decoded->defaults.recordSaveDir == "$XDG_VIDEOS_DIR/Screenrecords", "decoded record save dir");

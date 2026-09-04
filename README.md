@@ -328,7 +328,7 @@ hl.config({
             record_fps_options = "15 24 30 60",
             record_window_fps_limit = 12,
             record_window_real_bg_fps_limit = 8,
-            record_codec = "libx264",
+            record_codec = "auto",
             record_transparent_codec = "auto",
             record_solid_alpha = false,
             record_preset = "veryfast",
@@ -408,7 +408,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `record_fps_options` | string | `15 24 30 60` | Whitespace, comma, or semicolon separated FPS choices shown in the overlay. The current `record_fps` value is added if it is not already listed. |
 | `record_window_fps_limit` | int | `12` | Safety cap for window recording with the current compositor-readback backend. Use `0` to disable the cap. |
 | `record_window_real_bg_fps_limit` | int | `8` | Additional safety cap for window recording with `window_background = "real"`. Use `0` to disable the cap. |
-| `record_codec` | string | `libx264` | Default recording codec shown in the overlay for normal video formats. Supports `auto`, `libx264`/`h264`, `h264_vaapi`, `libx265`/`h265`, `hevc_vaapi`/`h265_vaapi`, `libsvtav1`/`av1`, `av1_vaapi`, `libvpx-vp9`/`vp9`, `vp9_vaapi`, and `ffv1`. GIF, APNG, and WebP use fixed FFmpeg image-animation encoders. |
+| `record_codec` | string | `auto` | Default recording codec shown in the overlay for normal video formats. The UI exposes codec families only: `auto`, `h264`, `h265`, `av1`, `vp9`, and `ffv1`. HyprCapture automatically probes NVENC and VAAPI at the selected resolution, then falls back to the corresponding software encoder. Legacy implementation-specific values remain accepted and are folded into their codec family. GIF, APNG, and WebP use fixed FFmpeg image-animation encoders. |
 | `record_transparent_codec` | string | `auto` | Default recording codec shown when `window_background = "transparent"`. `auto` probes a tiny FFmpeg encode/decode sample and uses a hardware alpha encoder only when it actually preserves alpha; otherwise it falls back to CPU VP9/FFV1 and shows a warning. |
 | `record_solid_alpha` | bool | `false` | For window recordings with `window_background` set to `"follow-system"`, `"white"`, or `"black"`, keep alpha outside the window content when the selected format/codec supports transparency. This uses the same edge behavior as screenshot output and falls back to opaque recording when unsupported. |
 | `record_preset` | string | `veryfast` | FFmpeg preset used with `libx264`/`libx264rgb`. |
@@ -433,7 +433,7 @@ hl.config({
 })
 ```
 
-`auto` currently prefers VAAPI when a writable `/dev/dri/renderD*` device exists and falls back to `libx264` for the window-recording FFmpeg backend. For alpha-preserving window recordings, use `webm`/VP9, `mkv`/FFV1, APNG, or WebP; `mp4` is blocked by the overlay when `window_background = "transparent"`. MOV/HEVC alpha exists in Apple's ecosystem, but this Linux FFmpeg path does not currently encode that alpha profile, so transparent MOV is also blocked. WebP animation uses `libwebp_anim` in lossy mode at quality 75.
+`auto` selects H.264. For compositor recording, HyprCapture probes NVENC and VAAPI with the actual output dimensions and automatically falls back to the software encoder when hardware encoding is unavailable or rejects that size. For alpha-preserving window recordings, use `webm`/VP9, `mkv`/FFV1, APNG, or WebP; `mp4` is blocked by the overlay when `window_background = "transparent"`. MOV/HEVC alpha exists in Apple's ecosystem, but this Linux FFmpeg path does not currently encode that alpha profile, so transparent MOV is also blocked. WebP animation uses `libwebp_anim` in lossy mode at quality 75.
 
 The compositor recording path uses synchronous compositor readback. To avoid making Hyprland sluggish, window recordings are capped by `record_window_fps_limit` until the GPU-only encoder path lands. GIF, APNG, and WebP use the same compositor path for fullscreen and region captures, so keep area and FPS modest. For visible on-screen windows where 60 fps matters more than offscreen/occlusion-safe capture, set `record_window_backend = "gsr-visible"` and use a normal video format.
 

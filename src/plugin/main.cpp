@@ -158,7 +158,7 @@ void registerConfigValues() {
     addStringConfig("record_fps_options", "Recording frame rate choices", "15 24 30 60");
     addIntConfig("record_window_fps_limit", "Compositor window recording FPS cap", 12);
     addIntConfig("record_window_real_bg_fps_limit", "Real-background window recording FPS cap", 8);
-    addStringConfig("record_codec", "Default recording codec", "libx264");
+    addStringConfig("record_codec", "Default recording codec", "auto");
     addStringConfig("record_transparent_codec", "Default transparent recording codec", "auto");
     addBoolConfig("record_solid_alpha", "Keep alpha outside follow-system/white/black window recording content when the encoder supports it", false);
     addStringConfig("record_preset", "FFmpeg preset", "veryfast");
