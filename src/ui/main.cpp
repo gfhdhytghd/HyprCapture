@@ -195,10 +195,9 @@ DispatchCommandResult dispatchRecordingStart(const QString& requestPath) {
     return evalHyprcaptureLuaFunction(QStringLiteral("record_start"), requestPath);
 }
 
-class RecordingCountdownWindow final : public QWidget {
+class RecordingCountdownDisplay final : public QWidget {
   public:
-    RecordingCountdownWindow(QString requestPath, int seconds)
-        : QWidget(nullptr), m_requestPath(std::move(requestPath)), m_remaining(std::clamp(seconds, 1, MAX_RECORD_COUNTDOWN_SECONDS)) {
+    explicit RecordingCountdownDisplay(QScreen* screen) : QWidget(nullptr) {
         setWindowTitle(QStringLiteral("HyprCapture Countdown"));
         setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus | Qt::WindowTransparentForInput);
         setAttribute(Qt::WA_TranslucentBackground);
@@ -206,15 +205,14 @@ class RecordingCountdownWindow final : public QWidget {
         setAttribute(Qt::WA_ShowWithoutActivating);
         setFocusPolicy(Qt::NoFocus);
 
-        QRect desktop;
-        for (const auto* screen : QGuiApplication::screens())
-            desktop = desktop.united(screen->geometry());
-        if (!desktop.isValid() && QGuiApplication::primaryScreen())
-            desktop = QGuiApplication::primaryScreen()->geometry();
-        setGeometry(desktop.isValid() ? desktop : QRect(0, 0, 1280, 720));
+        setGeometry(screen ? screen->geometry() : QRect(0, 0, 1280, 720));
 
         winId();
+        if (screen && windowHandle())
+            windowHandle()->setScreen(screen);
         if (auto* layerWindow = LayerShellQt::Window::get(windowHandle())) {
+            if (screen)
+                layerWindow->setScreen(screen);
             layerWindow->setScope("hyprcapture-countdown");
             layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
             layerWindow->setAnchors(LayerShellQt::Window::Anchors{LayerShellQt::Window::AnchorTop} | LayerShellQt::Window::AnchorBottom |
@@ -224,14 +222,11 @@ class RecordingCountdownWindow final : public QWidget {
             layerWindow->setDesiredSize(QSize(0, 0));
         }
 
-        connect(&m_timer, &QTimer::timeout, this, [this] { advance(); });
-        m_timer.setInterval(1000);
     }
 
-    void start() {
-        show();
-        raise();
-        m_timer.start();
+    void setRemaining(int remaining) {
+        m_remaining = remaining;
+        update();
     }
 
   protected:
@@ -242,11 +237,10 @@ class RecordingCountdownWindow final : public QWidget {
         painter.fillRect(rect(), Qt::transparent);
         painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
 
-        const QRect screen = countdownScreenRect();
-        const int minDim = std::max(1, std::min(screen.width(), screen.height()));
+        const int minDim = std::max(1, std::min(width(), height()));
         const int maxDiameter = std::max(64, std::min(280, minDim - 32));
         const int diameter = std::clamp(minDim / 5, 64, maxDiameter);
-        const QPoint center = screen.center();
+        const QPoint center = rect().center();
         const QRectF badge(center.x() - diameter / 2.0, center.y() - diameter / 2.0, diameter, diameter);
         const QString text = QString::number(m_remaining);
 
@@ -265,26 +259,47 @@ class RecordingCountdownWindow final : public QWidget {
     }
 
   private:
-    QRect countdownScreenRect() const {
-        const QScreen* screen = QGuiApplication::screenAt(QCursor::pos());
-        if (!screen)
-            screen = QGuiApplication::primaryScreen();
-        const QRect screenGeometry = screen ? screen->geometry() : geometry();
-        return screenGeometry.translated(-geometry().topLeft()).intersected(rect());
+    int m_remaining = 0;
+};
+
+class RecordingCountdownController final : public QObject {
+  public:
+    RecordingCountdownController(QString requestPath, int seconds)
+        : m_requestPath(std::move(requestPath)), m_remaining(std::clamp(seconds, 1, MAX_RECORD_COUNTDOWN_SECONDS)) {
+        for (QScreen* screen : QGuiApplication::screens()) {
+            if (screen)
+                m_displays.push_back(std::make_unique<RecordingCountdownDisplay>(screen));
+        }
+        if (m_displays.empty())
+            m_displays.push_back(std::make_unique<RecordingCountdownDisplay>(QGuiApplication::primaryScreen()));
+        connect(&m_timer, &QTimer::timeout, this, [this] { advance(); });
+        m_timer.setInterval(1000);
     }
 
+    void start() {
+        for (auto& display : m_displays) {
+            display->setRemaining(m_remaining);
+            display->show();
+            display->raise();
+        }
+        m_timer.start();
+    }
+
+  private:
     void advance() {
         --m_remaining;
         if (m_remaining <= 0) {
             startRecording();
             return;
         }
-        update();
+        for (auto& display : m_displays)
+            display->setRemaining(m_remaining);
     }
 
     void startRecording() {
         m_timer.stop();
-        hide();
+        for (auto& display : m_displays)
+            display->hide();
         qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
         QTimer::singleShot(120, this, [this] {
             const auto result = dispatchRecordingStart(m_requestPath);
@@ -297,6 +312,7 @@ class RecordingCountdownWindow final : public QWidget {
     QString m_requestPath;
     int     m_remaining = 0;
     QTimer  m_timer;
+    std::vector<std::unique_ptr<RecordingCountdownDisplay>> m_displays;
 };
 
 bool isTrustedRecordingResultPath(const QString& path, const hyprcapture::CaptureDefaults& defaults) {
@@ -771,7 +787,7 @@ int main(int argc, char** argv) {
         const QString requestPath = parser.value("record-countdown-request");
         if (!hyprcapture::ui::isPrivateRuntimeFile(requestPath, MAX_RECORD_REQUEST_BYTES))
             return 1;
-        RecordingCountdownWindow countdown(requestPath, defaults.recordCountdownSeconds);
+        RecordingCountdownController countdown(requestPath, defaults.recordCountdownSeconds);
         countdown.start();
         return app.exec();
     }
