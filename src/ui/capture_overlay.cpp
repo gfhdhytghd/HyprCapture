@@ -1970,7 +1970,7 @@ void CaptureOverlay::buildToolbar() {
 
     m_recordBackend = new InlineSelect(this, m_recordOptions);
     m_recordBackend->setPrefix("Backend");
-    m_recordBackend->addItems(QStringList{"compositor", "gsr-visible"});
+    m_recordBackend->addItems(QStringList{"auto", "compositor", "gsr-visible"});
     m_recordBackend->setCurrentText(qString(hyprcapture::toString(m_defaults.recordWindowBackend)));
     m_recordBackend->setOnChanged(onRecordOptionChanged);
     recordLayout->addWidget(m_recordBackend);

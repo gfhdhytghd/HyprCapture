@@ -14,7 +14,7 @@ enum class OverlayScope { Fix, Focus, All };
 enum class WindowBackground { White, Black, FollowSystem, Real, Transparent };
 enum class DecorationPolicy { Keep, Remove };
 enum class WindowWheelScope { Workspace, UnderCursor };
-enum class RecordWindowBackend { Compositor, GsrVisible };
+enum class RecordWindowBackend { Auto, Compositor, GsrVisible };
 enum class NotificationBackend { Hyprland, System };
 enum class WatermarkPosition { UpLeft, UpMiddle, UpRight, LeftMiddle, Central, RightMiddle, DownLeft, DownMiddle, DownRight };
 
@@ -53,7 +53,7 @@ struct CaptureDefaults {
     bool             recordSolidAlpha = false;
     std::string      recordPreset = "veryfast";
     std::string      recordGsrFlags;
-    RecordWindowBackend recordWindowBackend = RecordWindowBackend::Compositor;
+    RecordWindowBackend recordWindowBackend = RecordWindowBackend::Auto;
     std::int64_t     recordFps = 30;
     std::string      recordFpsOptions = "15 24 30 60";
     std::int64_t     recordWindowFpsLimit = 12;
@@ -79,7 +79,7 @@ OverlayScope parseOverlayScope(std::string_view value, OverlayScope fallback = O
 WindowBackground parseWindowBackground(std::string_view value, WindowBackground fallback = WindowBackground::FollowSystem);
 DecorationPolicy parseDecorationPolicy(std::string_view value, DecorationPolicy fallback = DecorationPolicy::Keep);
 WindowWheelScope parseWindowWheelScope(std::string_view value, WindowWheelScope fallback = WindowWheelScope::Workspace);
-RecordWindowBackend parseRecordWindowBackend(std::string_view value, RecordWindowBackend fallback = RecordWindowBackend::Compositor);
+RecordWindowBackend parseRecordWindowBackend(std::string_view value, RecordWindowBackend fallback = RecordWindowBackend::Auto);
 NotificationBackend parseNotificationBackend(std::string_view value, NotificationBackend fallback = NotificationBackend::Hyprland);
 WatermarkPosition parseWatermarkPosition(std::string_view value, WatermarkPosition fallback = WatermarkPosition::Central);
 std::string normalizeRecordFormat(std::string_view value);

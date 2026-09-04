@@ -190,6 +190,8 @@ WindowWheelScope parseWindowWheelScope(std::string_view value, WindowWheelScope 
 
 RecordWindowBackend parseRecordWindowBackend(std::string_view value, RecordWindowBackend fallback) {
     const auto v = normalized(value);
+    if (v == "auto" || v == "automatic")
+        return RecordWindowBackend::Auto;
     if (v == "compositor" || v == "hyprcapture" || v == "exact")
         return RecordWindowBackend::Compositor;
     if (v == "gsr-visible" || v == "visible-gsr" || v == "gsr" || v == "region")
@@ -309,10 +311,11 @@ std::string toString(WindowWheelScope value) {
 
 std::string toString(RecordWindowBackend value) {
     switch (value) {
+        case RecordWindowBackend::Auto: return "auto";
         case RecordWindowBackend::Compositor: return "compositor";
         case RecordWindowBackend::GsrVisible: return "gsr-visible";
     }
-    return "compositor";
+    return "auto";
 }
 
 std::string toString(NotificationBackend value) {

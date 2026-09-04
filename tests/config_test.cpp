@@ -53,6 +53,7 @@ int main() {
     require(CaptureDefaults{}.windowWheelScope == WindowWheelScope::Workspace, "window wheel scope default");
     require(CaptureDefaults{}.screenshotNotification, "screenshot notification default");
     require(CaptureDefaults{}.notificationBackend == NotificationBackend::Hyprland, "notification backend default");
+    require(CaptureDefaults{}.recordWindowBackend == RecordWindowBackend::Auto, "record backend default");
     require(CaptureDefaults{}.fullscreenPreviewRounding == "auto", "fullscreen preview rounding default");
 
     require(parseFullscreenScope("all-monitors") == FullscreenScope::All, "all monitor scope parse");
@@ -69,6 +70,7 @@ int main() {
     require(parseWindowWheelScope("under_cursor") == WindowWheelScope::UnderCursor, "under cursor window wheel scope parse");
     require(parseWindowWheelScope("cursor") == WindowWheelScope::UnderCursor, "cursor window wheel scope alias");
     require(parseWindowWheelScope("bad", WindowWheelScope::UnderCursor) == WindowWheelScope::UnderCursor, "window wheel scope fallback");
+    require(parseRecordWindowBackend("automatic") == RecordWindowBackend::Auto, "automatic record backend alias");
     require(parseRecordWindowBackend("visible_gsr") == RecordWindowBackend::GsrVisible, "visible gsr backend parse");
     require(parseNotificationBackend("libnotify") == NotificationBackend::System, "libnotify notification backend alias");
     require(parseNotificationBackend("dbus") == NotificationBackend::System, "dbus notification backend alias");
@@ -91,6 +93,7 @@ int main() {
     require(toString(FullscreenScope::PerMonitor) == "per-monitor", "per monitor stringify");
     require(toString(OverlayScope::Focus) == "focus", "focus overlay scope stringify");
     require(toString(WindowBackground::FollowSystem) == "follow-system", "follow system stringify");
+    require(toString(RecordWindowBackend::Auto) == "auto", "auto record backend stringify");
     require(toString(RecordWindowBackend::GsrVisible) == "gsr-visible", "visible gsr backend stringify");
     require(toString(NotificationBackend::System) == "system", "system notification backend stringify");
     require(toString(WatermarkPosition::DownMiddle) == "down-middle", "down middle stringify");

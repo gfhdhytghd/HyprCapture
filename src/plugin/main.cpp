@@ -163,7 +163,7 @@ void registerConfigValues() {
     addBoolConfig("record_solid_alpha", "Keep alpha outside follow-system/white/black window recording content when the encoder supports it", false);
     addStringConfig("record_preset", "FFmpeg preset", "veryfast");
     addStringConfig("record_gsr_flags", "Extra gpu-screen-recorder flags", "");
-    addStringConfig("record_window_backend", "Window recording backend", "compositor");
+    addStringConfig("record_window_backend", "Recording backend (auto, compositor, or gsr-visible)", "auto");
     addIntConfig("record_max_seconds", "Optional automatic recording stop in seconds", 0);
     addIntConfig("record_countdown_seconds", "Recording start countdown in seconds", 0);
     addIntConfig("thumbnail_timeout_ms", "Thumbnail auto-close timeout in milliseconds", 5000);

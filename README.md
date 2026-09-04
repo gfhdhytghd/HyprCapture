@@ -247,11 +247,11 @@ The response FIFO starts with `HYPRCAP_PIPE_V1`, a decimal JSON header length, t
 
 ### Recording
 
-Recording is toggled from the normal screenshot overlay toolbar. Click the record icon, choose an output format, then choose fullscreen, drag a region, or choose a window exactly like a screenshot. Fullscreen and region video recordings are handed to `gpu-screen-recorder`; GIF, APNG, WebP, and the default window backend use HyprCapture's compositor renderer. Window recordings also have an optional visible-region `gpu-screen-recorder` backend for normal video formats.
+Recording is toggled from the normal screenshot overlay toolbar. Click the record icon, choose an output format and backend, then choose fullscreen, drag a region, or choose a window exactly like a screenshot. The default `auto` backend uses HyprCapture's compositor renderer for windows and `gpu-screen-recorder` for fullscreen or region video. Virtual-output targets always use the compositor because GPU Screen Recorder cannot address them.
 
 To stop an active recording, open the same overlay and click the checked record icon.
 
-Current recording output is a single file under `record_save_dir`. Fullscreen and region video recordings require `gpu-screen-recorder` and avoid Hyprland's screencopy, portal, and screenshare session paths. GIF and animated WebP use FFmpeg rawvideo input from compositor RGBA readback for all capture modes. APNG records a hidden 60 fps MKV intermediate first, then the helper transcodes it to APNG while showing the thumbnail with progress when thumbnails are enabled. Animation formats require a fixed duration of 3, 5, 10, 15, or 30 seconds and default to 5 seconds. `record_window_backend = "gsr-visible"` records the selected on-screen window rectangle through `gpu-screen-recorder` for lower overhead on normal video formats, without portal or managed screenshare sessions, but it captures what is visibly present in that screen region. Finished recordings use the same `clipboard` and `show_thumbnail` settings as screenshots; clipboard output is a local file URI.
+Current recording output is a single file under `record_save_dir`. With `record_window_backend = "auto"`, normal fullscreen and region video use `gpu-screen-recorder`, while windows, virtual outputs, GIF, APNG, and WebP use compositor RGBA readback. If the preferred backend fails during startup, HyprCapture tries the compatible alternate backend; a GSR process that exits without producing data also falls back to compositor recording. Transparent recordings and virtual outputs stay on compositor because GSR is not an equivalent fallback. APNG records a hidden 60 fps MKV intermediate first, then the helper transcodes it to APNG while showing the thumbnail with progress when thumbnails are enabled. Animation formats require a fixed duration of 3, 5, 10, 15, or 30 seconds and default to 5 seconds. `gsr-visible` records a selected on-screen window rectangle with lower overhead, without portal or managed screenshare sessions, but captures what is visibly present in that region. Finished recordings use the same `clipboard` and `show_thumbnail` settings as screenshots; clipboard output is a local file URI.
 
 #### Recording state socket
 
@@ -333,7 +333,7 @@ hl.config({
             record_solid_alpha = false,
             record_preset = "veryfast",
             record_gsr_flags = "",
-            record_window_backend = "compositor",
+            record_window_backend = "auto",
             record_max_seconds = 0,
             record_countdown_seconds = 0,
             include_cursor = false,
@@ -413,7 +413,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `record_solid_alpha` | bool | `false` | For window recordings with `window_background` set to `"follow-system"`, `"white"`, or `"black"`, keep alpha outside the window content when the selected format/codec supports transparency. This uses the same edge behavior as screenshot output and falls back to opaque recording when unsupported. |
 | `record_preset` | string | `veryfast` | FFmpeg preset used with `libx264`/`libx264rgb`. |
 | `record_gsr_flags` | string | empty | Extra default flags passed to `gpu-screen-recorder` for fullscreen and region recordings. `-w` and `-o` are rejected because HyprCapture owns the capture target and output path. If defaults conflict with overlay-controlled format, codec, FPS, cursor, target, or output settings, the overlay settings are appended later and take precedence. |
-| `record_window_backend` | string | `compositor` | Window recording backend. `compositor` preserves HyprCapture's offscreen window capture and background behavior. `gsr-visible` records the selected visible screen rectangle with `gpu-screen-recorder` for much lower overhead on normal video formats; occlusion/hidden-window capture and background replacement are not guaranteed. GIF, APNG, and WebP always use the compositor backend. |
+| `record_window_backend` | string | `auto` | Recording backend. `auto` uses compositor for windows and GSR for ordinary fullscreen/region video. `compositor` prefers compositor for every mode; `gsr-visible` prefers GSR, including a visible window region. Compatible startup failures try the other backend. Virtual outputs, transparent recordings, GIF, APNG, and WebP always use compositor. |
 | `record_max_seconds` | int | `0` | Optional automatic stop in seconds. `0` means no duration limit for normal video formats. GIF, APNG, and WebP require one of `3`, `5`, `10`, `15`, or `30` seconds in the overlay and fall back to `5` when configured otherwise. |
 | `record_countdown_seconds` | int | `0` | Optional countdown before recording starts. `0` disables it; values are clamped to 60 seconds. When enabled, HyprCapture closes the capture overlay, shows an input-transparent countdown window centered on the active screen, then starts recording. |
 | `thumbnail_timeout_ms` | int | `5000` | Thumbnail auto-close timeout in milliseconds. Use `0` to keep it open until user action. |

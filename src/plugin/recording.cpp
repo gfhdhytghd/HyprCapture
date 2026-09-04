@@ -397,27 +397,17 @@ PHLMONITOR recordingTargetExactMonitor(const Rect& target) {
     return {};
 }
 
-bool recordingTargetIntersectsTransformedMonitor(const Rect& target) {
+bool recordingTargetIntersectsVirtualMonitor(const Rect& target) {
     if (!g_pCompositor || !recordingRectValid(target))
         return false;
 
     for (const auto& monitor : State::monitorState()->monitors()) {
-        if (!monitor || static_cast<int>(monitor->m_transform) == 0)
+        if (!monitor || !monitor->m_createdByUser)
             continue;
         if (recordingRectsIntersect(target, recordingMonitorRect(monitor)))
             return true;
     }
     return false;
-}
-
-bool recordingNeedsCompositorTransformFallback(const RecordingRequest& request) {
-    if (request.mode == CaptureMode::Fullscreen || request.mode == CaptureMode::Region)
-        return false;
-
-    if (!recordingTargetIntersectsTransformedMonitor(request.targetGeometry))
-        return false;
-
-    return true;
 }
 
 std::string gsrCaptureSource(const RecordingRequest& request) {
@@ -1097,10 +1087,14 @@ struct ActiveGsrRecording {
     Time::steady_tp       startedAt;
     std::filesystem::path outputPath;
     CaptureDefaults       defaults;
+    RecordingRequest      request;
+    bool                  allowCompositorFallback = false;
 };
 
 std::unique_ptr<ActiveGsrRecording> g_gsrRecording;
 RecordingStateServer               g_recordingStateServer;
+
+LaunchResult startCompositorRecording(RecordingRequest request);
 
 void notifyRecording(const std::string& message, NotificationLevel level = NotificationLevel::Info, int timeoutMs = 3000) {
     notifyUser(message, level, timeoutMs);
@@ -1147,6 +1141,21 @@ bool reapGsrRecordingIfExited() {
         auto recording = std::move(g_gsrRecording);
         if (recording->timer && g_pEventLoopManager)
             g_pEventLoopManager->removeTimer(recording->timer);
+        const bool failedExit = result == recording->pid && (!WIFEXITED(status) || WEXITSTATUS(status) != 0);
+        if ((!recordingOutputHasBytes(recording->outputPath) || failedExit) && recording->allowCompositorFallback) {
+            std::error_code ec;
+            std::filesystem::remove(recording->outputPath, ec);
+            g_recordingStateServer.clear();
+            const auto fallback = startCompositorRecording(std::move(recording->request));
+            if (fallback.success) {
+                notifyRecording("gpu-screen-recorder failed; continuing with compositor recording", NotificationLevel::Warning, 5000);
+                return true;
+            }
+            notifyRecording("recording backends failed: gpu-screen-recorder produced no data; compositor: " + fallback.error,
+                            NotificationLevel::Error,
+                            7000);
+            return false;
+        }
         finishGsrRecordingOutput(recording->defaults, recording->outputPath, "recording finished", true);
         g_recordingStateServer.clear();
         return false;
@@ -1296,7 +1305,7 @@ void scheduleGsrMonitorTimer(int maxSeconds) {
         [maxSeconds](SP<CEventLoopTimer> self, void*) {
             if (!g_gsrRecording || g_gsrRecording->timer.get() != self.get())
                 return;
-            if (!reapGsrRecordingIfExited())
+            if (!reapGsrRecordingIfExited() || !g_gsrRecording)
                 return;
             if (maxSeconds > 0 && std::chrono::duration_cast<std::chrono::seconds>(Time::steadyNow() - g_gsrRecording->startedAt).count() >= maxSeconds) {
                 stopRecordingInternal("stopped at max duration", true);
@@ -1458,7 +1467,7 @@ LaunchResult spawnGpuScreenRecorder(const RecordingRequest& request, const std::
     return {.success = true};
 }
 
-LaunchResult startGsrRecording(const RecordingRequest& request) {
+LaunchResult startGsrRecording(const RecordingRequest& request, bool allowCompositorFallback) {
     if ((request.mode == CaptureMode::Region || request.mode == CaptureMode::Window) && (request.targetGeometry.width <= 0.0 || request.targetGeometry.height <= 0.0))
         return {.success = false, .error = "invalid recording geometry"};
 
@@ -1475,6 +1484,8 @@ LaunchResult startGsrRecording(const RecordingRequest& request) {
     g_gsrRecording->startedAt = Time::steadyNow();
     g_gsrRecording->outputPath = *outputPath;
     g_gsrRecording->defaults = request.defaults;
+    g_gsrRecording->request = request;
+    g_gsrRecording->allowCompositorFallback = allowCompositorFallback;
     scheduleGsrMonitorTimer(std::clamp<int>(static_cast<int>(request.defaults.recordMaxSeconds), 0, 24 * 60 * 60));
     g_recordingStateServer.begin("gpu-screen-recorder", *outputPath, toString(request.mode), sanitizedRecordFormat(request.defaults.recordFormat));
 
@@ -1482,44 +1493,14 @@ LaunchResult startGsrRecording(const RecordingRequest& request) {
     return {.success = true};
 }
 
-} // namespace
-
-LaunchResult startRecordingFromRequestFile(const std::string& path) {
-    if (g_recording || reapGsrRecordingIfExited() || reapFinishingRawRecordingIfActive())
-        return {.success = false, .error = "recording already active"};
-    if (!g_pEventLoopManager)
-        return {.success = false, .error = "Hyprland event loop unavailable"};
-
-    const auto requestJson = readPrivateRequestFile(path);
-    if (!requestJson)
-        return {.success = false, .error = "invalid recording request file"};
-
-    auto request = decodeRecordingRequestJson(*requestJson);
-    if (!request)
-        return {.success = false, .error = "invalid recording request metadata"};
-
-    request->defaults.recordFormat = sanitizedRecordFormat(request->defaults.recordFormat);
-    if (request->mode != CaptureMode::Window)
-        request->defaults.recordSolidAlpha = false;
-    const bool imageAnimation = isImageAnimationRecordFormat(request->defaults.recordFormat);
-    if (imageAnimation) {
-        request->defaults.recordMaxSeconds = normalizedAnimationDurationSeconds(request->defaults.recordMaxSeconds);
-        request->defaults.recordWindowBackend = RecordWindowBackend::Compositor;
-    }
-
-    const bool canUseGsr = !imageAnimation &&
-        (request->mode == CaptureMode::Fullscreen || request->mode == CaptureMode::Region ||
-         (request->mode == CaptureMode::Window && request->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible));
-    if (canUseGsr && !recordingNeedsCompositorTransformFallback(*request))
-        return startGsrRecording(*request);
-
-    RecordingFrameRequest frameRequest{.defaults = request->defaults,
-                                       .mode = request->mode,
-                                       .targetGeometry = request->targetGeometry,
-                                       .windowAddress = request->windowAddress};
+LaunchResult startCompositorRecording(RecordingRequest request) {
+    RecordingFrameRequest frameRequest{.defaults = request.defaults,
+                                       .mode = request.mode,
+                                       .targetGeometry = request.targetGeometry,
+                                       .windowAddress = request.windowAddress};
     const auto format = sanitizedRecordFormat(frameRequest.defaults.recordFormat);
     frameRequest.defaults.recordFormat = format;
-    const auto codec = effectiveRecordingCodec(frameRequest, request->defaults.recordCodec);
+    const auto codec = effectiveRecordingCodec(frameRequest, request.defaults.recordCodec);
     const bool transcodeToApng = format == "apng";
     const bool preserveAlpha = recordingNeedsAlpha(frameRequest) && recordingEncoderSupportsAlpha(format, codec);
     const bool solidAlphaFallback = frameRequest.mode == CaptureMode::Window && frameRequest.defaults.recordSolidAlpha &&
@@ -1536,10 +1517,10 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
     if (!firstFrame || !makeEvenFrame(*firstFrame))
         return {.success = false, .error = "failed to capture first recording frame"};
 
-    const int requestedFps = std::clamp<int>(static_cast<int>(request->defaults.recordFps), 1, 240);
+    const int requestedFps = std::clamp<int>(static_cast<int>(request.defaults.recordFps), 1, 240);
     const int fps = effectiveRecordingFps(frameRequest, requestedFps);
     std::string outputPathError;
-    const auto  outputPath = uniqueOutputPath(request->defaults, outputPathError);
+    const auto  outputPath = uniqueOutputPath(request.defaults, outputPathError);
     if (!outputPath)
         return {.success = false, .error = outputPathError.empty() ? "recording output path failed" : outputPathError};
 
@@ -1563,7 +1544,7 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
                                                      fps,
                                                      encoderFormat,
                                                      encoderCodec,
-                                                     sanitizedPreset(request->defaults.recordPreset),
+                                                     sanitizedPreset(request.defaults.recordPreset),
                                                      preserveAlpha,
                                                      encoderQueueLimit);
     if (const auto result = encoder->start(); !result.success)
@@ -1586,7 +1567,7 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
     g_recording->transcodeToApng = transcodeToApng;
     g_recording->preserveAlpha = preserveAlpha;
     scheduleRecordingTimer();
-    g_recordingStateServer.begin("compositor", *outputPath, toString(request->mode), format);
+    g_recordingStateServer.begin("compositor", *outputPath, toString(request.mode), format);
 
     if (fps < requestedFps) {
         if (isImageAnimationRecordFormat(format))
@@ -1596,11 +1577,73 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
     }
     if (format == "apng") {
         notifyRecording("apng recording uses a 60 fps mkv intermediate before transcoding", NotificationLevel::Warning, 5000);
-        if (request->defaults.recordMaxSeconds >= 10)
+        if (request.defaults.recordMaxSeconds >= 10)
             notifyRecording("apng recordings of 10s or longer can create very large files", NotificationLevel::Warning, 7000);
     }
     notifyRecording("recording started: " + outputPath->string());
     return {.success = true};
+}
+
+bool recordingCanUseGsr(const RecordingRequest& request) {
+    if (isImageAnimationRecordFormat(request.defaults.recordFormat) || recordingTargetIntersectsVirtualMonitor(request.targetGeometry))
+        return false;
+    if (request.mode != CaptureMode::Window)
+        return true;
+    return !recordingNeedsAlpha(RecordingFrameRequest{.defaults = request.defaults,
+                                                       .mode = request.mode,
+                                                       .targetGeometry = request.targetGeometry,
+                                                       .windowAddress = request.windowAddress});
+}
+
+} // namespace
+
+LaunchResult startRecordingFromRequestFile(const std::string& path) {
+    if (g_recording || reapGsrRecordingIfExited() || reapFinishingRawRecordingIfActive())
+        return {.success = false, .error = "recording already active"};
+    if (!g_pEventLoopManager)
+        return {.success = false, .error = "Hyprland event loop unavailable"};
+
+    const auto requestJson = readPrivateRequestFile(path);
+    if (!requestJson)
+        return {.success = false, .error = "invalid recording request file"};
+
+    auto request = decodeRecordingRequestJson(*requestJson);
+    if (!request)
+        return {.success = false, .error = "invalid recording request metadata"};
+
+    request->defaults.recordFormat = sanitizedRecordFormat(request->defaults.recordFormat);
+    if (request->mode != CaptureMode::Window)
+        request->defaults.recordSolidAlpha = false;
+    if (isImageAnimationRecordFormat(request->defaults.recordFormat))
+        request->defaults.recordMaxSeconds = normalizedAnimationDurationSeconds(request->defaults.recordMaxSeconds);
+
+    const bool canUseGsr = recordingCanUseGsr(*request);
+    const bool preferGsr = canUseGsr &&
+        (request->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible ||
+         (request->defaults.recordWindowBackend == RecordWindowBackend::Auto && request->mode != CaptureMode::Window));
+
+    if (preferGsr) {
+        const auto primary = startGsrRecording(*request, true);
+        if (primary.success)
+            return primary;
+        const auto fallback = startCompositorRecording(*request);
+        if (fallback.success) {
+            notifyRecording("gpu-screen-recorder start failed; using compositor recording", NotificationLevel::Warning, 5000);
+            return fallback;
+        }
+        return {.success = false, .error = "recording backends failed: gpu-screen-recorder: " + primary.error + "; compositor: " + fallback.error};
+    }
+
+    const auto primary = startCompositorRecording(*request);
+    if (primary.success || !canUseGsr)
+        return primary;
+
+    const auto fallback = startGsrRecording(*request, false);
+    if (fallback.success) {
+        notifyRecording("compositor recording start failed; using gpu-screen-recorder", NotificationLevel::Warning, 5000);
+        return fallback;
+    }
+    return {.success = false, .error = "recording backends failed: compositor: " + primary.error + "; gpu-screen-recorder: " + fallback.error};
 }
 
 LaunchResult stopRecording(const std::string& reason) {
