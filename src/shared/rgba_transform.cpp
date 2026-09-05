@@ -1,6 +1,7 @@
 #include "shared/rgba_transform.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <limits>
 #include <utility>
@@ -9,6 +10,25 @@ namespace hyprcapture {
 namespace {
 
 constexpr std::size_t RGBA_BYTES_PER_PIXEL = 4;
+
+constexpr unsigned char unpremultiplyChannel(unsigned char channel, unsigned char alpha) {
+    if (alpha == 0)
+        return 0;
+    if (alpha == 255)
+        return channel;
+    const int straight = (static_cast<int>(channel) * 255 + alpha / 2) / alpha;
+    return static_cast<unsigned char>(std::min(255, straight));
+}
+
+constexpr std::array<unsigned char, 256 * 256> makeUnpremultiplyLut() {
+    std::array<unsigned char, 256 * 256> lut{};
+    for (std::size_t alpha = 0; alpha < 256; ++alpha)
+        for (std::size_t channel = 0; channel < 256; ++channel)
+            lut[(alpha << 8U) | channel] = unpremultiplyChannel(static_cast<unsigned char>(channel), static_cast<unsigned char>(alpha));
+    return lut;
+}
+
+constexpr auto UNPREMULTIPLY_LUT = makeUnpremultiplyLut();
 
 bool checkedRgbaByteSize(int width, int height, std::size_t& bytes) {
     if (width <= 0 || height <= 0)
@@ -110,6 +130,24 @@ RgbaFrame normalizeRgbaFrameToLogicalOrientation(RgbaFrame frame, int transform)
         case 6: return flipHorizontal(rotate180(frame));
         case 7: return flipHorizontal(rotate90CounterClockwise(frame));
         default: return frame;
+    }
+}
+
+void unpremultiplyRgbaPixels(std::vector<unsigned char>& pixels) {
+    for (std::size_t i = 0; i + 3 < pixels.size(); i += RGBA_BYTES_PER_PIXEL) {
+        const auto alpha = pixels[i + 3];
+        if (alpha == 0) {
+            pixels[i] = 0;
+            pixels[i + 1] = 0;
+            pixels[i + 2] = 0;
+            continue;
+        }
+        if (alpha == 255)
+            continue;
+        const auto base = static_cast<std::size_t>(alpha) << 8U;
+        pixels[i] = UNPREMULTIPLY_LUT[base | pixels[i]];
+        pixels[i + 1] = UNPREMULTIPLY_LUT[base | pixels[i + 1]];
+        pixels[i + 2] = UNPREMULTIPLY_LUT[base | pixels[i + 2]];
     }
 }
 

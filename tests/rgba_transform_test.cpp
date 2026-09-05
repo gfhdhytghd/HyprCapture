@@ -1,5 +1,6 @@
 #include "shared/rgba_transform.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -39,6 +40,32 @@ void requireTransform(int transform, int width, int height, const std::vector<in
     require(result.width == width, "transform " + std::to_string(transform) + " width");
     require(result.height == height, "transform " + std::to_string(transform) + " height");
     require(pixelNumbers(result) == expected, "transform " + std::to_string(transform) + " pixels");
+}
+
+unsigned char legacyUnpremultiply(unsigned char channel, unsigned char alpha) {
+    if (alpha == 0)
+        return 0;
+    if (alpha == 255)
+        return channel;
+    const int straight = (static_cast<int>(channel) * 255 + alpha / 2) / alpha;
+    return static_cast<unsigned char>(std::min(255, straight));
+}
+
+void unpremultiplyLutMatchesLegacyFormulaForEveryBytePair() {
+    for (int alpha = 0; alpha < 256; ++alpha) {
+        for (int channel = 0; channel < 256; ++channel) {
+            std::vector<unsigned char> pixels{
+                static_cast<unsigned char>(channel),
+                static_cast<unsigned char>(channel),
+                static_cast<unsigned char>(channel),
+                static_cast<unsigned char>(alpha),
+            };
+            hyprcapture::unpremultiplyRgbaPixels(pixels);
+            const auto expected = legacyUnpremultiply(static_cast<unsigned char>(channel), static_cast<unsigned char>(alpha));
+            require(pixels[0] == expected && pixels[1] == expected && pixels[2] == expected && pixels[3] == alpha,
+                    "unpremultiply LUT must match the legacy formula for every channel/alpha pair");
+        }
+    }
 }
 
 } // namespace
@@ -82,6 +109,8 @@ int main() {
     auto malformed = numberedFrame();
     malformed.pixels.pop_back();
     require(hyprcapture::normalizeRgbaFrameToLogicalOrientation(std::move(malformed), 1).pixels.empty(), "reject malformed frame");
+
+    unpremultiplyLutMatchesLegacyFormulaForEveryBytePair();
 
     std::cout << "rgba transform tests passed\n";
     return 0;

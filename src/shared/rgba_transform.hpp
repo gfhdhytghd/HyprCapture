@@ -19,5 +19,8 @@ RgbaCrop logicalRgbaCropToFramebuffer(RgbaCrop crop, int framebufferWidth, int f
 
 bool      rgbaFrameHasExpectedSize(const RgbaFrame& frame);
 RgbaFrame normalizeRgbaFrameToLogicalOrientation(RgbaFrame frame, int transform);
+// Converts premultiplied RGB channels in-place using the exact integer
+// rounding/clamping contract used by compositor artifact capture.
+void      unpremultiplyRgbaPixels(std::vector<unsigned char>& pixels);
 
 } // namespace hyprcapture

@@ -41,6 +41,8 @@ constexpr std::array  kLuaFunctionNames = {
     "record_stop",
     "record_start",
     "window_capture",
+    "window_stream_start",
+    "window_stream_stop",
     "export_pipe",
     "cancel",
     "dispatch",
@@ -328,6 +330,14 @@ SDispatchResult dispatchExportPipe(const std::string& args) {
     return dispatchResult(result);
 }
 
+SDispatchResult dispatchWindowStreamStart(const std::string& args) {
+    return dispatchResult(hyprcapture::startWindowStreamFromRequestFile(args));
+}
+
+SDispatchResult dispatchWindowStreamStop(const std::string& args) {
+    return dispatchResult(hyprcapture::stopWindowStreamFromRequestFile(args));
+}
+
 SDispatchResult dispatchCancel(const std::string&) {
     return {.success = true};
 }
@@ -362,6 +372,10 @@ std::string normalizeHyprcaptureAction(std::string action) {
         return "window_capture";
     if (action == "exportPipe")
         return "export_pipe";
+    if (action == "windowStreamStart")
+        return "window_stream_start";
+    if (action == "windowStreamStop")
+        return "window_stream_stop";
 
     std::ranges::replace(action, '-', '_');
     return action;
@@ -399,6 +413,14 @@ int luaExportPipe(lua_State* L) {
     return luaDispatchResult(L, dispatchExportPipe(luaOptionalString(L, 1)));
 }
 
+int luaWindowStreamStart(lua_State* L) {
+    return luaDispatchResult(L, dispatchWindowStreamStart(luaOptionalString(L, 1)));
+}
+
+int luaWindowStreamStop(lua_State* L) {
+    return luaDispatchResult(L, dispatchWindowStreamStop(luaOptionalString(L, 1)));
+}
+
 int luaCancel(lua_State* L) {
     return luaDispatchResult(L, dispatchCancel(""));
 }
@@ -423,6 +445,10 @@ int luaDispatch(lua_State* L) {
         return luaDispatchResult(L, dispatchWindowCapture(args));
     if (action == "export_pipe")
         return luaDispatchResult(L, dispatchExportPipe(args));
+    if (action == "window_stream_start")
+        return luaDispatchResult(L, dispatchWindowStreamStart(args));
+    if (action == "window_stream_stop")
+        return luaDispatchResult(L, dispatchWindowStreamStop(args));
     if (action == "cancel")
         return luaDispatchResult(L, dispatchCancel(args));
 
@@ -463,6 +489,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         registerLuaFunction("record_start", luaRecordStart);
         registerLuaFunction("window_capture", luaWindowCapture);
         registerLuaFunction("export_pipe", luaExportPipe);
+        registerLuaFunction("window_stream_start", luaWindowStreamStart);
+        registerLuaFunction("window_stream_stop", luaWindowStreamStop);
         registerLuaFunction("cancel", luaCancel);
         registerLuaFunction("dispatch", luaDispatch);
     }

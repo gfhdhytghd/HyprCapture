@@ -2,6 +2,13 @@
 
 #include "plugin/session_launcher.hpp"
 #include "plugin/timing.hpp"
+#include "plugin/notification.hpp"
+#include "plugin/window_stream_sender.hpp"
+#include "plugin/window_stream_control.hpp"
+#include "plugin/window_stream_extent.hpp"
+#include "plugin/window_stream_cadence.hpp"
+#include "plugin/window_gpu_export.hpp"
+#include "plugin/window_gpu_sender.hpp"
 #include "shared/rgba_transform.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -14,6 +21,7 @@
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
+#include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/errorOverlay/Overlay.hpp>
 #include <hyprland/src/helpers/time/Time.hpp>
 #include <hyprland/src/layout/algorithm/Algorithm.hpp>
@@ -21,6 +29,7 @@
 #include <hyprland/src/layout/supplementary/WorkspaceAlgoMatcher.hpp>
 #include <hyprland/src/managers/input/InputManager.hpp>
 #include <hyprland/src/managers/fullscreen/FullscreenController.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/notification/NotificationOverlay.hpp>
@@ -48,6 +57,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fcntl.h>
+#include <functional>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -58,6 +68,7 @@
 #include <sstream>
 #include <system_error>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <thread>
 #include <unordered_map>
 #include <utility>
@@ -75,6 +86,7 @@ using CHyprOpenGLImpl = Render::GL::CHyprOpenGLImpl;
 using Render::GL::g_pHyprOpenGL;
 using Render::RENDER_MODE_FULL_FAKE;
 using Render::RENDER_PASS_ALL;
+using Render::RPT_EXPORT;
 using Render::eRenderPassMode;
 using Json = nlohmann::ordered_json;
 
@@ -157,6 +169,11 @@ constexpr std::string_view EXPORT_PIPE_MAGIC = "HYPRCAP_PIPE_V1\n";
 constexpr int         WINDOW_BACKGROUND_MIN_ALPHA = 32;
 constexpr int         WINDOW_SHADOW_MAX_RGB = 32;
 constexpr int         WINDOW_SHADOW_MAX_ALPHA = 223;
+// Linux clamps and commonly doubles SO_SNDBUF, so this bounds packet backlog
+// only approximately. It is deliberately small enough that the existing
+// nonblocking EAGAIN path sheds stale SCM_RIGHTS packets instead of allowing
+// an unbounded seqpacket queue of 96-byte headers plus large memfds.
+constexpr int         WINDOW_STREAM_SOCKET_SEND_BUFFER_BYTES = 4096;
 constexpr int         RECORDING_SHADOW_MAX_RGB = 64;
 constexpr int         RECORDING_SHADOW_MAX_ALPHA = 249;
 
@@ -178,6 +195,14 @@ struct RgbaReadbackRegion {
 struct WindowRenderOptions {
     CHyprColor clearColor{0.0, 0.0, 0.0, 0.0};
     SP<CTexture> backgroundTexture;
+    // Streaming supplies its own framebuffer and performs a fenced PBO readback
+    // after this common render stage. Recording deliberately keeps its existing
+    // framebuffer/readback path.
+    SP<CFramebuffer>* framebufferOverride = nullptr;
+    int        framebufferWidthOverride = 0;
+    int        framebufferHeightOverride = 0;
+    bool       useExportProjection = false;
+    bool       skipReadback = false;
     bool       asyncReadback = false;
     bool       normalizeRecordingOrientation = false;
     bool       clipBackgroundToWindow = false;
@@ -241,6 +266,72 @@ struct AsyncPboReadbackState {
 };
 
 AsyncPboReadbackState g_windowRecordingPboReadback;
+
+struct WindowStreamPboReadbackState {
+    static constexpr std::size_t BUFFER_COUNT = WindowStreamPboMetadataSlots::BUFFER_COUNT;
+
+    SP<CFramebuffer> framebuffer;
+    GLuint           buffers[BUFFER_COUNT] = {};
+    GLsync           fences[BUFFER_COUNT] = {};
+    std::size_t      bytes = 0;
+    int              width = 0;
+    int              height = 0;
+    std::size_t      pending = 0;
+    std::size_t      next = 0;
+    std::string      windowAddress;
+    Rect             relativeVisibleGeometry;
+    struct SlotGeometry {
+        CBox          fullBox;
+        CBox          visibleBox;
+        std::uint64_t geometryEpoch = 0;
+        std::uint64_t captureMonotonicNs = 0;
+    } slotGeometry[BUFFER_COUNT];
+    WindowStreamPboMetadataSlots metadataSlots;
+};
+
+WindowStreamPboReadbackState g_windowStreamPboReadback;
+
+// Stream setup is intentionally quiet in the normal case.  These bounded
+// diagnostics make a failed live capture attributable without turning a
+// 60-fps timer into a log flood: each reason is emitted at most six times.
+std::unordered_map<std::string, std::uint8_t> g_windowStreamDiagnosticCounts;
+
+void noteWindowStreamDiagnostic(std::string_view reason) {
+    auto& count = g_windowStreamDiagnosticCounts[std::string(reason)];
+    if (count >= 6)
+        return;
+    ++count;
+    Log::logger->log(Log::WARN, "[hyprcapture] window stream diagnostic {} (#{})", reason, count);
+}
+
+struct WindowStreamSession {
+    std::string                      id;
+    std::string                      windowAddress;
+    CaptureDefaults                  defaults;
+    int                              fps = 60;
+    std::uint64_t                    sequence = 0;
+    std::uint64_t                    geometryEpoch = 1;
+    Rect                             lastWindowGeometry;
+    Rect                             lastMonitorGeometry;
+    double                           lastMonitorScale = 0.0;
+    WindowStreamCadence              cadence;
+    SP<CEventLoopTimer>              timer;
+    // This timer is armed only while the single stream PBO is pending.  It
+    // gives a completed readback a chance to reach the sender between 60 Hz
+    // render ticks, without adding a second render cadence.
+    SP<CEventLoopTimer>              drainTimer;
+    WindowStreamDrainPoll            drainPoll;
+    std::unique_ptr<WindowStreamSender> sender;
+    // GPU frames own their exported FBO until the peer's exact HCGR release.
+    // It is intentionally a separate allocation from the CPU PBO path.
+    WindowStreamTransport            transport = WindowStreamTransport::Cpu;
+    std::unique_ptr<WindowGpuSender> gpuSender;
+    SP<CFramebuffer>                 gpuFramebuffer;
+    int                              gpuFramebufferWidth = 0;
+    int                              gpuFramebufferHeight = 0;
+};
+
+std::unique_ptr<WindowStreamSession> g_windowStreamSession;
 std::mutex            g_exportPipeWritersMutex;
 std::vector<ExportPipeWriter> g_exportPipeWriters;
 
@@ -358,6 +449,16 @@ bool trustedPrivateFifoPath(const std::string& rawPath) {
         return false;
 
     return true;
+}
+
+bool trustedPrivateStreamSocketPath(const std::string& rawPath) {
+    const std::filesystem::path path(rawPath);
+    if (rawPath.empty() || !path.is_absolute() || rawPath.find('\0') != std::string::npos || rawPath.size() >= sizeof(sockaddr_un::sun_path) ||
+        !pathIsInPrivateRuntimeRoot(path.parent_path()))
+        return false;
+    struct stat st {};
+    const auto native = path.string();
+    return lstat(native.c_str(), &st) == 0 && S_ISSOCK(st.st_mode) && st.st_uid == geteuid() && !hasWritableGroupOrOther(st.st_mode);
 }
 
 int timeoutUntil(const std::chrono::steady_clock::time_point& deadline) {
@@ -938,6 +1039,159 @@ void resetAsyncPboReadback(AsyncPboReadbackState& state) {
     state = {};
 }
 
+void resetWindowStreamPboReadback() {
+    auto& state = g_windowStreamPboReadback;
+    for (auto& fence : state.fences) {
+        if (fence)
+            glDeleteSync(fence);
+    }
+    if (std::any_of(std::begin(state.buffers), std::end(state.buffers), [](GLuint buffer) { return buffer != 0; }))
+        glDeleteBuffers(static_cast<GLsizei>(WindowStreamPboReadbackState::BUFFER_COUNT), state.buffers);
+    state = {};
+}
+
+bool sameWindowStreamSource(const WindowStreamPboReadbackState& state,
+                            const std::string& windowAddress,
+                            const Rect& relativeVisibleGeometry,
+                            int width,
+                            int height) {
+    return state.pending == 0 ||
+        (state.windowAddress == windowAddress && state.width == width && state.height == height &&
+         state.relativeVisibleGeometry.x == relativeVisibleGeometry.x && state.relativeVisibleGeometry.y == relativeVisibleGeometry.y &&
+         state.relativeVisibleGeometry.width == relativeVisibleGeometry.width && state.relativeVisibleGeometry.height == relativeVisibleGeometry.height);
+}
+
+bool ensureWindowStreamPboReadback(WindowStreamPboReadbackState& state, int width, int height, std::size_t bytes) {
+    if (std::all_of(std::begin(state.buffers), std::end(state.buffers), [](GLuint buffer) { return buffer != 0; }) && state.width == width &&
+        state.height == height && state.bytes == bytes)
+        return true;
+
+    resetWindowStreamPboReadback();
+    glGenBuffers(static_cast<GLsizei>(WindowStreamPboReadbackState::BUFFER_COUNT), state.buffers);
+    if (!std::all_of(std::begin(state.buffers), std::end(state.buffers), [](GLuint buffer) { return buffer != 0; })) {
+        resetWindowStreamPboReadback();
+        return false;
+    }
+    state.width = width;
+    state.height = height;
+    state.bytes = bytes;
+    return true;
+}
+
+bool windowStreamPboReady(const WindowStreamPboReadbackState& state, std::size_t offset) {
+    if (offset >= state.pending)
+        return false;
+    const auto source = (state.next + WindowStreamPboReadbackState::BUFFER_COUNT - state.pending + offset) % WindowStreamPboReadbackState::BUFFER_COUNT;
+    const auto fence = state.fences[source];
+    if (!fence)
+        return false;
+    const auto status = glClientWaitSync(fence, 0, 0);
+    return status == GL_ALREADY_SIGNALED || status == GL_CONDITION_SATISFIED;
+}
+
+struct ReadyWindowStreamPboFrame {
+    WindowStreamCapturedFrame frame;
+    CBox                      fullBox;
+    CBox                      visibleBox;
+};
+
+std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowStreamPboReadbackState& state) {
+    ScopedTiming takeReadyTiming("window.stream.pbo_take_ready");
+    std::size_t completed = 0;
+    while (windowStreamPboReady(state, completed))
+        ++completed;
+    if (completed == 0)
+        return std::nullopt;
+
+    // Keep only the freshest completed readback.  Copying every completed 8+MB
+    // PBO merely to overwrite it locally turns backlog into compositor-thread
+    // latency.  Fences are checked with timeout zero; discarded slots were
+    // already complete and no GPU work is waited on here.
+    while (completed > 1) {
+        const auto source = (state.next + WindowStreamPboReadbackState::BUFFER_COUNT - state.pending) % WindowStreamPboReadbackState::BUFFER_COUNT;
+        if (!state.metadataSlots.discardOldest()) {
+            noteWindowStreamDiagnostic("pbo metadata discard mismatch");
+            resetWindowStreamPboReadback();
+            return std::nullopt;
+        }
+        glDeleteSync(state.fences[source]);
+        state.fences[source] = nullptr;
+        state.slotGeometry[source] = {};
+        --state.pending;
+        --completed;
+    }
+
+    const auto source = (state.next + WindowStreamPboReadbackState::BUFFER_COUNT - state.pending) % WindowStreamPboReadbackState::BUFFER_COUNT;
+    const auto metadata = state.metadataSlots.mapOldest();
+    if (!metadata) {
+        noteWindowStreamDiagnostic("pbo metadata map mismatch");
+        resetWindowStreamPboReadback();
+        return std::nullopt;
+    }
+
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[source]);
+    const auto* mapped = static_cast<const unsigned char*>(glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(state.bytes), GL_MAP_READ_BIT));
+    std::optional<ReadyWindowStreamPboFrame> newest;
+    if (mapped) {
+        ScopedTiming mapCopyTiming("window.stream.pbo_map_copy");
+        newest = ReadyWindowStreamPboFrame{
+            .frame = {.metadata = *metadata, .rgba = std::vector<unsigned char>(mapped, mapped + state.bytes)},
+            .fullBox = state.slotGeometry[source].fullBox,
+            .visibleBox = state.slotGeometry[source].visibleBox,
+        };
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+    } else {
+        noteWindowStreamDiagnostic("pbo map failed");
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glDeleteSync(state.fences[source]);
+    state.fences[source] = nullptr;
+    state.slotGeometry[source] = {};
+    --state.pending;
+    return newest;
+}
+
+bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
+                                  const WindowStreamFrameMetadata& metadata,
+                                  const std::string& windowAddress,
+                                  CFramebuffer& framebuffer,
+                                  int cropX,
+                                  int cropTopY,
+                                  const CBox& fullBox,
+                                  const CBox& visibleBox) {
+    ScopedTiming issueTiming("window.stream.pbo_issue");
+    if (state.pending >= WindowStreamPboReadbackState::BUFFER_COUNT)
+        return false;
+    if (cropX < 0 || cropTopY < 0 || cropX > std::numeric_limits<int>::max() - state.width ||
+        cropTopY > std::numeric_limits<int>::max() - state.height)
+        return false;
+    const auto framebufferWidth = positiveRoundedIntFromDouble(framebuffer.m_size.x);
+    const auto framebufferHeight = positiveRoundedIntFromDouble(framebuffer.m_size.y);
+    const auto readY = framebufferHeight - cropTopY - state.height;
+    if (cropX + state.width > framebufferWidth || cropTopY + state.height > framebufferHeight || readY < 0)
+        return false;
+    const auto slot = state.metadataSlots.issue(windowAddress, metadata);
+    if (!slot || *slot != state.next)
+        return false;
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[state.next]);
+    glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(state.bytes), nullptr, GL_STREAM_READ);
+    glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    state.fences[state.next] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
+    // Submit without waiting: a timeout-zero client wait must not depend on a
+    // later compositor redraw to make this fence observable.
+    glFlush();
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    if (!state.fences[state.next]) {
+        resetWindowStreamPboReadback();
+        return false;
+    }
+    state.slotGeometry[state.next] = {.fullBox = fullBox, .visibleBox = visibleBox, .geometryEpoch = metadata.geometryEpoch,
+                                      .captureMonotonicNs = metadata.captureMonotonicNs};
+    ++state.pending;
+    state.next = (state.next + 1) % WindowStreamPboReadbackState::BUFFER_COUNT;
+    return true;
+}
+
 bool ensureAsyncPboReadback(AsyncPboReadbackState& state, int width, int height, std::size_t bytes) {
     if (std::all_of(std::begin(state.buffers), std::end(state.buffers), [](GLuint buffer) { return buffer != 0; }) && state.width == width &&
         state.height == height && state.bytes == bytes)
@@ -1369,25 +1623,7 @@ void repairTopTransparentSeam(RgbaReadback& readback) {
 }
 
 void unpremultiplyAlpha(RgbaReadback& readback) {
-    if (readback.pixels.empty())
-        return;
-
-    for (std::size_t i = 0; i + 3 < readback.pixels.size(); i += 4U) {
-        const auto alpha = readback.pixels[i + 3];
-        if (alpha == 0) {
-            readback.pixels[i] = 0;
-            readback.pixels[i + 1] = 0;
-            readback.pixels[i + 2] = 0;
-            continue;
-        }
-        if (alpha == 255)
-            continue;
-
-        for (int channel = 0; channel < 3; ++channel) {
-            const int straight = (static_cast<int>(readback.pixels[i + channel]) * 255 + alpha / 2) / alpha;
-            readback.pixels[i + channel] = static_cast<unsigned char>(std::min(255, straight));
-        }
-    }
+    unpremultiplyRgbaPixels(readback.pixels);
 }
 
 SP<CFramebuffer> createFramebuffer(const std::string& name, int width, int height, DRMFormat preferredFormat = DRM_FORMAT_ABGR8888) {
@@ -1805,8 +2041,10 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     CBox sourceCropBox = fullBox.copy().translate(-monitor->m_position).scale(monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale).round();
     width = positiveIntFromDouble(sourceCropBox.w);
     height = positiveIntFromDouble(sourceCropBox.h);
-    const int framebufferWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
-    const int framebufferHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+    const int monitorFramebufferWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
+    const int monitorFramebufferHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+    const int framebufferWidth = options.framebufferWidthOverride > 0 ? options.framebufferWidthOverride : monitorFramebufferWidth;
+    const int framebufferHeight = options.framebufferHeightOverride > 0 ? options.framebufferHeightOverride : monitorFramebufferHeight;
     const int monitorTransform = std::clamp(static_cast<int>(monitor->m_transform), 0, 7);
     // Center in logical output coordinates, including rotated recordings.
     const bool normalizeWindowArtifact = (trimToAlphaBounds || options.normalizeRecordingOrientation) && monitorTransform != 0;
@@ -1832,7 +2070,8 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
 
     const auto drmFormat = monitor->m_output && monitor->m_output->state ? monitor->m_output->state->state().drmFormat : DRM_FORMAT_ABGR8888;
     SP<CFramebuffer> localFramebuffer;
-    SP<CFramebuffer>& framebuffer = (!budget && !trimToAlphaBounds) ? reusableWindowRecordingFramebuffer() : localFramebuffer;
+    SP<CFramebuffer>& framebuffer = options.framebufferOverride ? *options.framebufferOverride :
+        ((!budget && !trimToAlphaBounds) ? reusableWindowRecordingFramebuffer() : localFramebuffer);
     if (!ensureFramebuffer(framebuffer, "hyprcapture-window", framebufferWidth, framebufferHeight, drmFormat))
         return {};
 
@@ -1852,6 +2091,13 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
             return false;
         }
+        if (options.useExportProjection) {
+            // beginFullFakeRender sets viewport/projection from the monitor,
+            // even when its framebuffer is larger. The dedicated stream FBO
+            // needs an output projection and viewport matching its own bounds.
+            g_pHyprRenderer->setProjectionType(RPT_EXPORT);
+            g_pHyprOpenGL->setViewport(0, 0, framebufferWidth, framebufferHeight);
+        }
 
         g_pHyprRenderer->m_bRenderingSnapshot = true;
         FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
@@ -1868,6 +2114,8 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
 
         g_pHyprRenderer->m_renderData.blockScreenShader = true;
         g_pHyprRenderer->endRender();
+        if (options.useExportProjection)
+            g_pHyprOpenGL->setViewport(0, 0, monitorFramebufferWidth, monitorFramebufferHeight);
         g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
         g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
         return true;
@@ -1916,6 +2164,14 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             return {};
     } else if (!renderIntoFramebuffer(framebuffer)) {
         return {};
+    }
+
+    // A streaming caller renders through this exact path but owns the later
+    // fenced PBO readback. This keeps recording behavior and its PBO state
+    // independent from window-streaming state.
+    if (options.skipReadback) {
+        artifactBox = CBox{fullBox.x, fullBox.y, width / scale, height / scale};
+        return {.pixels = {}, .cropX = cropX, .cropTopY = cropY, .width = width, .height = height};
     }
 
     ScopedTiming timing("window.readback");
@@ -2597,7 +2853,10 @@ void scaleBoxFromCenter(CBox& box, double scale) {
 }
 
 std::optional<ShadowRenderGeometry> shadowRenderGeometry(const RgbaReadback& readback, const CBox& artifactBox, const CBox& visibleBox, const PHLWINDOW& window) {
-    if (!configuredShadowEnabled() || readback.width <= 0 || readback.height <= 0 || readback.pixels.empty() || artifactBox.w <= 0.0 || artifactBox.h <= 0.0 ||
+    // The geometry is also serialized for the GPU stream, where the pixels
+    // remain in the exported FBO.  It depends on the captured dimensions, not
+    // on CPU accessibility of the pixels.
+    if (!configuredShadowEnabled() || readback.width <= 0 || readback.height <= 0 || artifactBox.w <= 0.0 || artifactBox.h <= 0.0 ||
         visibleBox.w <= 0.0 || visibleBox.h <= 0.0)
         return std::nullopt;
 
@@ -3346,6 +3605,588 @@ std::optional<RecordingFrame> captureRecordingFrame(const RecordingFrameRequest&
     return captureDesktopRegionRecordingFrame(request.targetGeometry);
 }
 
+std::optional<WindowStreamCapturedFrame> finalizeReadyWindowStreamFrame(ReadyWindowStreamPboFrame ready,
+                                                                          const CaptureDefaults& defaults,
+                                                                          const PHLWINDOW& window) {
+    ScopedTiming finalizeTiming("window.stream.finalize");
+    // This is a transparent window render, not a crop of a monitor screenshot.
+    // Keep the render-time border/shadow. Shadow repair is applied only after
+    // source/visible-geometry continuity kept this PBO ring valid; it is never
+    // applied across a geometry change.
+    RgbaReadback repaired{.pixels = std::move(ready.frame.rgba), .width = static_cast<int>(ready.frame.metadata.pixelWidth),
+                          .height = static_cast<int>(ready.frame.metadata.pixelHeight)};
+    {
+        ScopedTiming seamTiming("window.stream.seam_repair");
+        repairTopTransparentSeam(repaired);
+    }
+    {
+        ScopedTiming unpremultiplyTiming("window.stream.unpremultiply");
+        unpremultiplyAlpha(repaired);
+    }
+    if (defaults.windowShadow == DecorationPolicy::Keep)
+        repairTransparentShadow(repaired, ready.fullBox, ready.visibleBox, window);
+    ready.frame.rgba = std::move(repaired.pixels);
+    return std::move(ready.frame);
+}
+
+// This is deliberately separate from the render tick: the fence probe has a
+// zero timeout and the sender handoff is latest-only/non-I/O, so this cannot
+// wait for the GPU or submit another fake render on the compositor thread.
+// It can therefore deliver a PBO as soon as the event loop gets control back
+// from a long render rather than waiting for the next 60 Hz deadline.
+void drainReadyWindowStreamPbo(WindowStreamSession& session) {
+    auto& stream = g_windowStreamPboReadback;
+    if (stream.pending == 0)
+        return;
+
+    const auto window = findWindowByAddress(session.windowAddress);
+    if (!isLiveWindowCaptureTarget(window)) {
+        // Do not expose a completed PBO once its address no longer resolves
+        // to a live capture target.  The render tick owns session shutdown.
+        resetWindowStreamCapture();
+        return;
+    }
+
+    if (!g_pHyprOpenGL) {
+        resetWindowStreamCapture();
+        return;
+    }
+    g_pHyprOpenGL->makeEGLCurrent();
+
+    GLint previousPackBuffer = 0;
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousPackBuffer);
+    if (auto ready = takeReadyWindowStreamPboFrames(stream)) {
+        if (auto frame = finalizeReadyWindowStreamFrame(std::move(*ready), session.defaults, window); frame) {
+            if (session.sender)
+                (void)session.sender->submit(frame->metadata, std::move(frame->rgba));
+        } else
+            noteWindowStreamDiagnostic("ready frame postprocess failed");
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousPackBuffer));
+}
+
+// The callback is intentionally invoked before the next render.  At 60 FPS,
+// waiting to hand a signaled PBO to the sender until after another window
+// render adds a whole capture pass to the displayed age without buying newer
+// pixels.  submit() is a bounded non-I/O handoff.
+bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStreamCaptureRequest& request) {
+    // There is exactly one exported source allocation.  Do not render into it
+    // until its matching HCGR has transitioned the sender back to Ready.
+    const auto senderState = session.gpuSender ? session.gpuSender->state() : WindowGpuSenderState::Retired;
+    if (senderState == WindowGpuSenderState::Connecting || senderState == WindowGpuSenderState::Busy)
+        return true;
+    if (senderState != WindowGpuSenderState::Ready)
+        return false;
+
+    const auto window = findWindowByAddress(request.windowAddress);
+    if (!isLiveWindowCaptureTarget(window))
+        return false;
+    const auto monitor = window->m_monitor.lock();
+    if (!monitor || !g_pHyprOpenGL)
+        return false;
+    g_pHyprOpenGL->makeEGLCurrent();
+
+    // Freeze every observable attribute before the renderer is entered.  The
+    // DMA-BUF header and its shadow snapshot remain tied to this render even
+    // if the window moves before the receiver consumes the fence.
+    const CBox sampledBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
+    const CBox sampledVisibleBox = renderedWindowGoalMainSurfaceBox(window);
+    const double scale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
+    const CBox sampledPixels = sampledBox.copy().translate(-monitor->m_position).scale(scale).round();
+    const int sampledWidth = positiveIntFromDouble(sampledPixels.w);
+    const int sampledHeight = positiveIntFromDouble(sampledPixels.h);
+    const auto extentPlan = planWindowStreamFramebuffer(positiveRoundedIntFromDouble(monitor->m_pixelSize.x), positiveRoundedIntFromDouble(monitor->m_pixelSize.y),
+                                                        sampledWidth, sampledHeight, static_cast<int>(monitor->m_transform));
+    if (sampledWidth <= 0 || sampledHeight <= 0 || !extentPlan.supported)
+        return false;
+    const Rect sampledOutputGeometry{.x = sampledBox.x, .y = sampledBox.y, .width = sampledWidth / scale, .height = sampledHeight / scale};
+
+    // Config and decoration values participate in the frame identity just as
+    // much as its geometry.  Snapshot them before renderWindow(), which may
+    // re-enter compositor code that changes the live decoration/config state.
+    bool             frozenShadowEnabled = false;
+    gpuwire::Shadow  frozenShadow;
+    if (request.defaults.windowShadow == DecorationPolicy::Keep) {
+        RgbaReadback styleSnapshot{.width = sampledWidth, .height = sampledHeight};
+        const CBox sampledArtifactBox{sampledOutputGeometry.x, sampledOutputGeometry.y, sampledOutputGeometry.width, sampledOutputGeometry.height};
+        if (const auto shadow = shadowRenderGeometry(styleSnapshot, sampledArtifactBox, sampledVisibleBox, window)) {
+            const auto color = shadowColorBytes(window);
+            frozenShadowEnabled = true;
+            frozenShadow = {
+                .left = shadow->shadowBox.x,
+                .top = shadow->shadowBox.y,
+                .width = shadow->shadowBox.w,
+                .height = shadow->shadowBox.h,
+                .cutoutLeft = shadow->windowCutoutBox.x,
+                .cutoutTop = shadow->windowCutoutBox.y,
+                .cutoutWidth = shadow->windowCutoutBox.w,
+                .cutoutHeight = shadow->windowCutoutBox.h,
+                .range = shadow->range,
+                .rounding = shadow->rounding,
+                .windowRounding = shadow->windowRounding,
+                .roundingPower = shadow->roundingPower,
+                .power = static_cast<std::uint32_t>(shadow->shadowPower),
+                .rgba = {static_cast<std::uint8_t>(color.r), static_cast<std::uint8_t>(color.g), static_cast<std::uint8_t>(color.b), static_cast<std::uint8_t>(color.a)},
+                .sharp = shadow->sharp,
+            };
+        }
+    }
+
+    const int framebufferWidth = extentPlan.framebufferWidth;
+    const int framebufferHeight = extentPlan.framebufferHeight;
+    if (session.gpuFramebuffer && (session.gpuFramebufferWidth != framebufferWidth || session.gpuFramebufferHeight != framebufferHeight)) {
+        // Ready is the only state in which replacing the backing allocation is
+        // safe.  Busy was handled above; Retired stops the whole session.
+        session.gpuFramebuffer.reset();
+        session.gpuFramebufferWidth = 0;
+        session.gpuFramebufferHeight = 0;
+    }
+
+    WindowRenderOptions renderOptions;
+    renderOptions.framebufferOverride = &session.gpuFramebuffer;
+    if (extentPlan.dedicatedFramebuffer) {
+        renderOptions.framebufferWidthOverride = framebufferWidth;
+        renderOptions.framebufferHeightOverride = framebufferHeight;
+        renderOptions.useExportProjection = true;
+    }
+    renderOptions.skipReadback = true;
+    const bool renderDecorations = request.defaults.fushionMode || request.defaults.windowBorder == DecorationPolicy::Keep ||
+        request.defaults.windowShadow == DecorationPolicy::Keep;
+    timespec sampledTime{};
+    if (clock_gettime(CLOCK_MONOTONIC, &sampledTime) != 0)
+        return false;
+    const auto captureMonotonicNs = static_cast<std::uint64_t>(sampledTime.tv_sec) * 1'000'000'000ULL + static_cast<std::uint64_t>(sampledTime.tv_nsec);
+    int width = 0;
+    int height = 0;
+    CBox artifactBox;
+    const auto renderInfo = renderWindowArtifactReadback(window, monitor, Time::steadyNow(), renderDecorations, width, height, artifactBox, nullptr, false, renderOptions);
+    if (width != sampledWidth || height != sampledHeight || artifactBox.x != sampledOutputGeometry.x || artifactBox.y != sampledOutputGeometry.y ||
+        artifactBox.w != sampledOutputGeometry.width || artifactBox.h != sampledOutputGeometry.height || !session.gpuFramebuffer ||
+        renderInfo.cropX != extentPlan.cropX || renderInfo.cropTopY != extentPlan.cropTopY)
+        return false;
+    session.gpuFramebufferWidth = framebufferWidth;
+    session.gpuFramebufferHeight = framebufferHeight;
+
+    const auto framebuffer = framebufferId(*session.gpuFramebuffer);
+    const int imageWidth = positiveRoundedIntFromDouble(session.gpuFramebuffer->m_size.x);
+    const int imageHeight = positiveRoundedIntFromDouble(session.gpuFramebuffer->m_size.y);
+    if (framebuffer == 0 || imageWidth != framebufferWidth || imageHeight != framebufferHeight || renderInfo.cropTopY > imageHeight - height)
+        return false;
+
+    gpuwire::Frame metadata{
+        .sequence = request.sequence,
+        .captureMonotonicNs = captureMonotonicNs,
+        .geometryEpoch = request.geometryEpoch,
+        .logicalX = sampledOutputGeometry.x,
+        .logicalY = sampledOutputGeometry.y,
+        .logicalWidth = sampledOutputGeometry.width,
+        .logicalHeight = sampledOutputGeometry.height,
+        .imageWidth = static_cast<std::uint32_t>(imageWidth),
+        .imageHeight = static_cast<std::uint32_t>(imageHeight),
+        .cropX = static_cast<std::uint32_t>(renderInfo.cropX),
+        // Keep the same source row interval as readRgbaFramebufferRegion.
+        // Hyprland's rendered rows already follow the screenshot path's
+        // output order on a normal output; GL coordinates alone do not imply
+        // that the pixel content needs another vertical flip.
+        .cropY = static_cast<std::uint32_t>(imageHeight - renderInfo.cropTopY - height),
+        .cropWidth = static_cast<std::uint32_t>(width),
+        .cropHeight = static_cast<std::uint32_t>(height),
+        .flipY = false,
+    };
+    metadata.shadowEnabled = frozenShadowEnabled;
+    metadata.shadow = frozenShadow;
+
+    auto packet = exportWindowGpuFrame(framebuffer, metadata);
+    if (!packet)
+        return false;
+    // submit owns the descriptors only on success. A false/Ready result is a
+    // permitted try-lock handoff drop: no descriptor reached the peer, so the
+    // source allocation has not become externally owned and may be sampled on
+    // a later tick. Any other false result is fatal and retires the session.
+    return session.gpuSender->submit(std::move(*packet)) || session.gpuSender->state() == WindowGpuSenderState::Ready;
+}
+
+std::optional<WindowStreamCapturedFrame> captureWindowStreamFrameImpl(const WindowStreamCaptureRequest& request,
+                                                                        const std::function<void(WindowStreamCapturedFrame&&)>& consumeReady) {
+    if (request.windowAddress.empty() || request.sequence == 0 || request.geometryEpoch == 0) {
+        noteWindowStreamDiagnostic("invalid capture request");
+        resetWindowStreamCapture();
+        return std::nullopt;
+    }
+
+    const auto window = findWindowByAddress(request.windowAddress);
+    // A stream is an explicit single-window request, not an overview/window
+    // enumeration. Its mapped, unhidden target may be on an inactive
+    // workspace, where shouldCaptureWindow correctly rejects it for ordinary
+    // screenshots but would make this live session produce zero frames.
+    if (!isLiveWindowCaptureTarget(window)) {
+        noteWindowStreamDiagnostic("capture target unavailable");
+        // Do not leak a former client's pixels if an address is re-used.
+        resetWindowStreamCapture();
+        return std::nullopt;
+    }
+    const auto monitor = window->m_monitor.lock();
+    if (!monitor || !g_pHyprOpenGL) {
+        noteWindowStreamDiagnostic("monitor or OpenGL unavailable");
+        resetWindowStreamCapture();
+        return std::nullopt;
+    }
+    g_pHyprOpenGL->makeEGLCurrent();
+
+    // Snapshot both geometry and time before invoking Hyprland's render path.
+    // A later PBO mapping must only ever expose this immutable snapshot.
+    const CBox sampledBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
+    const CBox sampledVisibleBox = renderedWindowGoalMainSurfaceBox(window);
+    const double scale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
+    const CBox sampledPixels = sampledBox.copy().translate(-monitor->m_position).scale(scale).round();
+    const int sampledWidth = positiveIntFromDouble(sampledPixels.w);
+    const int sampledHeight = positiveIntFromDouble(sampledPixels.h);
+    const auto extentPlan = planWindowStreamFramebuffer(positiveRoundedIntFromDouble(monitor->m_pixelSize.x), positiveRoundedIntFromDouble(monitor->m_pixelSize.y),
+                                                        sampledWidth, sampledHeight, static_cast<int>(monitor->m_transform));
+    // The renderer rounds physical crop bounds. Publish the corresponding
+    // logical extent, not an unrounded box that could describe different
+    // pixels on a fractional-scale output.
+    const Rect sampledOutputGeometry{.x = sampledBox.x, .y = sampledBox.y, .width = sampledWidth / scale, .height = sampledHeight / scale};
+    const Rect sampledVisibleGeometry = toRect(sampledVisibleBox);
+    const Rect relativeVisibleGeometry{.x = sampledVisibleGeometry.x - sampledOutputGeometry.x,
+                                       .y = sampledVisibleGeometry.y - sampledOutputGeometry.y,
+                                       .width = sampledVisibleGeometry.width,
+                                       .height = sampledVisibleGeometry.height};
+    std::size_t bytes = 0;
+    if (sampledWidth <= 0 || sampledHeight <= 0 || !checkedRgbaByteSize(sampledWidth, sampledHeight, bytes) ||
+        bytes > MAX_RGBA_READBACK_BYTES / WindowStreamPboReadbackState::BUFFER_COUNT) {
+        noteWindowStreamDiagnostic("invalid sampled extent");
+        return std::nullopt;
+    }
+    if (!extentPlan.supported) {
+        // An oversized transformed output has no verified complete local
+        // viewport in this renderer path; reject rather than silently crop.
+        noteWindowStreamDiagnostic("unsupported stream extent");
+        resetWindowStreamCapture();
+        return std::nullopt;
+    }
+
+    auto& stream = g_windowStreamPboReadback;
+    if (!sameWindowStreamSource(stream, request.windowAddress, relativeVisibleGeometry, sampledWidth, sampledHeight)) {
+        noteWindowStreamDiagnostic("pbo source changed; reset");
+        resetWindowStreamPboReadback();
+    }
+    // Allocate/reset the PBO ring before rendering. A reset releases its
+    // framebuffer too, so doing this after render would discard that frame.
+    if (!ensureWindowStreamPboReadback(stream, sampledWidth, sampledHeight, bytes)) {
+        noteWindowStreamDiagnostic("pbo allocation failed");
+        return std::nullopt;
+    }
+
+    // Drain before starting another render so a completed frame is delivered
+    // without paying the current frame's render time. This uses only a
+    // timeout-zero fence test and preserves the caller's pack-buffer binding.
+    GLint previousEarlyPackBuffer = 0;
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousEarlyPackBuffer);
+    if (auto ready = takeReadyWindowStreamPboFrames(stream)) {
+        if (auto frame = finalizeReadyWindowStreamFrame(std::move(*ready), request.defaults, window); frame)
+            consumeReady(std::move(*frame));
+        else
+            noteWindowStreamDiagnostic("ready frame postprocess failed");
+    } else if (stream.pending != 0) {
+        noteWindowStreamDiagnostic("pbo fence pending");
+    }
+    glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousEarlyPackBuffer));
+
+    // Never enqueue a new fake render when every PBO slot is still owned by
+    // the GPU.  Rendering anyway cannot produce a frame (issue below would
+    // reject it), but it does put more large offscreen work ahead of the
+    // fences we are waiting to map.  On a 2674x2514 window that feedback loop
+    // made capture timestamps age by seconds.  Returning here preserves the
+    // zero-timeout fence policy and lets the first ready slot drain to the
+    // sender's latest-only handoff before more GPU work is submitted.
+    if (stream.pending >= WindowStreamPboReadbackState::BUFFER_COUNT) {
+        noteWindowStreamDiagnostic("pbo ring full; render skipped");
+        return std::nullopt;
+    }
+
+    int width = 0;
+    int height = 0;
+    CBox artifactBox;
+    WindowRenderOptions renderOptions;
+    renderOptions.framebufferOverride = &stream.framebuffer;
+    if (extentPlan.dedicatedFramebuffer) {
+        renderOptions.framebufferWidthOverride = extentPlan.framebufferWidth;
+        renderOptions.framebufferHeightOverride = extentPlan.framebufferHeight;
+        renderOptions.useExportProjection = true;
+    }
+    renderOptions.skipReadback = true;
+    const bool renderDecorations = request.defaults.fushionMode || request.defaults.windowBorder == DecorationPolicy::Keep ||
+        request.defaults.windowShadow == DecorationPolicy::Keep;
+    // Sample this frame only after a previous PBO has been drained/finalized
+    // and after the full-ring skip decision. The stored metadata remains
+    // immutable when this PBO is delivered on a later tick.
+    timespec sampledTime {};
+    if (clock_gettime(CLOCK_MONOTONIC, &sampledTime) != 0) {
+        noteWindowStreamDiagnostic("monotonic clock failed");
+        return std::nullopt;
+    }
+    const auto captureMonotonicNs = static_cast<std::uint64_t>(sampledTime.tv_sec) * 1'000'000'000ULL + static_cast<std::uint64_t>(sampledTime.tv_nsec);
+    const auto frozenTime = Time::steadyNow();
+    const auto renderInfo = renderWindowArtifactReadback(window, monitor, frozenTime, renderDecorations, width, height, artifactBox, nullptr, false, renderOptions);
+    if (width != sampledWidth || height != sampledHeight || artifactBox.x != sampledOutputGeometry.x || artifactBox.y != sampledOutputGeometry.y ||
+        artifactBox.w != sampledOutputGeometry.width || artifactBox.h != sampledOutputGeometry.height || !stream.framebuffer ||
+        renderInfo.cropX != extentPlan.cropX || renderInfo.cropTopY != extentPlan.cropTopY) {
+        noteWindowStreamDiagnostic("render metadata invariant failed");
+        resetWindowStreamPboReadback();
+        return std::nullopt;
+    }
+
+    stream.windowAddress = request.windowAddress;
+    stream.relativeVisibleGeometry = relativeVisibleGeometry;
+
+    GLint previousPackBuffer = 0;
+    GLint previousPackAlignment = 0;
+    GLint previousReadFramebuffer = 0;
+    glGetIntegerv(GL_PIXEL_PACK_BUFFER_BINDING, &previousPackBuffer);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
+    const auto restoreGlReadbackState = [&]() {
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, static_cast<GLuint>(previousPackBuffer));
+        glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(previousReadFramebuffer));
+    };
+
+    const auto framebuffer = framebufferId(*stream.framebuffer);
+    if (framebuffer == 0) {
+        noteWindowStreamDiagnostic("stream framebuffer unavailable");
+        restoreGlReadbackState();
+        return std::nullopt;
+    }
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    WindowStreamFrameMetadata metadata{
+        .sequence = request.sequence,
+        .captureMonotonicNs = captureMonotonicNs,
+        .geometryEpoch = request.geometryEpoch,
+        .logicalX = sampledOutputGeometry.x,
+        .logicalY = sampledOutputGeometry.y,
+        .logicalWidth = sampledOutputGeometry.width,
+        .logicalHeight = sampledOutputGeometry.height,
+        .pixelWidth = static_cast<std::uint32_t>(width),
+        .pixelHeight = static_cast<std::uint32_t>(height),
+        .stride = static_cast<std::uint32_t>(width * static_cast<int>(RGBA_BYTES_PER_PIXEL)),
+        .payloadBytes = bytes,
+    };
+    if (!validWindowStreamFrameMetadata(metadata)) {
+        noteWindowStreamDiagnostic("invalid frame metadata");
+    } else if (!issueWindowStreamPboReadback(stream, metadata, request.windowAddress, *stream.framebuffer, renderInfo.cropX, renderInfo.cropTopY,
+                                               CBox{sampledOutputGeometry.x, sampledOutputGeometry.y, sampledOutputGeometry.width, sampledOutputGeometry.height}, sampledVisibleBox)) {
+        noteWindowStreamDiagnostic("pbo issue failed");
+    }
+    restoreGlReadbackState();
+    return std::nullopt;
+}
+
+std::optional<WindowStreamCapturedFrame> captureWindowStreamFrame(const WindowStreamCaptureRequest& request) {
+    std::optional<WindowStreamCapturedFrame> completed;
+    (void)captureWindowStreamFrameImpl(request, [&completed](WindowStreamCapturedFrame&& frame) { completed = std::move(frame); });
+    return completed;
+}
+
+void resetWindowStreamCapture() {
+    if (g_pHyprOpenGL)
+        g_pHyprOpenGL->makeEGLCurrent();
+    resetWindowStreamPboReadback();
+}
+
+namespace {
+
+bool rectEqual(const Rect& left, const Rect& right) {
+    return left.x == right.x && left.y == right.y && left.width == right.width && left.height == right.height;
+}
+
+void stopWindowStreamSession() {
+    auto session = std::move(g_windowStreamSession);
+    if (session)
+        session->drainPoll.stop();
+    if (session && session->timer && g_pEventLoopManager)
+        g_pEventLoopManager->removeTimer(session->timer);
+    if (session && session->drainTimer && g_pEventLoopManager)
+        g_pEventLoopManager->removeTimer(session->drainTimer);
+    if (session)
+        session->timer.reset();
+    if (session)
+        session->drainTimer.reset();
+    if (session && session->sender)
+        session->sender->stop();
+    if (session && session->gpuSender)
+        session->gpuSender.reset();
+    // A Retired sender can have receiver-owned DMA-BUF imports. Dropping this
+    // compositor-side framebuffer is intentional; it is never reused after
+    // an uncertain release or disconnect.
+    if (session)
+        session->gpuFramebuffer.reset();
+    resetWindowStreamCapture();
+}
+
+void captureWindowStreamDrainTick(SP<CEventLoopTimer> self) {
+    ScopedTiming drainTiming("window.stream.drain_tick");
+    auto* session = g_windowStreamSession.get();
+    if (!session || !session->drainTimer || !session->drainPoll.acceptsCallback(session->drainTimer.get() == self.get()))
+        return;
+
+    drainReadyWindowStreamPbo(*session);
+    // Poll only while the one PBO is outstanding.  `drainReady...` uses a
+    // timeout-zero fence check; this rearm therefore cannot form a GPU wait
+    // loop or add work when no readback exists.
+    self->updateTimeout(session->drainPoll.armForPending(g_windowStreamPboReadback.pending != 0));
+}
+
+void captureWindowStreamTick(SP<CEventLoopTimer> self) {
+    ScopedTiming tickTiming("window.stream.tick");
+    const auto tickStartedAt = Time::steadyNow();
+    auto* session = g_windowStreamSession.get();
+    if (!session || !session->timer || session->timer.get() != self.get()) {
+        noteWindowStreamDiagnostic("timer stale or session missing");
+        return;
+    }
+    if (session->transport == WindowStreamTransport::Gpu) {
+        const auto gpuState = session->gpuSender ? session->gpuSender->state() : WindowGpuSenderState::Retired;
+        if (gpuState == WindowGpuSenderState::Retired) {
+            noteWindowStreamDiagnostic("GPU sender retired before capture tick");
+            notifyUser("GPU window stream stopped: peer release or transport failed", NotificationLevel::Error, 5000);
+            stopWindowStreamSession();
+            return;
+        }
+    } else {
+        const auto senderState = session->sender ? session->sender->state() : WindowStreamSenderState::Stopped;
+        if (senderState == WindowStreamSenderState::Disconnected || senderState == WindowStreamSenderState::Stopped) {
+            noteWindowStreamDiagnostic("sender stopped before capture tick");
+            stopWindowStreamSession();
+            return;
+        }
+    }
+    const auto window = findWindowByAddress(session->windowAddress);
+    const auto monitor = window ? window->m_monitor.lock() : PHLMONITOR{};
+    if (!window || !monitor) {
+        noteWindowStreamDiagnostic("target or monitor missing before capture tick");
+        stopWindowStreamSession();
+        return;
+    }
+    const auto currentFullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
+    const double currentScale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
+    const auto currentPixels = currentFullBox.copy().translate(-monitor->m_position).scale(currentScale).round();
+    if (!planWindowStreamFramebuffer(positiveRoundedIntFromDouble(monitor->m_pixelSize.x), positiveRoundedIntFromDouble(monitor->m_pixelSize.y),
+                                     positiveIntFromDouble(currentPixels.w), positiveIntFromDouble(currentPixels.h), static_cast<int>(monitor->m_transform))
+             .supported) {
+        noteWindowStreamDiagnostic("unsupported extent before capture tick");
+        notifyUser("window stream stopped: oversized transformed output is unsupported", NotificationLevel::Error, 5000);
+        stopWindowStreamSession();
+        return;
+    }
+    const Rect windowGeometry = toRect(renderedWindowBox(window, window->getFullWindowBoundingBox()));
+    const Rect outputGeometry = monitorRect(monitor);
+    if (session->sequence != 0 && (!rectEqual(windowGeometry, session->lastWindowGeometry) || !rectEqual(outputGeometry, session->lastMonitorGeometry) ||
+                                   monitor->m_scale != session->lastMonitorScale))
+        ++session->geometryEpoch;
+    session->lastWindowGeometry = windowGeometry;
+    session->lastMonitorGeometry = outputGeometry;
+    session->lastMonitorScale = monitor->m_scale;
+
+    WindowStreamCaptureRequest request{.defaults = session->defaults, .windowAddress = session->windowAddress, .sequence = ++session->sequence,
+                                       .geometryEpoch = session->geometryEpoch};
+    if (session->transport == WindowStreamTransport::Gpu) {
+        if (!captureWindowGpuStreamFrame(*session, request)) {
+            noteWindowStreamDiagnostic("GPU frame export failed");
+            notifyUser("GPU window stream stopped: DMA-BUF export is unavailable", NotificationLevel::Error, 5000);
+            stopWindowStreamSession();
+            return;
+        }
+    } else {
+        // `captureWindowStreamFrameImpl` hands a signaled PBO to this callback
+        // before it renders the next sample. The sender's submit path is a
+        // try-lock/latest replacement and performs no socket I/O on this thread.
+        (void)captureWindowStreamFrameImpl(request, [session](WindowStreamCapturedFrame&& frame) {
+            if (session->sender)
+                (void)session->sender->submit(frame.metadata, std::move(frame.rgba));
+        });
+    }
+
+    // Arm the independent early-drain path only after this tick has actually
+    // issued a PBO.  Render cadence remains governed solely by `cadence`.
+    if (session->transport == WindowStreamTransport::Cpu && g_windowStreamSession.get() == session && session->drainTimer)
+        session->drainTimer->updateTimeout(session->drainPoll.armForPending(g_windowStreamPboReadback.pending != 0));
+
+    const auto toMicroseconds = [](const Time::steady_tp& time) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(time.time_since_epoch()).count();
+    };
+    self->updateTimeout(scheduleNextWindowStreamTick(session->cadence, toMicroseconds(tickStartedAt), toMicroseconds(Time::steadyNow()), session->fps));
+}
+
+} // namespace
+
+bool isValidWindowStreamStartRequest(const std::string& json) {
+    return decodeWindowStreamStartControl(json).has_value();
+}
+
+LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
+    const auto raw = readPrivateRequestFile(path);
+    if (!raw)
+        return {.success = false, .error = "invalid window stream request file"};
+    const auto control = decodeWindowStreamStartControl(*raw);
+    if (!control || !trustedPrivateStreamSocketPath(control->socketPath))
+        return {.success = false, .error = "invalid window stream request"};
+    if (g_windowStreamSession)
+        return {.success = false, .error = "window stream already active"};
+    if (!g_pEventLoopManager)
+        return {.success = false, .error = "window stream event loop unavailable"};
+    if (!isLiveWindowCaptureTarget(findWindowByAddress(control->windowAddress)))
+        return {.success = false, .error = "window stream target unavailable"};
+
+    g_windowStreamDiagnosticCounts.clear();
+    auto session = std::make_unique<WindowStreamSession>();
+    session->id = control->id;
+    session->windowAddress = control->windowAddress;
+    session->defaults.mode = CaptureMode::Window;
+    session->defaults.windowBackground = WindowBackground::Transparent;
+    session->defaults.windowBorder = DecorationPolicy::Keep;
+    session->defaults.windowShadow = DecorationPolicy::Keep;
+    session->fps = control->fps;
+    session->transport = control->transport;
+    if (control->transport == WindowStreamTransport::Gpu) {
+        session->gpuSender = std::make_unique<WindowGpuSender>(control->socketPath);
+    } else {
+        session->sender = std::make_unique<WindowStreamSender>(WindowStreamSenderConfig{
+            .socketPath = control->socketPath,
+            .socketSendBufferBytes = WINDOW_STREAM_SOCKET_SEND_BUFFER_BYTES,
+        });
+    }
+    session->timer = makeShared<CEventLoopTimer>(std::chrono::milliseconds(1), [](SP<CEventLoopTimer> self, void*) { captureWindowStreamTick(self); }, nullptr);
+    session->drainTimer = makeShared<CEventLoopTimer>(std::nullopt, [](SP<CEventLoopTimer> self, void*) { captureWindowStreamDrainTick(self); }, nullptr);
+    const auto response = Json{{"ok", true}, {"version", 1}, {"streamId", control->id}, {"socketPath", control->socketPath},
+                               {"mode", control->transport == WindowStreamTransport::Gpu ? "window-gpu" : "window"}}.dump();
+    if (!writePrivateResponseFile(path, response))
+        return {.success = false, .error = "window stream response write failed"};
+    g_windowStreamSession = std::move(session);
+    g_pEventLoopManager->addTimer(g_windowStreamSession->timer);
+    g_pEventLoopManager->addTimer(g_windowStreamSession->drainTimer);
+    traceTiming("window.stream.timer_added");
+    return {.success = true};
+}
+
+LaunchResult stopWindowStreamFromRequestFile(const std::string& path) {
+    const auto raw = readPrivateRequestFile(path);
+    if (!raw)
+        return {.success = false, .error = "invalid window stream stop request file"};
+    const auto id = decodeWindowStreamStopControl(*raw);
+    if (!id)
+        return {.success = false, .error = "invalid window stream stop request"};
+    if (!g_windowStreamSession || *id != g_windowStreamSession->id)
+        return {.success = false, .error = "window stream not active"};
+    stopWindowStreamSession();
+    const auto response = Json{{"ok", true}, {"version", 1}, {"streamId", *id}, {"stopped", true}}.dump();
+    if (!writePrivateResponseFile(path, response))
+        return {.success = false, .error = "window stream stop response write failed"};
+    return {.success = true};
+}
+
 void resetRecordingCaptureState() {
     if (g_pHyprOpenGL)
         g_pHyprOpenGL->makeEGLCurrent();
@@ -3408,9 +4249,11 @@ void cleanupCompositorArtifacts(const CaptureSession& session) {
 
 void shutdownArtifactCapture() {
     shutdownExportPipeWriters();
+    stopWindowStreamSession();
     if (g_pHyprOpenGL)
         g_pHyprOpenGL->makeEGLCurrent();
     resetAsyncPboReadback(g_windowRecordingPboReadback);
+    resetWindowStreamPboReadback();
     g_realBackgroundRecordingCache.reset();
     shutdownRealBackgroundHooks();
 }

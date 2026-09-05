@@ -75,6 +75,12 @@ add_library(hyprcapture SHARED
   src/plugin/main.cpp
   src/plugin/notification.cpp
   src/plugin/artifact_capture.cpp
+  src/plugin/window_stream.cpp
+  src/plugin/window_stream_control.cpp
+  src/plugin/window_stream_sender.cpp
+  src/plugin/window_gpu_wire.cpp
+  src/plugin/window_gpu_sender.cpp
+  src/plugin/window_gpu_export.cpp
   src/plugin/recording.cpp
   src/plugin/recording_state.cpp
   src/plugin/session_launcher.cpp
@@ -185,6 +191,78 @@ if(BUILD_TESTING)
   )
   target_include_directories(hyprcapture-trusted-path-test PRIVATE src)
   add_test(NAME hyprcapture-trusted-path-test COMMAND hyprcapture-trusted-path-test)
+
+  add_executable(hyprcapture-window-stream-test
+    tests/window_stream_test.cpp
+    src/plugin/window_stream.cpp
+  )
+  target_include_directories(hyprcapture-window-stream-test PRIVATE src)
+  target_compile_options(hyprcapture-window-stream-test PRIVATE -UNDEBUG)
+  add_test(NAME hyprcapture-window-stream-test COMMAND hyprcapture-window-stream-test)
+
+  add_executable(hyprcapture-window-stream-sender-test
+    tests/window_stream_sender_test.cpp
+    src/plugin/window_stream.cpp
+    src/plugin/window_stream_sender.cpp
+  )
+  target_include_directories(hyprcapture-window-stream-sender-test PRIVATE src)
+  target_compile_options(hyprcapture-window-stream-sender-test PRIVATE -UNDEBUG)
+  add_test(NAME hyprcapture-window-stream-sender-test COMMAND hyprcapture-window-stream-sender-test)
+
+  add_executable(hyprcapture-window-gpu-wire-test
+    tests/window_gpu_wire_test.cpp
+    src/plugin/window_gpu_wire.cpp
+  )
+  target_include_directories(hyprcapture-window-gpu-wire-test PRIVATE src)
+  target_compile_options(hyprcapture-window-gpu-wire-test PRIVATE -UNDEBUG)
+  add_test(NAME hyprcapture-window-gpu-wire-test COMMAND hyprcapture-window-gpu-wire-test)
+
+  add_executable(hyprcapture-window-gpu-sender-test
+    tests/window_gpu_sender_test.cpp
+    src/plugin/window_gpu_wire.cpp
+    src/plugin/window_gpu_sender.cpp
+  )
+  target_include_directories(hyprcapture-window-gpu-sender-test PRIVATE src)
+  target_compile_options(hyprcapture-window-gpu-sender-test PRIVATE -UNDEBUG)
+  target_link_libraries(hyprcapture-window-gpu-sender-test PRIVATE Threads::Threads)
+  add_test(NAME hyprcapture-window-gpu-sender-test COMMAND hyprcapture-window-gpu-sender-test)
+  set_tests_properties(hyprcapture-window-gpu-sender-test PROPERTIES TIMEOUT 10)
+
+  option(HYPRCAPTURE_GPU_EXPORT_TEST "Build hardware-dependent EGL DMA-BUF export test" OFF)
+  if(HYPRCAPTURE_GPU_EXPORT_TEST)
+    pkg_check_modules(GPU_EXPORT_EGL REQUIRED IMPORTED_TARGET egl glesv2)
+    add_executable(hyprcapture-window-gpu-export-test
+      tests/window_gpu_export_test.cpp
+      src/plugin/window_gpu_export.cpp
+      src/plugin/window_gpu_wire.cpp
+      src/plugin/window_gpu_sender.cpp
+    )
+    target_include_directories(hyprcapture-window-gpu-export-test PRIVATE src)
+    target_compile_options(hyprcapture-window-gpu-export-test PRIVATE -UNDEBUG)
+    target_link_libraries(hyprcapture-window-gpu-export-test PRIVATE PkgConfig::GPU_EXPORT_EGL Threads::Threads)
+    add_test(NAME hyprcapture-window-gpu-export-test COMMAND hyprcapture-window-gpu-export-test)
+    set_tests_properties(hyprcapture-window-gpu-export-test PROPERTIES TIMEOUT 15)
+  endif()
+
+  add_executable(hyprcapture-window-stream-control-test
+    tests/window_stream_control_test.cpp
+    src/plugin/window_stream_control.cpp
+  )
+  target_include_directories(hyprcapture-window-stream-control-test PRIVATE src)
+  target_compile_options(hyprcapture-window-stream-control-test PRIVATE -UNDEBUG)
+  target_link_libraries(hyprcapture-window-stream-control-test PRIVATE nlohmann_json::nlohmann_json)
+  add_test(NAME hyprcapture-window-stream-control-test COMMAND hyprcapture-window-stream-control-test)
+
+  add_executable(hyprcapture-window-stream-extent-test tests/window_stream_extent_test.cpp)
+  target_include_directories(hyprcapture-window-stream-extent-test PRIVATE src)
+  target_compile_options(hyprcapture-window-stream-extent-test PRIVATE -UNDEBUG)
+  add_test(NAME hyprcapture-window-stream-extent-test COMMAND hyprcapture-window-stream-extent-test)
+
+  add_executable(hyprcapture-window-stream-cadence-test tests/window_stream_cadence_test.cpp)
+  target_include_directories(hyprcapture-window-stream-cadence-test PRIVATE src)
+  target_compile_options(hyprcapture-window-stream-cadence-test PRIVATE -UNDEBUG)
+  add_test(NAME hyprcapture-window-stream-cadence-test COMMAND hyprcapture-window-stream-cadence-test)
+
 endif()
 
 install(TARGETS hyprcapture LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
