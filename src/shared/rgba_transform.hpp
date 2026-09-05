@@ -10,6 +10,13 @@ struct RgbaFrame {
     int                        height = 0;
 };
 
+struct RgbaCrop {
+    int x = 0, y = 0, width = 0, height = 0;
+};
+
+// Map a logical, top-down crop into the physical framebuffer before readback.
+RgbaCrop logicalRgbaCropToFramebuffer(RgbaCrop crop, int framebufferWidth, int framebufferHeight, int transform);
+
 bool      rgbaFrameHasExpectedSize(const RgbaFrame& frame);
 RgbaFrame normalizeRgbaFrameToLogicalOrientation(RgbaFrame frame, int transform);
 

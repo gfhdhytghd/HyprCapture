@@ -83,6 +83,20 @@ bool rgbaFrameHasExpectedSize(const RgbaFrame& frame) {
     return checkedRgbaByteSize(frame.width, frame.height, bytes) && frame.pixels.size() == bytes;
 }
 
+RgbaCrop logicalRgbaCropToFramebuffer(RgbaCrop crop, int framebufferWidth, int framebufferHeight, int transform) {
+    const auto [x, y, w, h] = crop;
+    switch (std::clamp(transform, 0, 7)) {
+        case 1: return {y, framebufferHeight - x - w, h, w};
+        case 2: return {framebufferWidth - x - w, framebufferHeight - y - h, w, h};
+        case 3: return {framebufferWidth - y - h, x, h, w};
+        case 4: return {framebufferWidth - x - w, y, w, h};
+        case 5: return {y, x, h, w};
+        case 6: return {x, framebufferHeight - y - h, w, h};
+        case 7: return {framebufferWidth - y - h, framebufferHeight - x - w, h, w};
+        default: return crop;
+    }
+}
+
 RgbaFrame normalizeRgbaFrameToLogicalOrientation(RgbaFrame frame, int transform) {
     if (!rgbaFrameHasExpectedSize(frame))
         return {};

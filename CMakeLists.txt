@@ -81,6 +81,7 @@ add_library(hyprcapture SHARED
   src/plugin/timing.cpp
   src/shared/config.cpp
   src/shared/process_environment.cpp
+  src/shared/supervised_process.cpp
   src/shared/protocol.cpp
   src/shared/rgba_transform.cpp
   src/shared/trusted_path.cpp
@@ -113,6 +114,13 @@ target_link_libraries(hyprcapture-ui PRIVATE ${GIO_LIBRARIES})
 target_link_options(hyprcapture-ui PRIVATE -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
 
 if(BUILD_TESTING)
+  add_executable(hyprcapture-supervised-process-test
+    tests/supervised_process_test.cpp
+    src/shared/supervised_process.cpp
+  )
+  target_include_directories(hyprcapture-supervised-process-test PRIVATE src)
+  add_test(NAME hyprcapture-supervised-process-test COMMAND hyprcapture-supervised-process-test)
+
   add_executable(hyprcapture-config-test
     tests/config_test.cpp
     src/shared/config.cpp

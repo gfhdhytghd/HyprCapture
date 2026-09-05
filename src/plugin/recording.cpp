@@ -8,6 +8,7 @@
 #include "shared/config.hpp"
 #include "shared/protocol.hpp"
 #include "shared/trusted_path.hpp"
+#include "shared/supervised_process.hpp"
 
 #include <hyprland/src/Compositor.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
@@ -503,10 +504,9 @@ bool probeHardwareEncoder(std::string_view codec, int width, int height) {
     args.emplace_back(codec);
     args.insert(args.end(), {"-f", "null", "-"});
 
-    std::vector<char*> argv;
-    for (auto& arg : args)
-        argv.push_back(arg.data());
-    argv.push_back(nullptr);
+    const auto shell = trustedProgramPath("sh");
+    if (!shell)
+        return false;
     auto childEnv = childEnvironment();
     std::vector<char*> envp;
     for (auto& entry : childEnv)
@@ -519,15 +519,11 @@ bool probeHardwareEncoder(std::string_view codec, int width, int height) {
     posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
-    pid_t pid = -1;
-    const int spawnError = posix_spawn(&pid, argv[0], &actions, nullptr, argv.data(), envp.data());
+    auto process = spawnSupervisedProcess(*shell, args, envp.data(), actions);
     posix_spawn_file_actions_destroy(&actions);
-    if (spawnError != 0)
+    if (process.spawnError != 0)
         return false;
-    int status = 0;
-    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
-    }
-    return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    return waitSupervisedProcess(process) == 0;
 }
 
 std::string selectConcreteCodec(std::string_view requested, int width, int height) {
@@ -844,6 +840,9 @@ class RawVideoEncoder {
         const auto ffmpeg = trustedFfmpegPath();
         if (!ffmpeg)
             return {.success = false, .error = "no trusted ffmpeg executable found"};
+        const auto shell = trustedProgramPath("sh");
+        if (!shell)
+            return {.success = false, .error = "no trusted sh executable found"};
         const auto vaapiDevice = isVaapiCodec(m_codec) ? findVaapiRenderDevice() : std::optional<std::string>{};
         if (isVaapiCodec(m_codec) && !vaapiDevice)
             return {.success = false, .error = "no writable VAAPI render device found"};
@@ -970,12 +969,6 @@ class RawVideoEncoder {
         }
         args.push_back(m_outputPath.string());
 
-        std::vector<char*> argv;
-        argv.reserve(args.size() + 1);
-        for (auto& arg : args)
-            argv.push_back(arg.data());
-        argv.push_back(nullptr);
-
         auto childEnv = childEnvironment();
         std::vector<char*> envp;
         envp.reserve(childEnv.size() + 1);
@@ -993,16 +986,12 @@ class RawVideoEncoder {
         posix_spawn_file_actions_adddup2(&fileActions, pipe->read, STDIN_FILENO);
         posix_spawn_file_actions_addclose(&fileActions, pipe->read);
         posix_spawn_file_actions_addclose(&fileActions, pipe->write);
-#if defined(__GLIBC__) && defined(__GLIBC_PREREQ) && __GLIBC_PREREQ(2, 34)
-        posix_spawn_file_actions_addclosefrom_np(&fileActions, 3);
-#endif
-
-        const int spawnError = posix_spawn(&m_pid, argv[0], &fileActions, nullptr, argv.data(), envp.data());
+        m_process = spawnSupervisedProcess(*shell, args, envp.data(), fileActions);
         posix_spawn_file_actions_destroy(&fileActions);
         closeFd(pipe->read);
-        if (spawnError != 0) {
+        if (m_process.spawnError != 0) {
             closeFd(pipe->write);
-            return {.success = false, .error = std::string("ffmpeg exec failed: ") + std::strerror(spawnError)};
+            return {.success = false, .error = std::string("ffmpeg supervisor exec failed: ") + std::strerror(m_process.spawnError)};
         }
 
         m_writeFd = pipe->write;
@@ -1079,15 +1068,9 @@ class RawVideoEncoder {
     }
 
     void waitForFfmpeg() {
-        if (m_pid <= 0)
+        if (m_process.pid <= 0)
             return;
-
-        int status = 0;
-        pid_t result = -1;
-        while ((result = waitpid(m_pid, &status, 0)) < 0 && errno == EINTR) {
-        }
-        m_ffmpegSucceeded.store(result == m_pid && WIFEXITED(status) && WEXITSTATUS(status) == 0, std::memory_order_release);
-        m_pid = -1;
+        m_ffmpegSucceeded.store(waitSupervisedProcess(m_process) == 0, std::memory_order_release);
         setOwnerOnlyPermissions(m_outputPath);
     }
 
@@ -1135,7 +1118,7 @@ class RawVideoEncoder {
     bool                  m_preserveAlpha = false;
     std::size_t           m_maxQueuedFrames = MAX_FRAME_QUEUE;
     int                   m_writeFd = -1;
-    pid_t                 m_pid = -1;
+    SupervisedProcess     m_process;
     mutable std::mutex    m_mutex;
     std::condition_variable m_cv;
     std::deque<QueuedEncoderFrame>       m_frames;

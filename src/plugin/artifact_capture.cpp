@@ -179,6 +179,7 @@ struct WindowRenderOptions {
     CHyprColor clearColor{0.0, 0.0, 0.0, 0.0};
     SP<CTexture> backgroundTexture;
     bool       asyncReadback = false;
+    bool       normalizeRecordingOrientation = false;
     bool       clipBackgroundToWindow = false;
     bool       postprocessAlpha = true;
 };
@@ -1807,9 +1808,8 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     const int framebufferWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
     const int framebufferHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
     const int monitorTransform = std::clamp(static_cast<int>(monitor->m_transform), 0, 7);
-    // Static artifacts read the full physical framebuffer, then normalize it
-    // before alpha cropping. Keep the recording path on its direct async crop.
-    const bool normalizeWindowArtifact = trimToAlphaBounds && monitorTransform != 0;
+    // Center in logical output coordinates, including rotated recordings.
+    const bool normalizeWindowArtifact = (trimToAlphaBounds || options.normalizeRecordingOrientation) && monitorTransform != 0;
     const int renderCanvasWidth =
         normalizeWindowArtifact ? positiveRoundedIntFromDouble(monitor->m_transformedSize.x) : framebufferWidth;
     const int renderCanvasHeight =
@@ -1919,8 +1919,16 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     }
 
     ScopedTiming timing("window.readback");
-    readback = trimToAlphaBounds ? readRgbaFramebufferRegion(*framebuffer, 0, 0, framebufferWidth, framebufferHeight) :
-                                   readRgbaFramebufferRegion(*framebuffer, cropX, cropY, width, height, false, options.asyncReadback);
+    if (!trimToAlphaBounds && normalizeWindowArtifact) {
+        const auto physicalCrop = logicalRgbaCropToFramebuffer({cropX, cropY, width, height}, framebufferWidth, framebufferHeight, monitorTransform);
+        readback = readRgbaFramebufferRegion(*framebuffer, physicalCrop.x, physicalCrop.y, physicalCrop.width, physicalCrop.height, false, options.asyncReadback);
+        readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), monitorTransform);
+        readback.cropX = cropX;
+        readback.cropTopY = cropY;
+    } else {
+        readback = trimToAlphaBounds ? readRgbaFramebufferRegion(*framebuffer, 0, 0, framebufferWidth, framebufferHeight) :
+                                       readRgbaFramebufferRegion(*framebuffer, cropX, cropY, width, height, false, options.asyncReadback);
+    }
     if (readback.pixels.empty())
         return {};
 
@@ -3039,6 +3047,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
     CBox artifactBox;
     WindowRenderOptions renderOptions;
     renderOptions.asyncReadback = true;
+    renderOptions.normalizeRecordingOrientation = true;
     const bool solidAlpha = request.defaults.recordSolidAlpha &&
         (request.defaults.windowBackground == WindowBackground::White || request.defaults.windowBackground == WindowBackground::Black ||
          request.defaults.windowBackground == WindowBackground::FollowSystem);
