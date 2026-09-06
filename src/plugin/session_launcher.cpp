@@ -396,7 +396,10 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(request.defaults.recordTransparentFormat);
     args.insert(args.end(), {"--record-audio", toString(request.defaults.recordAudio),
                              "--record-audio-output", request.defaults.recordAudioOutput,
-                             "--record-audio-input", request.defaults.recordAudioInput});
+                             "--record-audio-input", request.defaults.recordAudioInput,
+                             "--record-audio-mix", request.defaults.recordAudioMix,
+                             "--record-audio-system-gain", std::to_string(request.defaults.recordAudioSystemGain),
+                             "--record-audio-mic-gain", std::to_string(request.defaults.recordAudioMicGain)});
     args.push_back("--record-codec");
     args.push_back(request.defaults.recordCodec);
     args.push_back("--record-transparent-codec");

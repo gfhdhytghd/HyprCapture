@@ -89,6 +89,9 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"recordFormat", boundedString(defaults.recordFormat, MAX_METADATA_STRING_BYTES)},
         {"recordTransparentFormat", boundedString(defaults.recordTransparentFormat, MAX_METADATA_STRING_BYTES)},
         {"recordAudio", toString(defaults.recordAudio)},
+        {"recordAudioMix", defaults.recordAudioMix},
+        {"recordAudioSystemGain", defaults.recordAudioSystemGain},
+        {"recordAudioMicGain", defaults.recordAudioMicGain},
         {"recordAudioOutput", boundedString(defaults.recordAudioOutput, MAX_METADATA_STRING_BYTES)},
         {"recordAudioInput", boundedString(defaults.recordAudioInput, MAX_METADATA_STRING_BYTES)},
         {"recordCodec", boundedString(defaults.recordCodec, MAX_METADATA_STRING_BYTES)},
@@ -243,6 +246,10 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
             return false;
         defaults.recordAudio = parseRecordAudio(value);
     }
+    if (!stringValue(obj, "recordAudioMix", defaults.recordAudioMix, MAX_METADATA_STRING_BYTES, false) ||
+        (defaults.recordAudioMix != "manual" && defaults.recordAudioMix != "auto-balance" && defaults.recordAudioMix != "voice-priority") ||
+        !int64Value(obj, "recordAudioSystemGain", defaults.recordAudioSystemGain, -61, 24, false) ||
+        !int64Value(obj, "recordAudioMicGain", defaults.recordAudioMicGain, -61, 24, false)) return false;
     if (stringValue(obj, "recordWindowBackend", value, MAX_METADATA_STRING_BYTES, false))
         defaults.recordWindowBackend = parseRecordWindowBackend(value, defaults.recordWindowBackend);
     else

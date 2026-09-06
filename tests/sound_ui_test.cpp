@@ -1,3 +1,8 @@
+#include <QTimer>
+#include <QSocketNotifier>
+#include <unistd.h>
+#include "ui/audio_meter.hpp"
+#include <QSlider>
 #include "ui/capture_overlay.hpp"
 #include "audio/helper.hpp"
 #include <QApplication>
@@ -38,6 +43,16 @@ int main(int argc, char** argv) {
         QThread::msleep(200);
         std::cout << R"({"outputs":[{"name":"test-output","description":"Test speakers"},{"name":"test-hdmi","description":"Test HDMI"}],"inputs":[{"name":"test-input","description":"Test microphone"}]})" << '\n';
         return 0;
+    }
+    if (argc > 1 && std::string_view(argv[1]) == "--sound-meter" && !qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
+        QCoreApplication app(argc, argv);
+        QTimer timer;
+        QObject::connect(&timer, &QTimer::timeout, [] {
+            std::cout << R"({"levels":{"System":{"peak":0.1,"rms":0.05,"available":true},"Microphone":{"peak":0.1,"rms":0.05,"available":true}}})" << std::endl;
+        });
+        QSocketNotifier stop(STDIN_FILENO, QSocketNotifier::Read);
+        QObject::connect(&stop, &QSocketNotifier::activated, [&] { char c; if (read(STDIN_FILENO, &c, 1) <= 0) app.quit(); });
+        timer.start(50); return app.exec();
     }
     if (argc > 1 && std::string_view(argv[1]).starts_with("--sound-"))
         return hyprcapture::audio::runHelper(argc, argv);
@@ -89,24 +104,52 @@ int main(int argc, char** argv) {
     choose(overlay, "recordFormat", "gif");
     require(!button(overlay, "soundMode")->isEnabled(), "animations disable audio");
     choose(overlay, "recordFormat", "mp4");
-    require(button(overlay, "soundMode")->isEnabled() && button(overlay, "soundMode")->text().contains("Microphone"), "video restores selection");
+    require(button(overlay, "soundMode")->isEnabled() && button(overlay, "soundMode")->toolTip().contains("Microphone"), "video restores selection");
     choose(overlay, "soundMode", "mix");
+    choose(overlay, "soundPreset", "manual");
+    require(overlay.findChild<QWidget*>("soundMixer")->isVisible(), "manual fourth row visible");
+    auto* gain = overlay.findChild<QSlider*>("micGain");
+    auto* meter = static_cast<AudioMeter*>(overlay.findChild<QWidget*>("micMeter"));
+    require(gain && meter, "manual gain and meter present");
+    if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
+        QTest::qWait(300);
+        require(std::abs(meter->property("postGainPeak").toDouble() - .1) < .0001, "live helper telemetry reaches visible meter");
+    } else meter->setLevels(.1, .05, true);
+    gain->setValue(6);
+    require(std::abs(meter->property("postGainPeak").toDouble() - .199526) < .0001, "meter shows post gain samples");
+    gain->setValue(-61);
+    require(meter->property("postGainPeak").toDouble() == 0, "mute truly silences meter");
+    gain->setValue(6);
+    choose(overlay, "soundPreset", "auto-balance");
+    require(!overlay.findChild<QWidget*>("soundMixer")->isVisible(), "automatic hides fourth row");
+    choose(overlay, "soundPreset", "manual");
     CaptureOverlay second(overlay, QRect(0, 0, 360, 640), true);
     second.show();
     second.adoptInteractionState(overlay);
     QTest::qWait(150);
-    require(button(second, "soundMode")->text().contains("Mix"), "monitor state sync");
+    require(button(second, "soundMode")->toolTip().contains("Mix"), "monitor state sync");
     require(button(second, "soundInput")->toolTip().contains("very-long"), "monitor device state sync");
     second.resize(360, 640);
     QTest::qWait(50);
-    for (const auto* name : {"soundMode", "soundOutput", "soundInput"}) {
+    for (const auto* name : {"soundMode", "soundOutput", "soundInput", "soundPreset"}) {
         auto* b = button(second, name);
         const QRect geometry(b->mapTo(&second, QPoint(0,0)), b->size());
         require(second.rect().contains(geometry), "sound controls within narrow overlay");
     }
+    require(second.findChild<QSlider*>("micGain")->value() == 6, "gain survives monitor switch");
+    for (const char* name : {"soundMixer", "micGain", "soundGain", "micMeter", "soundMeter"}) {
+        auto* widget = second.findChild<QWidget*>(name);
+        require(widget && widget->isVisible(), "manual narrow mixer visible");
+        require(second.rect().contains(QRect(widget->mapTo(&second, QPoint(0, 0)), widget->size())), "fourth row fits narrow overlay");
+    }
+    if (qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_SCREENSHOT")) second.grab().save(qEnvironmentVariable("HYPRCAPTURE_TEST_SCREENSHOT"));
     QTest::mouseClick(button(second, "soundOutput"), Qt::LeftButton);
     QTest::qWait(300);
     for (auto* panel : second.findChildren<QWidget*>("inlineSelectPopup"))
         if (panel->isVisible()) require(second.rect().contains(panel->geometry()), "device popup stays inside overlay after refresh");
+    second.hide(); overlay.hide(); QTest::qWait(300);
+    for (auto* owner : {&second, &overlay})
+        for (auto* process : owner->findChildren<QProcess*>())
+            if (process->arguments().value(0) == "--sound-meter") require(process->state() == QProcess::NotRunning, "closing overlay stops live capture");
     std::cout << "Sound UI: modes, animation restore, long names, narrow layout and monitor sync passed\n";
 }

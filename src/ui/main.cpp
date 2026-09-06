@@ -683,7 +683,7 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc > 1 && (std::string_view(argv[1]) == "--sound-list" || std::string_view(argv[1]) == "--sound-capture" || std::string_view(argv[1]) == "--sound-finalize"))
+    if (argc > 1 && (std::string_view(argv[1]) == "--sound-meter" || std::string_view(argv[1]) == "--sound-list" || std::string_view(argv[1]) == "--sound-capture" || std::string_view(argv[1]) == "--sound-finalize"))
         return hyprcapture::audio::runHelper(argc, argv);
     qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
 #if LAYERSHELLQTINTERFACE_ENABLE_DEPRECATED_SINCE(6, 6)
@@ -723,6 +723,9 @@ int main(int argc, char** argv) {
         {"record-filename-template", "Recording filename strftime template.", "template", "Recording-%Y-%m-%d-%H%M%S.mp4"},
         {"record-format", "Recording format.", "format", "mp4"},
         {"record-transparent-format", "Transparent window recording container format.", "format", "webm"},
+        {"record-audio-mix", "Audio mixing preset.", "preset", "voice-priority"},
+        {"record-audio-system-gain", "System gain in dB.", "dB", "0"},
+        {"record-audio-mic-gain", "Mic gain in dB.", "dB", "0"},
         {"record-audio", "Recording sound: off, system, microphone, mix.", "mode", "off"},
         {"record-audio-output", "System sound output device.", "device", "default"},
         {"record-audio-input", "Microphone source.", "device", "default"},
@@ -810,6 +813,10 @@ int main(int argc, char** argv) {
     defaults.recordFilenameTemplate = parser.value("record-filename-template").toStdString();
     defaults.recordFormat = parser.value("record-format").toStdString();
     defaults.recordTransparentFormat = parser.value("record-transparent-format").toStdString();
+    defaults.recordAudioMix = parser.value("record-audio-mix").toStdString();
+    if (defaults.recordAudioMix != "manual" && defaults.recordAudioMix != "auto-balance" && defaults.recordAudioMix != "voice-priority") defaults.recordAudioMix = "voice-priority";
+    defaults.recordAudioSystemGain = std::clamp(parser.value("record-audio-system-gain").toInt(), -61, 24);
+    defaults.recordAudioMicGain = std::clamp(parser.value("record-audio-mic-gain").toInt(), -61, 24);
     defaults.recordAudio = hyprcapture::parseRecordAudio(parser.value("record-audio").toStdString());
     defaults.recordAudioOutput = parser.value("record-audio-output").toStdString();
     defaults.recordAudioInput = parser.value("record-audio-input").toStdString();

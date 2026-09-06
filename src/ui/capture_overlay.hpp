@@ -25,6 +25,9 @@ class QWheelEvent;
 class QPropertyAnimation;
 class QScreen;
 class InlineSelect;
+class AudioMeter;
+class QSlider;
+class QProcess;
 
 namespace hyprcapture::ui {
 struct ClipboardSnapshotData;
@@ -236,6 +239,16 @@ class CaptureOverlay final : public QMainWindow {
     InlineSelect* m_fullscreenScope = nullptr;
     InlineSelect* m_windowBackground = nullptr;
     void refreshSoundDevices();
+    void updateSoundMeter();
+    QWidget* m_soundMixer = nullptr;
+    InlineSelect* m_soundPreset = nullptr;
+    QSlider* m_systemGain = nullptr;
+    QSlider* m_micGain = nullptr;
+    AudioMeter* m_systemMeter = nullptr;
+    AudioMeter* m_micMeter = nullptr;
+    QProcess* m_meterProcess = nullptr;
+    QString m_meterKey;
+
     QWidget*      m_soundOptions = nullptr;
     InlineSelect* m_soundMode = nullptr;
     InlineSelect* m_soundOutput = nullptr;

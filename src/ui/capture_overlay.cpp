@@ -1,4 +1,6 @@
 #include <QScrollArea>
+#include <QSlider>
+#include "ui/audio_meter.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -1526,6 +1528,7 @@ void CaptureOverlay::initializeOverlay(const QRect& overlayGeometry) {
 }
 
 CaptureOverlay::~CaptureOverlay() {
+    if (m_meterProcess) { m_meterProcess->disconnect(this); m_meterProcess->kill(); m_meterProcess->waitForFinished(1000); }
     endHymissionCaptureInputSuppression();
 }
 
@@ -1573,6 +1576,12 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
     m_recordError = source.m_recordError;
     m_recordFormatAuto = source.m_recordFormatAuto;
     m_recordCodecAuto = source.m_recordCodecAuto;
+    m_defaults.recordAudioMix = source.m_defaults.recordAudioMix;
+    m_defaults.recordAudioSystemGain = source.m_defaults.recordAudioSystemGain;
+    m_defaults.recordAudioMicGain = source.m_defaults.recordAudioMicGain;
+    if (m_soundPreset) m_soundPreset->setCurrentText(qString(m_defaults.recordAudioMix));
+    if (m_systemGain) m_systemGain->setValue(m_defaults.recordAudioSystemGain);
+    if (m_micGain) m_micGain->setValue(m_defaults.recordAudioMicGain);
     m_defaults.recordAudio = source.m_defaults.recordAudio;
     m_defaults.recordAudioOutput = source.m_defaults.recordAudioOutput;
     m_defaults.recordAudioInput = source.m_defaults.recordAudioInput;
@@ -2046,7 +2055,42 @@ void CaptureOverlay::buildToolbar() {
     m_soundInput->setOnChanged([this, onRecordOptionChanged] {
         m_defaults.recordAudioInput = m_soundInput->currentText().toStdString(); onRecordOptionChanged();
     });
+    m_soundPreset = new InlineSelect(this, m_soundOptions);
+    m_soundPreset->setObjectName("soundPreset");
+    m_soundPreset->addItems({"manual", "auto-balance", "voice-priority"});
+    m_soundPreset->setLabels({{"manual", "Manual"}, {"auto-balance", "Auto balance"}, {"voice-priority", "Voice priority"}});
+    m_soundPreset->setCurrentText(qString(m_defaults.recordAudioMix));
+    m_soundPreset->setOnChanged([this, onRecordOptionChanged] {
+        m_defaults.recordAudioMix = m_soundPreset->currentText().toStdString(); onRecordOptionChanged();
+    });
+    soundLayout->addWidget(m_soundPreset);
     rootLayout->addWidget(m_soundOptions);
+    m_soundMixer = new QWidget(m_toolbar);
+    m_soundMixer->setObjectName("soundMixer");
+    auto* mixerLayout = new QHBoxLayout(m_soundMixer);
+    mixerLayout->setContentsMargins(0, 2, 0, 2); mixerLayout->setSpacing(14);
+    auto channel = [this, mixerLayout](const QString& name, QSlider*& slider, AudioMeter*& meter, std::int64_t& gain) {
+        auto* strip = new QWidget(m_soundMixer);
+        auto* layout = new QVBoxLayout(strip); layout->setContentsMargins(0, 0, 0, 0); layout->setSpacing(2);
+        auto* label = new QLabel(strip);
+        slider = new QSlider(Qt::Horizontal, strip);
+        slider->setObjectName(name.toLower() + "Gain"); slider->setAccessibleName(name + " gain in dB");
+        slider->setRange(-61, 24); slider->setValue(gain); slider->setMinimumWidth(90);
+        meter = new AudioMeter(strip); meter->setObjectName(name.toLower() + "Meter"); meter->setGain(gain);
+        auto updateGain = [label, meter, name, &gain](int value) {
+            gain = value; meter->setGain(value);
+            label->setText(name + "   " + (value == -61 ? QString("Mute") : QString::number(value) + " dB"));
+        };
+        updateGain(gain); connect(slider, &QSlider::valueChanged, this, updateGain);
+        layout->addWidget(label); layout->addWidget(slider); layout->addWidget(meter);
+        mixerLayout->addWidget(strip, 1);
+    };
+    channel("Sound", m_systemGain, m_systemMeter, m_defaults.recordAudioSystemGain);
+    channel("Mic", m_micGain, m_micMeter, m_defaults.recordAudioMicGain);
+    rootLayout->addWidget(m_soundMixer);
+    auto* meterLifecycle = new QTimer(this);
+    connect(meterLifecycle, &QTimer::timeout, this, &CaptureOverlay::updateSoundMeter);
+    meterLifecycle->start(100);
     refreshSoundDevices();
 
 
@@ -2135,7 +2179,7 @@ void CaptureOverlay::hideOptionPopups() {
         m_fullscreenScope->hidePopup();
     if (m_windowBackground)
         m_windowBackground->hidePopup();
-    for (auto* select : {m_soundMode, m_soundOutput, m_soundInput}) if (select) select->hidePopup();
+    for (auto* select : {m_soundMode, m_soundOutput, m_soundInput, m_soundPreset}) if (select) select->hidePopup();
     if (m_recordCodec)
         m_recordCodec->hidePopup();
     if (m_recordFormat)
@@ -2593,6 +2637,48 @@ void CaptureOverlay::refreshSoundDevices() {
     process->start(QCoreApplication::applicationFilePath(), {"--sound-list"});
 }
 
+void CaptureOverlay::updateSoundMeter() {
+    const bool wanted = isVisible() && m_overlayActive && m_soundMixer && m_soundMixer->isVisible();
+    const QStringList args{"--sound-meter", qString(hyprcapture::toString(m_defaults.recordAudio)),
+                           qString(m_defaults.recordAudioOutput), qString(m_defaults.recordAudioInput)};
+    const QString key = args.join(QChar(0x1f));
+    if (m_meterProcess && (!wanted || key != m_meterKey)) {
+        m_meterProcess->disconnect(this);
+        m_meterProcess->kill();
+        connect(m_meterProcess, &QProcess::finished, m_meterProcess, &QObject::deleteLater);
+        if (m_meterProcess->state() == QProcess::NotRunning) m_meterProcess->deleteLater();
+        m_meterProcess = nullptr; m_meterKey.clear();
+        m_systemMeter->reset(); m_micMeter->reset();
+    }
+    if (!wanted) { m_meterKey.clear(); return; }
+    if (m_meterProcess || m_meterKey == key) return;
+    m_meterKey = key;
+    auto* process = new QProcess(this); m_meterProcess = process;
+    auto buffer = std::make_shared<QByteArray>();
+    connect(process, &QProcess::readyReadStandardOutput, this, [this, process, buffer] {
+        buffer->append(process->readAllStandardOutput());
+        while (buffer->contains('\n')) {
+            const int end = buffer->indexOf('\n');
+            const auto object = QJsonDocument::fromJson(buffer->left(end)).object(); buffer->remove(0, end + 1);
+            if (!object.contains("levels")) continue;
+            const auto levels = object["levels"].toObject();
+            auto apply = [&levels](AudioMeter* meter, const char* role) {
+                const auto data = levels[role].toObject();
+                meter->setLevels(data["peak"].toDouble(), data["rms"].toDouble(), data["available"].toBool());
+            };
+            apply(m_systemMeter, "System"); apply(m_micMeter, "Microphone");
+        }
+        if (buffer->size() > 8192) buffer->clear();
+    });
+    auto failed = [this, process] {
+        if (m_meterProcess == process) { m_meterProcess = nullptr; m_systemMeter->reset(); m_micMeter->reset(); }
+        process->deleteLater();
+    };
+    connect(process, &QProcess::finished, this, [failed](int, QProcess::ExitStatus) { failed(); });
+    connect(process, &QProcess::errorOccurred, this, [failed](QProcess::ProcessError error) { if (error == QProcess::FailedToStart) failed(); });
+    process->start(QCoreApplication::applicationFilePath(), args);
+}
+
 void CaptureOverlay::updateRecordOptionsVisibility() {
     if (!m_recordOptions)
         return;
@@ -2617,6 +2703,12 @@ void CaptureOverlay::updateRecordOptionsVisibility() {
     m_soundOutput->setEnabled(!imageAnimation);
     m_soundInput->setEnabled(!imageAnimation);
     m_soundOptions->setVisible(visible);
+    updateSelect(m_soundPreset, visible);
+    m_soundPreset->setEnabled(!imageAnimation);
+    const bool manual = visible && !imageAnimation && m_defaults.recordAudioMix == "manual" && m_defaults.recordAudio != hyprcapture::RecordAudio::Off;
+    m_soundMixer->setVisible(manual);
+    m_systemGain->setEnabled(m_defaults.recordAudio != hyprcapture::RecordAudio::Microphone);
+    m_micGain->setEnabled(m_defaults.recordAudio != hyprcapture::RecordAudio::System);
     m_soundMode->setEnabled(!imageAnimation);
     m_soundMode->setToolTip(imageAnimation ? "Animation formats do not support sound" : "Recording sound");
     if (imageAnimation) m_soundMode->setCurrentText("Not supported");
@@ -3703,7 +3795,13 @@ void CaptureOverlay::relayoutToolbar() {
 
     if (m_soundOptions && m_soundOutput && m_soundInput) {
         const int count = (m_soundOutput->isVisible() ? 1 : 0) + (m_soundInput->isVisible() ? 1 : 0);
-        const int deviceWidth = std::clamp((width() - 64 - 165) / std::max(1, count), 65, 210);
+        const int deviceWidth = std::clamp((width() - 64 - 220) / std::max(1, count), 45, 210);
+        m_soundMode->setPrefix(width() < 500 ? "" : "Sound");
+        m_soundOutput->setPrefix(width() < 500 ? "" : "Output");
+        m_soundInput->setPrefix(width() < 500 ? "" : "Mic");
+        m_soundMode->setCompactWidth(width() < 500 ? 75 : 155);
+        m_soundPreset->setCompactWidth(width() < 500 ? 85 : 130);
+        if (m_soundMixer) m_soundMixer->setFixedWidth(std::min(550, std::max(1, width() - 52)));
         m_soundOutput->setCompactWidth(deviceWidth);
         m_soundInput->setCompactWidth(deviceWidth);
         m_soundOptions->setFixedWidth(std::min(m_soundOptions->sizeHint().width(), std::max(1, width() - 52)));

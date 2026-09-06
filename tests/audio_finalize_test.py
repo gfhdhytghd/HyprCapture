@@ -70,3 +70,52 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-audio-test-') as root:
     assert hashlib.sha256(invalid.read_bytes()).digest() == before
     assert (session / 'system.f32').exists()
 print('Audio mux: four containers, synchronization, one mixed track, source loss and recovery passed')
+
+# Compare frequency components, rather than total RMS, to distinguish speech boost
+# from background ducking through the real encoder and finalizer.
+def component(values, frequency, start, end):
+    lo, hi = int(start * 48000), int(end * 48000)
+    segment = values[lo:hi]
+    re = sum(v * math.cos(2 * math.pi * frequency * (lo+i) / 48000) for i, v in enumerate(segment))
+    im = sum(v * math.sin(2 * math.pi * frequency * (lo+i) / 48000) for i, v in enumerate(segment))
+    return 2 * math.hypot(re, im) / len(segment)
+
+with tempfile.TemporaryDirectory(prefix='hyprcapture-mix-test-') as root:
+    root = Path(root)
+    source = root / 'source.mp4'
+    run('ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'color=c=black:s=64x64:r=10:d=8', '-c:v', 'libx264', str(source))
+    def render(preset, system_gain=0, mic_gain=0, mic_present=True, noise=False):
+        folder = Path(tempfile.mkdtemp(dir=root)); session = folder / 'audio'; session.mkdir(mode=0o700)
+        video = folder / 'video.mp4'; shutil.copyfile(source, video)
+        (session / 'session.json').write_text(json.dumps({'originUs': 1000000, 'mode': 'mix', 'mixPreset': preset,
+                                                        'systemGain': system_gain, 'micGain': mic_gain}))
+        for name, frequency, amplitude in [('system.f32', 440, .6), ('microphone.f32', 880, .025)]:
+            if name.startswith('microphone') and not mic_present: continue
+            data = array.array('f')
+            for i in range(8 * 48000):
+                t = i / 48000
+                value = amplitude * math.sin(2 * math.pi * frequency * t)
+                if name.startswith('microphone') and not 2 <= t < 5: value = .001 * math.sin(2 * math.pi * frequency * t) if noise else 0
+                data.extend((value, value))
+            (session / name).write_bytes(data.tobytes())
+        run(helper, '--sound-finalize', str(session), str(video), '1000000', 'mp4')
+        return samples(video)
+    manual = render('manual')
+    boosted = render('manual', system_gain=-6, mic_gain=12)
+    muted = render('manual', system_gain=-61, mic_gain=-61)
+    auto = render('auto-balance')
+    voice = render('voice-priority')
+    mute_mic = render('voice-priority', mic_gain=-61)
+    missing_mic = render('voice-priority', mic_present=False)
+    noisy = render('voice-priority', noise=True)
+    assert component(noisy, 880, 7, 7.8) < .002, 'quiet background must not be amplified into speech'
+    m = component(manual, 880, 3, 4)
+    assert .022 * math.sqrt(2) < m < .028 * math.sqrt(2), ('manual unity', m)
+    assert 3.8 < component(boosted, 880, 3, 4) / m < 4.2, 'manual +12dB gain reaches recording'
+    assert .47 < component(boosted, 440, 3, 4) / component(manual, 440, 3, 4) < .53, 'manual -6dB gain reaches recording'
+    assert rms(muted) < .00001, 'mute must remain silent through encoding'
+    assert component(auto, 880, 3, 4) > m * 3, 'automatic brings quiet voice up'
+    assert component(voice, 440, 3, 4) < component(auto, 440, 3, 4) * .65, 'voice ducks system sound'
+    assert component(voice, 440, 7, 7.8) > component(voice, 440, 3, 4) * 1.5, 'background recovers after voice stops'
+    assert abs(component(mute_mic, 440, 3, 4) / component(missing_mic, 440, 3, 4) - 1) < .05, 'muted microphone must not duck'
+    print('Mixing: manual dB, mute, quiet speech boost, ducking, recovery and missing microphone passed')

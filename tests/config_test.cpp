@@ -451,10 +451,14 @@ int main() {
     require(CaptureDefaults{}.recordAudio == RecordAudio::Off, "sound defaults off");
     for (auto mode : {RecordAudio::Off, RecordAudio::System, RecordAudio::Microphone, RecordAudio::Mix}) {
         recording.defaults.recordAudio = mode;
+        recording.defaults.recordAudioMix = "manual";
+        recording.defaults.recordAudioSystemGain = -6;
+        recording.defaults.recordAudioMicGain = 12;
         recording.defaults.recordAudioOutput = "alsa_output.test.stereo";
         recording.defaults.recordAudioInput = "mic name with spaces";
         const auto decoded = decodeRecordingRequestJson(encodeRecordingRequestJson(recording));
         require(decoded && decoded->defaults.recordAudio == mode, "sound mode roundtrip");
+        require(decoded->defaults.recordAudioMix == "manual" && decoded->defaults.recordAudioSystemGain == -6 && decoded->defaults.recordAudioMicGain == 12, "mix settings roundtrip");
         require(decoded->defaults.recordAudioOutput == recording.defaults.recordAudioOutput, "output device roundtrip");
         require(decoded->defaults.recordAudioInput == recording.defaults.recordAudioInput, "input device roundtrip");
     }

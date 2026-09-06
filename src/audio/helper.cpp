@@ -13,6 +13,8 @@
 #include <QSocketNotifier>
 #include <QTimer>
 #include <array>
+#include <cmath>
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <fcntl.h>
@@ -56,6 +58,8 @@ struct Track {
     int fd = -1;
     uint32_t sourceIndex = PA_INVALID_INDEX;
     std::int64_t next = -1, lastTrace = 0;
+    double peak = 0, energy = 0;
+    size_t samples = 0;
     bool failed = false;
 };
 struct Recorder {
@@ -65,6 +69,8 @@ struct Recorder {
     QString defaultSink, defaultSource, directory, mode, output, input;
     std::array<Track, 2> tracks;
     std::int64_t origin = monotonicUs();
+    bool meterOnly = false;
+    QTimer meterTimer;
     bool listOnly = false, initialized = false, serverFailed = false;
     int pending = 3;
     QTimer pump;
@@ -120,9 +126,11 @@ struct Recorder {
         t.owner = this; t.role = role; t.device = source;
         if (source.isEmpty()) { fail(t, "selected device unavailable"); return; }
         for (const auto& d : sources) if (d.name == source) t.sourceIndex = d.index;
+        if (!meterOnly) {
         const auto path = QFile::encodeName(directory + (role == "System" ? "/system.f32" : "/microphone.f32"));
         t.fd = open(path.constData(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
         if (t.fd < 0) { fail(t, "cannot create audio recovery file"); return; }
+        }
         pa_sample_spec spec{PA_SAMPLE_FLOAT32LE, 48000, 2};
         pa_channel_map map; pa_channel_map_init_stereo(&map);
         t.stream = pa_stream_new(context, role.toUtf8().constData(), &spec, &map);
@@ -143,6 +151,15 @@ struct Recorder {
             if (pa_stream_peek(s, &samples, &bytes) < 0) { t.owner->fail(t, "capture read failed"); return; }
             if (!bytes) return;
             if (!t.failed && samples) {
+                if (t.owner->meterOnly) {
+                    const auto* values = static_cast<const float*>(samples);
+                    for (size_t i = 0; i < bytes / sizeof(float); ++i) {
+                        const double v = std::isfinite(values[i]) ? values[i] : 0;
+                        t.peak = std::max(t.peak, std::abs(v)); t.energy += v * v; ++t.samples;
+                    }
+                    pa_stream_drop(s);
+                    continue;
+                }
                 pa_usec_t latency = 0; int negative = 0;
                 const bool timed = pa_stream_get_latency(s, &latency, &negative) == 0;
                 const auto timestamp = monotonicUs() + (timed ? (negative ? static_cast<std::int64_t>(latency) : -static_cast<std::int64_t>(latency)) : 0);
@@ -219,6 +236,22 @@ struct Recorder {
             }
         });
         pump.start(2);
+        if (meterOnly) {
+            // Never allow a stalled UI to block the audio callback or accumulate telemetry.
+            const int flags = fcntl(STDOUT_FILENO, F_GETFL);
+            fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK);
+            QObject::connect(&meterTimer, &QTimer::timeout, [&] {
+                QJsonObject levels;
+                for (auto& t : tracks) {
+                    levels[t.role] = QJsonObject{{"peak", t.peak}, {"rms", t.samples ? std::sqrt(t.energy / t.samples) : 0},
+                                                {"available", !t.failed && t.stream && pa_stream_get_state(t.stream) == PA_STREAM_READY}};
+                    t.peak = t.energy = 0; t.samples = 0;
+                }
+                const auto bytes = QJsonDocument(QJsonObject{{"levels", levels}}).toJson(QJsonDocument::Compact) + '\n';
+                (void)!write(STDOUT_FILENO, bytes.constData(), bytes.size());
+            });
+            meterTimer.start(50);
+        }
         QTimer::singleShot(3000, [&] { if (!initialized) serverError(); });
     }
 };
@@ -256,6 +289,8 @@ int finalize(const QStringList& args) {
     QStringList command{"-hide_banner", "-loglevel", "error", "-nostdin", "-i", video};
     QStringList filters, labels;
     const auto delta = videoStart - origin;
+    const auto preset = meta.value("mixPreset").toString();
+    QString systemLabel, micLabel;
     int index = 1;
     for (const auto* file : {"system.f32", "microphone.f32"}) {
         const auto path = directory + '/' + file;
@@ -265,7 +300,18 @@ int finalize(const QStringList& args) {
         QString f = QString("[%1:a]").arg(index);
         if (delta >= 0) f += QString("atrim=start_sample=%1,asetpts=PTS-STARTPTS,").arg(sampleAt(delta));
         else f += QString("adelay=%1S:all=1,").arg(sampleAt(-delta));
-        f += QString("apad,atrim=duration=%1[%2]").arg(duration, 0, 'f', 6).arg(label);
+        f += QString("apad,atrim=duration=%1").arg(duration, 0, 'f', 6);
+        const bool mic = QString(file) == "microphone.f32";
+        if (!preset.isEmpty()) {
+            if (preset != "manual") {
+                if (mic) f += ",highpass=f=80,agate=threshold=0.003:ratio=2:attack=10:release=200,speechnorm=p=0.5:e=12:c=4:t=0.005:r=0.005:f=0.01:l=1";
+                else f += ",acompressor=threshold=0.18:ratio=3:attack=20:release=300:makeup=1,volume=0.5";
+            }
+            const int gain = std::clamp(meta.value(mic ? "micGain" : "systemGain").toInt(), -61, 24);
+            f += ",volume=" + QString::number(gain <= -61 ? 0 : std::pow(10., gain / 20.), 'g', 12);
+        }
+        f += '[' + label + ']';
+        (mic ? micLabel : systemLabel) = '[' + label + ']';
         filters << f; labels << '[' + label + ']'; ++index;
     }
     if (labels.isEmpty()) {
@@ -274,9 +320,14 @@ int finalize(const QStringList& args) {
         QFile::remove(video + ".ts");
         return 0;
     }
+    if (preset == "voice-priority" && !systemLabel.isEmpty() && !micLabel.isEmpty()) {
+        filters << micLabel + "asplit=2[voice][key]";
+        filters << systemLabel + "[key]sidechaincompress=threshold=0.03:ratio=6:attack=10:release=500:makeup=1[ducked]";
+        labels = {"[ducked]", "[voice]"};
+    }
     QString mix = labels.join("");
-    if (labels.size() > 1) mix += QString("amix=inputs=%1:normalize=0:weights='0.5 0.5',").arg(labels.size());
-    else if (meta.value("mode").toString() == "mix") mix += "volume=0.5,";
+    if (labels.size() > 1) mix += QString("amix=inputs=%1:normalize=0:weights='%2',").arg(labels.size()).arg(preset.isEmpty() ? "0.5 0.5" : "1 1");
+    else if (preset.isEmpty() && meta.value("mode").toString() == "mix") mix += "volume=0.5,";
     mix += "alimiter=limit=1:level=false:latency=true[out]";
     filters << mix;
     // Same directory as the destination: replacement is atomic, and a failed mux never touches video.
@@ -309,13 +360,26 @@ int runHelper(int argc, char** argv) {
     if (args.value(1) == "--sound-finalize") return finalize(args);
     Recorder recorder;
     recorder.listOnly = args.value(1) == "--sound-list";
-    if (!recorder.listOnly) {
-        if (args.size() != 6 || args[1] != "--sound-capture" || !privateDirectory(args[5])) return 2;
+    recorder.meterOnly = args.value(1) == "--sound-meter";
+    if (recorder.meterOnly) {
+        if (args.size() != 5) return 2;
+        recorder.mode = args[2]; recorder.output = args[3]; recorder.input = args[4];
+        if (recorder.mode != "system" && recorder.mode != "microphone" && recorder.mode != "mix") return 2;
+    } else if (!recorder.listOnly) {
+        if ((args.size() != 6 && args.size() != 9) || args[1] != "--sound-capture" || !privateDirectory(args[5])) return 2;
         recorder.mode = args[2]; recorder.output = args[3]; recorder.input = args[4]; recorder.directory = args[5];
         if (recorder.mode != "system" && recorder.mode != "microphone" && recorder.mode != "mix") return 2;
         QFile metadata(recorder.directory + "/session.json");
         if (!metadata.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return 2;
-        const auto bytes = QJsonDocument(QJsonObject{{"originUs", static_cast<double>(recorder.origin)}, {"mode", recorder.mode}}).toJson();
+        QJsonObject meta{{"originUs", static_cast<double>(recorder.origin)}, {"mode", recorder.mode}};
+        if (args.size() == 9) {
+            bool systemOK = false, micOK = false;
+            const int systemGain = args[7].toInt(&systemOK), micGain = args[8].toInt(&micOK);
+            if (!systemOK || !micOK || systemGain < -61 || systemGain > 24 || micGain < -61 || micGain > 24 ||
+                (args[6] != "manual" && args[6] != "auto-balance" && args[6] != "voice-priority")) return 2;
+            meta["mixPreset"] = args[6]; meta["systemGain"] = systemGain; meta["micGain"] = micGain;
+        }
+        const auto bytes = QJsonDocument(meta).toJson();
         if (metadata.write(bytes) != bytes.size()) return 2;
         metadata.close();
     }

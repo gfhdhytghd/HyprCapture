@@ -414,6 +414,9 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `record_window_fps_limit` | int | `12` | Safety cap for window recording with the current compositor-readback backend. Use `0` to disable the cap. |
 | `record_window_real_bg_fps_limit` | int | `8` | Additional safety cap for window recording with `window_background = "real"`. Use `0` to disable the cap. |
 | `record_audio` | string | `off` | Sound mode: `off`, `system`, `microphone`, or `mix`. Mix produces one audio track containing both sources. |
+| `record_audio_mix` | string | `voice-priority` | `manual`, `auto-balance`, or `voice-priority`. |
+| `record_audio_system_gain` | int | `0` | System gain in dB, −60 to +24; −61 mutes. |
+| `record_audio_mic_gain` | int | `0` | Microphone gain in dB, −60 to +24; −61 mutes. |
 | `record_audio_output` | string | `default` | Output device whose monitor is recorded for system sound. Use a stable PulseAudio sink name or `default`. |
 | `record_audio_input` | string | `default` | Microphone source name or `default`. Monitor sources are excluded from the microphone picker. |
 | `record_codec` | string | `auto` | Default recording codec shown in the overlay for normal video formats. The UI exposes codec families only: `auto`, `h264`, `h265`, `av1`, `vp9`, and `ffv1`. HyprCapture automatically probes NVENC and VAAPI at the selected resolution, then falls back to the corresponding software encoder. Legacy implementation-specific values remain accepted and are folded into their codec family. GIF, APNG, and WebP use fixed FFmpeg image-animation encoders. |
@@ -432,7 +435,11 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 
 The recording toolbar has a third **Sound** row. Choose **Off**, **System**, **Microphone**, or **Mix**, then select the output device and/or microphone. Device menus refresh when opened and include **System default**. Defaults are resolved when recording starts and remain fixed for that recording. GIF, APNG, and WebP do not carry audio; their Sound controls are disabled without forgetting your video settings.
 
-Both recording backends use a separate headless helper process for sound. Mix uses equal, fixed gains and outputs a single stereo track. If a device is missing or disconnects, HyprCapture reports the error and keeps recording video; the failed source becomes silent while another source continues. Devices are not automatically switched or reconnected during a recording.
+Both recording backends use a separate headless helper process for sound. Mix outputs a single stereo track. Choose **Manual**, **Auto balance**, or **Voice priority** (default) in the Sound row. Auto balance applies a microphone high-pass filter, gentle noise gate and bounded speech normalization, plus system-sound compression and attenuation. Voice priority also ducks system sound when the processed microphone level rises; this is level-based ducking, not speech recognition.
+
+Manual shows a fourth row with separate **Sound** and **Mic** gain sliders (−60 to +24 dB, plus Mute), post-gain sample-peak/RMS meters in dBFS, a 1.2-second peak hold and clipping indication. The preview samples the selected devices without playback or PCM storage and stops when the manual panel closes. Gain changes affect the recording, not desktop playback volume. Each meter represents its channel before summing and the final limiter; the sum can exceed 0 dBFS even when the individual channels do not. Both channels feed a final limiter. Settings are chosen before recording; the panel is not a live recording mixer. Gain settings also apply after processing in automatic presets.
+
+If a device is missing or disconnects, HyprCapture reports the error and keeps recording video; the failed source becomes silent while another source continues. Devices are not automatically switched or reconnected during a recording.
 
 Stopping displays **Merging sound** while FFmpeg copies the video stream and adds AAC (MP4/MOV) or Opus (WebM/MKV). The video is not reencoded. Temporary float PCM files are stored with private permissions in a `.hyprcapture-sound-*` directory next to the video (about 23 MB per minute per source). Successful merging removes these files. A failed merge preserves the original video and recoverable audio, and the error gives the recovery directory. Do not remove it until you have recovered any sound you need.
 
