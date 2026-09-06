@@ -11,6 +11,7 @@
 namespace hyprcapture {
 struct WindowGpuPacket {
     std::array<unsigned char, 232> header{};
+    std::optional<std::array<unsigned char, 88>> inputGeometry;
     int imageFd = -1;
     int fenceFd = -1;
     WindowGpuPacket() = default;

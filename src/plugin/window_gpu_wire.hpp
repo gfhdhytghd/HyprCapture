@@ -7,6 +7,7 @@
 namespace hyprcapture::gpuwire {
 
 constexpr std::size_t HCGF_BYTES = 232;
+constexpr std::size_t HCGI_BYTES = 88;
 constexpr std::size_t HCGR_BYTES = 32;
 constexpr std::uint32_t HCGF_ABGR8888 = 0x34324241U;
 
@@ -37,6 +38,17 @@ struct Frame {
 struct Release {
     std::uint64_t sequence = 0, geometryEpoch = 0;
 };
+
+// Optional same-datagram extension, frozen alongside the captured frame.
+// Desktop-space content rectangle and native surface extent are distinct:
+// compositor transforms may scale the rendered content relative to its surface.
+struct InputGeometry {
+    std::uint64_t window = 0, surface = 0, pid = 0;
+    double contentX = 0, contentY = 0, contentWidth = 0, contentHeight = 0;
+    double surfaceWidth = 0, surfaceHeight = 0;
+};
+bool encode(const InputGeometry&, std::array<std::uint8_t, HCGI_BYTES>&, Error* = nullptr);
+bool decode(const std::uint8_t*, std::size_t, InputGeometry&, Error* = nullptr);
 
 bool encode(const Frame&, std::array<std::uint8_t, HCGF_BYTES>&, Error* = nullptr);
 bool decode(const std::uint8_t*, std::size_t, Frame&, Error* = nullptr);

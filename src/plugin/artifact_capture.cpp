@@ -306,12 +306,23 @@ void noteWindowStreamDiagnostic(std::string_view reason) {
 struct WindowStreamSession {
     std::string                      id;
     std::string                      windowAddress;
+    // Retain the exact object so an address cannot resolve to a replacement
+    // while this stream exists. Unmap remains an irreversible boundary even
+    // when this same object is later mapped again.
+    PHLWINDOW                        targetWindow;
+    SP<CWLSurfaceResource>            targetSurface;
+    bool                             targetRevoked = false;
+    CHyprSignalListener              targetUnmap;
+    CHyprSignalListener              targetSurfaceUnmap;
+    CHyprSignalListener              targetSurfaceDestroy;
     CaptureDefaults                  defaults;
     int                              fps = 60;
     std::uint64_t                    sequence = 0;
     std::uint64_t                    geometryEpoch = 1;
     Rect                             lastWindowGeometry;
+    Rect                             lastContentGeometry;
     Rect                             lastMonitorGeometry;
+    Vector2D                         lastSurfaceSize;
     double                           lastMonitorScale = 0.0;
     WindowStreamCadence              cadence;
     SP<CEventLoopTimer>              timer;
@@ -3719,6 +3730,18 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     // if the window moves before the receiver consumes the fence.
     const CBox sampledBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
     const CBox sampledVisibleBox = renderedWindowGoalMainSurfaceBox(window);
+    std::optional<gpuwire::InputGeometry> frozenInput;
+    if (!window->m_isX11 && session.targetSurface && window->getPID() > 0) {
+        const auto size = session.targetSurface->m_current.size;
+        frozenInput = gpuwire::InputGeometry{
+            .window = reinterpret_cast<std::uintptr_t>(window.get()),
+            .surface = reinterpret_cast<std::uintptr_t>(session.targetSurface.get()),
+            .pid = static_cast<std::uint64_t>(window->getPID()),
+            .contentX = sampledVisibleBox.x, .contentY = sampledVisibleBox.y,
+            .contentWidth = sampledVisibleBox.w, .contentHeight = sampledVisibleBox.h,
+            .surfaceWidth = size.x, .surfaceHeight = size.y,
+        };
+    }
     const auto sampledGeometry = windowCaptureGeometry(sampledBox, monitor);
     const int sampledWidth = sampledGeometry.pixelWidth;
     const int sampledHeight = sampledGeometry.pixelHeight;
@@ -3783,6 +3806,14 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     int height = 0;
     CBox artifactBox;
     const auto renderInfo = renderWindowArtifactReadback(window, monitor, Time::steadyNow(), renderDecorations, width, height, artifactBox, nullptr, false, renderOptions);
+    if (session.targetRevoked || window != session.targetWindow ||
+        (window->wlSurface() ? window->wlSurface()->resource() : nullptr) != session.targetSurface ||
+        (session.targetSurface && session.targetSurface->m_current.size != session.lastSurfaceSize))
+        return false;
+    const auto currentVisibleBox = renderedWindowGoalMainSurfaceBox(window);
+    if (currentVisibleBox.x != sampledVisibleBox.x || currentVisibleBox.y != sampledVisibleBox.y ||
+        currentVisibleBox.w != sampledVisibleBox.w || currentVisibleBox.h != sampledVisibleBox.h)
+        return false;
     if (width != sampledWidth || height != sampledHeight || artifactBox.x != sampledOutputGeometry.x || artifactBox.y != sampledOutputGeometry.y ||
         artifactBox.w != sampledOutputGeometry.width || artifactBox.h != sampledOutputGeometry.height || !session.gpuFramebuffer ||
         renderInfo.cropX != extentPlan.cropX || renderInfo.cropTopY != extentPlan.cropTopY)
@@ -3827,6 +3858,8 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     if (session.gpuExport.imageBuilds() != imageBuilds)
         traceTiming("window.gpu.image_build");
     if (!packet)
+        return false;
+    if (frozenInput && !gpuwire::encode(*frozenInput, packet->inputGeometry.emplace()))
         return false;
     // submit owns the descriptors only on success. A false/Ready result is a
     // permitted try-lock handoff drop: no descriptor reached the peer, so the
@@ -4064,6 +4097,11 @@ void captureWindowStreamDrainTick(SP<CEventLoopTimer> self) {
     auto* session = g_windowStreamSession.get();
     if (!session || !session->drainTimer || !session->drainPoll.acceptsCallback(session->drainTimer.get() == self.get()))
         return;
+    if (session->targetRevoked || !isLiveWindowCaptureTarget(session->targetWindow) ||
+        (session->targetWindow->wlSurface() ? session->targetWindow->wlSurface()->resource() : nullptr) != session->targetSurface) {
+        stopWindowStreamSession();
+        return;
+    }
 
     drainReadyWindowStreamPbo(*session);
     // Poll only while the one PBO is outstanding.  `drainReady...` uses a
@@ -4096,9 +4134,10 @@ void captureWindowStreamTick(SP<CEventLoopTimer> self) {
             return;
         }
     }
-    const auto window = findWindowByAddress(session->windowAddress);
+    const auto window = session->targetWindow;
     const auto monitor = window ? window->m_monitor.lock() : PHLMONITOR{};
-    if (!window || !monitor) {
+    if (session->targetRevoked || !isLiveWindowCaptureTarget(window) || !monitor ||
+        (window->wlSurface() ? window->wlSurface()->resource() : nullptr) != session->targetSurface) {
         noteWindowStreamDiagnostic("target or monitor missing before capture tick");
         stopWindowStreamSession();
         return;
@@ -4116,13 +4155,17 @@ void captureWindowStreamTick(SP<CEventLoopTimer> self) {
         }
     }
     const Rect windowGeometry = toRect(renderedWindowBox(window, window->getFullWindowBoundingBox()));
+    const Rect contentGeometry = toRect(renderedWindowGoalMainSurfaceBox(window));
     const Rect outputGeometry = monitorRect(monitor);
-    if (session->sequence != 0 && (!rectEqual(windowGeometry, session->lastWindowGeometry) || !rectEqual(outputGeometry, session->lastMonitorGeometry) ||
-                                   monitor->m_scale != session->lastMonitorScale))
+    const Vector2D surfaceSize = session->targetSurface ? session->targetSurface->m_current.size : Vector2D{};
+    if (session->sequence != 0 && (!rectEqual(windowGeometry, session->lastWindowGeometry) || !rectEqual(contentGeometry, session->lastContentGeometry) || !rectEqual(outputGeometry, session->lastMonitorGeometry) ||
+                                   monitor->m_scale != session->lastMonitorScale || surfaceSize != session->lastSurfaceSize))
         ++session->geometryEpoch;
     session->lastWindowGeometry = windowGeometry;
+    session->lastContentGeometry = contentGeometry;
     session->lastMonitorGeometry = outputGeometry;
     session->lastMonitorScale = monitor->m_scale;
+    session->lastSurfaceSize = surfaceSize;
 
     WindowStreamCaptureRequest request{.defaults = session->defaults, .windowAddress = session->windowAddress, .sequence = ++session->sequence,
                                        .geometryEpoch = session->geometryEpoch};
@@ -4138,7 +4181,7 @@ void captureWindowStreamTick(SP<CEventLoopTimer> self) {
         // before it renders the next sample. The sender's submit path is a
         // try-lock/latest replacement and performs no socket I/O on this thread.
         (void)captureWindowStreamFrameImpl(request, [session](WindowStreamCapturedFrame&& frame) {
-            if (session->sender)
+            if (!session->targetRevoked && session->sender)
                 (void)session->sender->submit(frame.metadata, std::move(frame.rgba));
         });
     }
@@ -4187,13 +4230,26 @@ LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
         return {.success = false, .error = "window stream already active"};
     if (!g_pEventLoopManager)
         return {.success = false, .error = "window stream event loop unavailable"};
-    if (!isLiveWindowCaptureTarget(findWindowByAddress(control->windowAddress)))
+    const auto targetWindow = findWindowByAddress(control->windowAddress);
+    if (!isLiveWindowCaptureTarget(targetWindow))
         return {.success = false, .error = "window stream target unavailable"};
 
     g_windowStreamDiagnosticCounts.clear();
     auto session = std::make_unique<WindowStreamSession>();
     session->id = control->id;
     session->windowAddress = control->windowAddress;
+    session->targetWindow = targetWindow;
+    session->targetSurface = targetWindow->wlSurface() ? targetWindow->wlSurface()->resource() : nullptr;
+    const auto revokeTarget = [target = session.get()] {
+        // Do not destroy the session from inside a compositor signal callback.
+        // The next capture/drain tick retires timers and outstanding exports.
+        target->targetRevoked = true;
+    };
+    session->targetUnmap = targetWindow->m_events.unmap.listen(revokeTarget);
+    if (session->targetSurface) {
+        session->targetSurfaceUnmap = session->targetSurface->m_events.unmap.listen(revokeTarget);
+        session->targetSurfaceDestroy = session->targetSurface->m_events.destroy.listen(revokeTarget);
+    }
     session->defaults.mode = CaptureMode::Window;
     session->defaults.windowBackground = WindowBackground::Transparent;
     session->defaults.windowBorder = DecorationPolicy::Keep;

@@ -11,6 +11,19 @@ static Frame frame() {
     f.shadowEnabled=true; f.shadow={1,2,800,600,8,9,784,584,24,12,10,2,3,{1,2,3,4},true}; return f;
 }
 int main(){
+    InputGeometry input{0x1234,0x5678,9012,-2.5,3.25,800,600,400,300}, inputRound{};
+    std::array<std::uint8_t,HCGI_BYTES> inputWire{};
+    assert(encode(input,inputWire));
+    assert(decode(inputWire.data(),inputWire.size(),inputRound));
+    assert(inputRound.window == input.window && inputRound.surface == input.surface && inputRound.pid == input.pid);
+    assert(inputRound.contentX == -2.5 && inputRound.surfaceWidth == 400);
+    for (std::size_t size=0;size<HCGI_BYTES;++size) assert(!decode(inputWire.data(),size,inputRound));
+    auto badInput=inputWire; badInput[80]=1; assert(!decode(badInput.data(),badInput.size(),inputRound));
+    auto invalidInput=input; invalidInput.surface=0; assert(!encode(invalidInput,badInput));
+    invalidInput=input; invalidInput.contentWidth=__builtin_nan("x"); assert(!encode(invalidInput,badInput));
+    std::array<char,HCGI_BYTES*2+1> hex{};
+    for(std::size_t i=0;i<inputWire.size();++i) std::snprintf(hex.data()+i*2,3,"%02x",inputWire[i]);
+    assert(std::strcmp(hex.data(),"4843474900010058000000000000123400000000000056780000000000002334c004000000000000400a00000000000040890000000000004082c0000000000040790000000000004072c000000000000000000000000000")==0);
     std::array<std::uint8_t,HCGF_BYTES> wire{}; Error e{}; auto f=frame(); assert(encode(f,wire,&e)); assert(std::memcmp(wire.data(),"HCGF",4)==0); assert(wire[5]==1); assert(wire[6]==0&&wire[7]==232); assert(wire[72]==0x34&&wire[73]==0x32&&wire[74]==0x42&&wire[75]==0x41); assert(wire[216+3]==3); assert(wire[220]==1&&wire[223]==4); assert(wire[224+3]==1);
     Frame round{}; assert(decode(wire.data(),wire.size(),round,&e)); assert(round.sequence==f.sequence&&round.shadow.rgba==f.shadow.rgba&&round.shadow.sharp);
     for(std::size_t at=120;at<232;++at){auto bad=wire; bad[112]=1; bad[at]=1; Frame out{}; assert(!decode(bad.data(),bad.size(),out,&e));}

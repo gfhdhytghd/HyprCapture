@@ -157,9 +157,11 @@ std::optional<WindowGpuPacket> WindowGpuExportCache::exportFrame(unsigned int fr
     return packet;
 }
 
-std::optional<WindowGpuPacket> exportWindowGpuFrame(unsigned int framebuffer, gpuwire::Frame metadata) {
+std::optional<WindowGpuPacket> exportWindowGpuFrame(unsigned int framebuffer, gpuwire::Frame metadata,
+                                                   std::optional<gpuwire::InputGeometry> input) {
     WindowGpuExportCache cache;
     auto packet = cache.exportFrame(framebuffer, metadata);
+    if (packet && input && !gpuwire::encode(*input, packet->inputGeometry.emplace())) return std::nullopt;
     return packet;
 }
 }

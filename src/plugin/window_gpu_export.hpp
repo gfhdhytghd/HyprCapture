@@ -29,5 +29,6 @@ class WindowGpuExportCache {
 // metadata crop/style/time must describe the completed render, not a later
 // window state. Image layout fields are filled from the actual export.
 std::optional<WindowGpuPacket> exportWindowGpuFrame(unsigned int framebuffer,
-                                                   gpuwire::Frame metadata);
+                                                   gpuwire::Frame metadata,
+                                                   std::optional<gpuwire::InputGeometry> input = std::nullopt);
 }

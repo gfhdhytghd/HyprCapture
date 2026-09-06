@@ -45,6 +45,32 @@ bool encode(const Frame& f, std::array<std::uint8_t,HCGF_BYTES>& out, Error* e) 
     if(f.shadowEnabled){const auto&s=f.shadow;for(auto [at,v]:{std::pair{120,s.left},std::pair{128,s.top},std::pair{136,s.width},std::pair{144,s.height},std::pair{152,s.cutoutLeft},std::pair{160,s.cutoutTop},std::pair{168,s.cutoutWidth},std::pair{176,s.cutoutHeight},std::pair{184,s.range},std::pair{192,s.rounding},std::pair{200,s.windowRounding},std::pair{208,s.roundingPower}})f64(out.data()+at,v);u32(out.data()+216,s.power);std::copy(s.rgba.begin(),s.rgba.end(),out.begin()+220);u32(out.data()+224,s.sharp?1:0);} return true;
 }
 
+bool encode(const InputGeometry& g, std::array<std::uint8_t,HCGI_BYTES>& out, Error* e) {
+    if (!g.window || !g.surface || !g.pid || g.pid > INT32_MAX) { err(e, Error::ZeroLineage); return false; }
+    for (double value : {g.contentX, g.contentY, g.contentWidth, g.contentHeight, g.surfaceWidth, g.surfaceHeight,
+                         g.contentX + g.contentWidth, g.contentY + g.contentHeight})
+        if (!finite(value)) { err(e, Error::NonFinite); return false; }
+    if (g.contentWidth <= 0 || g.contentHeight <= 0 || g.surfaceWidth <= 0 || g.surfaceHeight <= 0) { err(e, Error::Geometry); return false; }
+    out.fill(0); std::memcpy(out.data(), "HCGI", 4); u16(out.data()+4, 1); u16(out.data()+6, HCGI_BYTES);
+    u64(out.data()+8, g.window); u64(out.data()+16, g.surface); u64(out.data()+24, g.pid);
+    for (auto [at,value] : {std::pair{32,g.contentX},std::pair{40,g.contentY},std::pair{48,g.contentWidth},std::pair{56,g.contentHeight},std::pair{64,g.surfaceWidth},std::pair{72,g.surfaceHeight}})
+        f64(out.data()+at,value);
+    return true;
+}
+
+bool decode(const std::uint8_t* b, std::size_t n, InputGeometry& g, Error* e) {
+    if (n != HCGI_BYTES) { err(e, Error::Length); return false; }
+    if (std::memcmp(b,"HCGI",4)) { err(e, Error::Magic); return false; }
+    if (r16(b+4) != 1) { err(e, Error::Version); return false; }
+    if (r16(b+6) != HCGI_BYTES) { err(e, Error::HeaderLength); return false; }
+    if (r64(b+80)) { err(e, Error::Reserved); return false; }
+    InputGeometry decoded{r64(b+8),r64(b+16),r64(b+24),rf64(b+32),rf64(b+40),rf64(b+48),rf64(b+56),rf64(b+64),rf64(b+72)};
+    std::array<std::uint8_t,HCGI_BYTES> canonical{};
+    if (!encode(decoded,canonical,e)) return false;
+    g = decoded;
+    return true;
+}
+
 bool decode(const std::uint8_t* b,std::size_t n,Frame& f,Error* e){if(n!=HCGF_BYTES){err(e,Error::Length);return false;}if(std::memcmp(b,"HCGF",4)){err(e,Error::Magic);return false;}if(r16(b+4)!=1){err(e,Error::Version);return false;}if(r16(b+6)!=HCGF_BYTES){err(e,Error::HeaderLength);return false;}if(r32(b+112)&~KNOWN||!(r32(b+112)&PREMULT)){err(e,Error::Flags);return false;}if(r32(b+116)||r32(b+228)){err(e,Error::Reserved);return false;}const bool enabled=r32(b+112)&SHADOW;if(!enabled){for(std::size_t i=120;i<232;++i)if(b[i]){err(e,Error::Shadow);return false;}}f={};f.sequence=r64(b+8);f.captureMonotonicNs=r64(b+16);f.geometryEpoch=r64(b+24);f.logicalX=rf64(b+32);f.logicalY=rf64(b+40);f.logicalWidth=rf64(b+48);f.logicalHeight=rf64(b+56);f.imageWidth=r32(b+64);f.imageHeight=r32(b+68);f.fourcc=r32(b+72);f.stride=r32(b+76);f.modifier=r64(b+80);f.offset=r64(b+88);f.cropX=r32(b+96);f.cropY=r32(b+100);f.cropWidth=r32(b+104);f.cropHeight=r32(b+108);f.flipY=r32(b+112)&FLIP;f.shadowEnabled=enabled;if(enabled){auto&s=f.shadow;s.left=rf64(b+120);s.top=rf64(b+128);s.width=rf64(b+136);s.height=rf64(b+144);s.cutoutLeft=rf64(b+152);s.cutoutTop=rf64(b+160);s.cutoutWidth=rf64(b+168);s.cutoutHeight=rf64(b+176);s.range=rf64(b+184);s.rounding=rf64(b+192);s.windowRounding=rf64(b+200);s.roundingPower=rf64(b+208);s.power=r32(b+216);std::copy(b+220,b+224,s.rgba.begin());if(r32(b+224)>1){err(e,Error::Shadow);return false;}s.sharp=r32(b+224); } return valid(f,e);}
 
 bool encode(const Release& r,std::array<std::uint8_t,HCGR_BYTES>& out,Error*e){if(!r.sequence||!r.geometryEpoch){err(e,Error::ZeroLineage);return false;}out.fill(0);std::memcpy(out.data(),"HCGR",4);u16(out.data()+4,1);u16(out.data()+6,HCGR_BYTES);u64(out.data()+8,r.sequence);u64(out.data()+16,r.geometryEpoch);return true;}

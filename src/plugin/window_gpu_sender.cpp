@@ -56,16 +56,18 @@ bool releaseMatches(int fd, const WindowGpuPacket& frame) {
     return true;
 }
 bool sendFrame(int fd, const WindowGpuPacket& frame) {
-    iovec io{const_cast<unsigned char*>(frame.header.data()), frame.header.size()};
+    std::array<iovec,2> io{{{const_cast<unsigned char*>(frame.header.data()), frame.header.size()}, {nullptr, 0}}};
+    if (frame.inputGeometry)
+        io[1] = {const_cast<unsigned char*>(frame.inputGeometry->data()), frame.inputGeometry->size()};
     alignas(cmsghdr) std::array<unsigned char, CMSG_SPACE(2 * sizeof(int))> control{};
     msghdr message{};
-    message.msg_iov = &io; message.msg_iovlen = 1;
+    message.msg_iov = io.data(); message.msg_iovlen = frame.inputGeometry ? 2 : 1;
     message.msg_control = control.data(); message.msg_controllen = control.size();
     auto* c = CMSG_FIRSTHDR(&message);
     c->cmsg_level = SOL_SOCKET; c->cmsg_type = SCM_RIGHTS; c->cmsg_len = CMSG_LEN(2 * sizeof(int));
     const int descriptors[]{frame.imageFd, frame.fenceFd};
     std::memcpy(CMSG_DATA(c), descriptors, sizeof(descriptors));
-    return sendmsg(fd, &message, MSG_NOSIGNAL) == static_cast<ssize_t>(frame.header.size());
+    return sendmsg(fd, &message, MSG_NOSIGNAL) == static_cast<ssize_t>(frame.header.size() + io[1].iov_len);
 }
 } // namespace
 
@@ -74,12 +76,13 @@ WindowGpuPacket::~WindowGpuPacket() {
     if (fenceFd >= 0 && fenceFd != imageFd) close(fenceFd);
 }
 WindowGpuPacket::WindowGpuPacket(WindowGpuPacket&& other) noexcept
-    : header(other.header), imageFd(std::exchange(other.imageFd, -1)), fenceFd(std::exchange(other.fenceFd, -1)) {}
+    : header(other.header), inputGeometry(std::move(other.inputGeometry)), imageFd(std::exchange(other.imageFd, -1)), fenceFd(std::exchange(other.fenceFd, -1)) {}
 WindowGpuPacket& WindowGpuPacket::operator=(WindowGpuPacket&& other) noexcept {
     if (this != &other) {
         if (imageFd >= 0) close(imageFd);
         if (fenceFd >= 0 && fenceFd != imageFd) close(fenceFd);
         header = other.header;
+        inputGeometry = std::move(other.inputGeometry);
         imageFd = std::exchange(other.imageFd, -1);
         fenceFd = std::exchange(other.fenceFd, -1);
     }
@@ -107,6 +110,8 @@ bool WindowGpuSender::submit(WindowGpuPacket&& packet) noexcept {
     gpuwire::Frame metadata;
     if (packet.imageFd < 0 || packet.fenceFd < 0 || packet.imageFd == packet.fenceFd ||
         !gpuwire::decode(packet.header.data(), packet.header.size(), metadata)) return false;
+    gpuwire::InputGeometry input;
+    if (packet.inputGeometry && !gpuwire::decode(packet.inputGeometry->data(), packet.inputGeometry->size(), input)) return false;
     std::unique_lock lock(m_mutex, std::try_to_lock);
     if (!lock.owns_lock() || state() != WindowGpuSenderState::Ready || m_pending) return false;
     if (metadata.sequence <= m_lastSequence || metadata.geometryEpoch < m_lastEpoch) return false;

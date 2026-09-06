@@ -52,9 +52,10 @@ struct Server {
         assert(listen(listener, 1) == 0);
         int fd = accept(listener, nullptr, nullptr); assert(fd >= 0); close(listener);
         for (int iteration = 0; iteration < (mode == ServerMode::Ack ? 2 : 1); ++iteration) {
-        std::array<unsigned char, 232> header{}; std::array<unsigned char, CMSG_SPACE(2 * sizeof(int))> control{};
+        std::array<unsigned char, 320> header{}; std::array<unsigned char, CMSG_SPACE(2 * sizeof(int))> control{};
         iovec io{header.data(), header.size()}; msghdr msg{}; msg.msg_iov=&io; msg.msg_iovlen=1; msg.msg_control=control.data(); msg.msg_controllen=control.size();
-        const auto n = recvmsg(fd, &msg, 0); assert(n == 232); assert(!(msg.msg_flags & (MSG_TRUNC|MSG_CTRUNC))); ++frameCount;
+        const auto n = recvmsg(fd, &msg, 0); assert(n == (iteration == 1 ? 320 : 232)); assert(!(msg.msg_flags & (MSG_TRUNC|MSG_CTRUNC))); ++frameCount;
+        if (iteration == 1) { hyprcapture::gpuwire::InputGeometry input; assert(hyprcapture::gpuwire::decode(header.data()+232,88,input)); assert(input.surface==2 && input.surfaceWidth==2); }
         int count=0;
         for (auto* c=CMSG_FIRSTHDR(&msg); c; c=CMSG_NXTHDR(&msg,c)) if(c->cmsg_level==SOL_SOCKET&&c->cmsg_type==SCM_RIGHTS){auto bytes=c->cmsg_len-CMSG_LEN(0);for(size_t off=0;off+sizeof(int)<=bytes;off+=sizeof(int)){int receivedFd;std::memcpy(&receivedFd,CMSG_DATA(c)+off,sizeof(receivedFd));assert(fcntl(receivedFd,F_GETFD)>=0);close(receivedFd);++count;}}
         received=true; twoFds=(count==2);
@@ -107,7 +108,7 @@ int main(){
       int badImage,badFence; auto bad=packet(metadata(3,2),badImage,badFence); bad.header[116]=1; assert(!sender.submit(std::move(bad))); bad=WindowGpuPacket{}; assertClosed(badImage); assertClosed(badFence);
       int oldSeqImage,oldSeqFence; auto oldSeq=packet(metadata(1,1),oldSeqImage,oldSeqFence); assert(!sender.submit(std::move(oldSeq))); oldSeq=WindowGpuPacket{}; assertClosed(oldSeqImage); assertClosed(oldSeqFence);
       int oldEpochImage,oldEpochFence; auto oldEpoch=packet(metadata(3,1),oldEpochImage,oldEpochFence); assert(!sender.submit(std::move(oldEpoch))); oldEpoch=WindowGpuPacket{}; assertClosed(oldEpochImage); assertClosed(oldEpochFence);
-      int e,f; assert(sender.submit(packet(metadata(2,2),e,f))); if (!waitState(sender, WindowGpuSenderState::Ready)) { std::fprintf(stderr, "ack second diagnostic state=%d frames=%d received=%d two=%d\n", int(sender.state()), server.frameCount.load(), int(server.received), int(server.twoFds)); std::abort(); } assert(server.received&&server.twoFds); }
+      int e,f; auto extended=packet(metadata(2,2),e,f); assert(hyprcapture::gpuwire::encode(hyprcapture::gpuwire::InputGeometry{1,2,3,0,0,2,2,2,2},extended.inputGeometry.emplace())); assert(sender.submit(std::move(extended))); if (!waitState(sender, WindowGpuSenderState::Ready)) { std::fprintf(stderr, "ack second diagnostic state=%d frames=%d received=%d two=%d\n", int(sender.state()), server.frameCount.load(), int(server.received), int(server.twoFds)); std::abort(); } assert(server.received&&server.twoFds); }
     { Server server(ServerMode::NoAck); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"noack initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"noack retire");assertClosed(a);assertClosed(b);int c,d;auto reuse=packet(metadata(2,1),c,d);assert(!sender.submit(std::move(reuse)));reuse=WindowGpuPacket{};assertClosed(c);assertClosed(d); }
     { Server server(ServerMode::AncillaryRelease); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"ancillary initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"ancillary retire");assertClosed(a);assertClosed(b); }
     { Server server(ServerMode::Disconnect); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"disconnect initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"disconnect retire");assertClosed(a);assertClosed(b); }
