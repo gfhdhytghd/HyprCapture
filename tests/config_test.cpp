@@ -448,6 +448,24 @@ int main() {
     require(decodedRecording->defaults.recordMaxSeconds == 10, "decoded recording max seconds");
     require(decodedRecording->defaults.recordCountdownSeconds == 3, "decoded recording countdown seconds");
     require(decodedRecording->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible, "decoded recording window backend");
+    require(CaptureDefaults{}.recordAudio == RecordAudio::Off, "sound defaults off");
+    for (auto mode : {RecordAudio::Off, RecordAudio::System, RecordAudio::Microphone, RecordAudio::Mix}) {
+        recording.defaults.recordAudio = mode;
+        recording.defaults.recordAudioOutput = "alsa_output.test.stereo";
+        recording.defaults.recordAudioInput = "mic name with spaces";
+        const auto decoded = decodeRecordingRequestJson(encodeRecordingRequestJson(recording));
+        require(decoded && decoded->defaults.recordAudio == mode, "sound mode roundtrip");
+        require(decoded->defaults.recordAudioOutput == recording.defaults.recordAudioOutput, "output device roundtrip");
+        require(decoded->defaults.recordAudioInput == recording.defaults.recordAudioInput, "input device roundtrip");
+    }
+    auto legacySound = nlohmann::json::parse(encodeRecordingRequestJson(recording));
+    for (const auto* key : {"recordAudio", "recordAudioOutput", "recordAudioInput"}) legacySound["defaults"].erase(key);
+    auto legacySoundDecoded = decodeRecordingRequestJson(legacySound.dump());
+    require(legacySoundDecoded && legacySoundDecoded->defaults.recordAudio == RecordAudio::Off && legacySoundDecoded->defaults.recordAudioInput == "default", "legacy requests remain silent");
+    legacySound["defaults"]["recordAudio"] = "invalid";
+    require(!decodeRecordingRequestJson(legacySound.dump()), "invalid sound mode rejected");
+    legacySound["defaults"]["recordAudio"] = 12;
+    require(!decodeRecordingRequestJson(legacySound.dump()), "non-string sound mode rejected");
     require(!decodeRecordingRequestJson("{}").has_value(), "missing recording request fields rejected");
 
     require(!decodeSessionJson("{not json").has_value(), "malformed json is rejected");

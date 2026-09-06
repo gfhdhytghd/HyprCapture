@@ -43,7 +43,9 @@ https://github.com/user-attachments/assets/2c986639-7a3d-44ee-9f33-1b9b79ad9f1d
 - nlohmann-json
 - Qt 6 Core, Gui, and Widgets
 - LayerShellQt `layer-shell-qt`
-- FFmpeg for recording output
+- libpulse development headers (`libpulse` on Arch, `libpulse-dev` on Debian/Ubuntu)
+- FFmpeg (including `ffprobe`, AAC and Opus encoders) for recording output
+- PulseAudio or PipeWire with its PulseAudio compatibility service for sound recording
 - `wl-clipboard` for persistent Wayland clipboard ownership
 
 ### Install with `hyprpm`
@@ -328,6 +330,9 @@ hl.config({
             record_fps_options = "15 24 30 60",
             record_window_fps_limit = 12,
             record_window_real_bg_fps_limit = 8,
+            record_audio = "off",
+            record_audio_output = "default",
+            record_audio_input = "default",
             record_codec = "auto",
             record_transparent_codec = "auto",
             record_solid_alpha = false,
@@ -408,6 +413,9 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `record_fps_options` | string | `15 24 30 60` | Whitespace, comma, or semicolon separated FPS choices shown in the overlay. The current `record_fps` value is added if it is not already listed. |
 | `record_window_fps_limit` | int | `12` | Safety cap for window recording with the current compositor-readback backend. Use `0` to disable the cap. |
 | `record_window_real_bg_fps_limit` | int | `8` | Additional safety cap for window recording with `window_background = "real"`. Use `0` to disable the cap. |
+| `record_audio` | string | `off` | Sound mode: `off`, `system`, `microphone`, or `mix`. Mix produces one audio track containing both sources. |
+| `record_audio_output` | string | `default` | Output device whose monitor is recorded for system sound. Use a stable PulseAudio sink name or `default`. |
+| `record_audio_input` | string | `default` | Microphone source name or `default`. Monitor sources are excluded from the microphone picker. |
 | `record_codec` | string | `auto` | Default recording codec shown in the overlay for normal video formats. The UI exposes codec families only: `auto`, `h264`, `h265`, `av1`, `vp9`, and `ffv1`. HyprCapture automatically probes NVENC and VAAPI at the selected resolution, then falls back to the corresponding software encoder. Legacy implementation-specific values remain accepted and are folded into their codec family. GIF, APNG, and WebP use fixed FFmpeg image-animation encoders. |
 | `record_transparent_codec` | string | `auto` | Default recording codec shown when `window_background = "transparent"`. `auto` probes a tiny FFmpeg encode/decode sample and uses a hardware alpha encoder only when it actually preserves alpha; otherwise it falls back to CPU VP9/FFV1 and shows a warning. |
 | `record_solid_alpha` | bool | `false` | For window recordings with `window_background` set to `"follow-system"`, `"white"`, or `"black"`, keep alpha outside the window content when the selected format/codec supports transparency. This uses the same edge behavior as screenshot output and falls back to opaque recording when unsupported. |
@@ -419,6 +427,16 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `thumbnail_timeout_ms` | int | `5000` | Thumbnail auto-close timeout in milliseconds. Use `0` to keep it open until user action. |
 | `thumbnail_monitor` | string | `active` | Monitor used for result thumbnails. Supports `active`, `primary`, `all`, or a case-insensitive output name such as `DP-2`. `active` is resolved from Hyprland's pointer position before the helper starts. `all` shows one synchronized thumbnail per monitor; swipe progress and swipe-to-close/delete animations are shared, while right-click menus remain independent. Unknown names fall back to the active monitor. |
 | `helper` | string | empty | Optional absolute helper override. By default the plugin tries `HYPRCAPTURE_HELPER`, then `$HOME/.local/bin/hyprcapture-ui`, then trusted system install paths. |
+
+### Recording sound
+
+The recording toolbar has a third **Sound** row. Choose **Off**, **System**, **Microphone**, or **Mix**, then select the output device and/or microphone. Device menus refresh when opened and include **System default**. Defaults are resolved when recording starts and remain fixed for that recording. GIF, APNG, and WebP do not carry audio; their Sound controls are disabled without forgetting your video settings.
+
+Both recording backends use a separate headless helper process for sound. Mix uses equal, fixed gains and outputs a single stereo track. If a device is missing or disconnects, HyprCapture reports the error and keeps recording video; the failed source becomes silent while another source continues. Devices are not automatically switched or reconnected during a recording.
+
+Stopping displays **Merging sound** while FFmpeg copies the video stream and adds AAC (MP4/MOV) or Opus (WebM/MKV). The video is not reencoded. Temporary float PCM files are stored with private permissions in a `.hyprcapture-sound-*` directory next to the video (about 23 MB per minute per source). Successful merging removes these files. A failed merge preserves the original video and recoverable audio, and the error gives the recovery directory. Do not remove it until you have recovered any sound you need.
+
+GSR sound synchronization requires `gpu-screen-recorder` with `-write-first-frame-ts` support. Sound-enabled requests reject conflicting `record_gsr_flags` options (`-a`, `-ac`, `-ab`, `-ffmpeg-audio-opts`, `-ffmpeg-opts`, `-write-first-frame-ts`); use the Sound row instead. With Sound off, existing custom audio flags retain their behavior.
 
 For 60 fps, prefer hardware encoding:
 

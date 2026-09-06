@@ -6,6 +6,8 @@
   hyprlandPlugins,
   kdePackages,
   lua,
+  libpulseaudio,
+  ffmpeg,
   nlohmann_json,
   pkg-config,
   src,
@@ -27,12 +29,13 @@ hyprlandPlugins.mkHyprlandPlugin {
     kdePackages.qtbase
     kdePackages.qtsvg
     lua
+    libpulseaudio
     nlohmann_json
   ];
 
   cmakeFlags = [
     "-DHYPRCAPTURE_DEFAULT_HELPER_PATH=${builtins.placeholder "out"}/bin/hyprcapture-ui"
-    "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ]}"
+    "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ffmpeg ]}"
   ];
 
   doCheck = true;

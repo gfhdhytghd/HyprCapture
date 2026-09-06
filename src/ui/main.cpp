@@ -1,3 +1,4 @@
+#include "audio/helper.hpp"
 #include "shared/config.hpp"
 #include "ui/capture_overlay.hpp"
 #include "ui/clipboard_utils.hpp"
@@ -642,6 +643,8 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 1 && (std::string_view(argv[1]) == "--sound-list" || std::string_view(argv[1]) == "--sound-capture" || std::string_view(argv[1]) == "--sound-finalize"))
+        return hyprcapture::audio::runHelper(argc, argv);
     qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
 #if LAYERSHELLQTINTERFACE_ENABLE_DEPRECATED_SINCE(6, 6)
     LayerShellQt::Shell::useLayerShell();
@@ -680,6 +683,9 @@ int main(int argc, char** argv) {
         {"record-filename-template", "Recording filename strftime template.", "template", "Recording-%Y-%m-%d-%H%M%S.mp4"},
         {"record-format", "Recording format.", "format", "mp4"},
         {"record-transparent-format", "Transparent window recording container format.", "format", "webm"},
+        {"record-audio", "Recording sound: off, system, microphone, mix.", "mode", "off"},
+        {"record-audio-output", "System sound output device.", "device", "default"},
+        {"record-audio-input", "Microphone source.", "device", "default"},
         {"record-codec", "Recording codec.", "codec", "auto"},
         {"record-transparent-codec", "Transparent window recording codec.", "codec", "auto"},
         {"record-solid-alpha", "Keep alpha outside follow-system/white/black window recording content when supported.", "0|1", "0"},
@@ -764,6 +770,9 @@ int main(int argc, char** argv) {
     defaults.recordFilenameTemplate = parser.value("record-filename-template").toStdString();
     defaults.recordFormat = parser.value("record-format").toStdString();
     defaults.recordTransparentFormat = parser.value("record-transparent-format").toStdString();
+    defaults.recordAudio = hyprcapture::parseRecordAudio(parser.value("record-audio").toStdString());
+    defaults.recordAudioOutput = parser.value("record-audio-output").toStdString();
+    defaults.recordAudioInput = parser.value("record-audio-input").toStdString();
     defaults.recordCodec = parser.value("record-codec").toStdString();
     defaults.recordTransparentCodec = parser.value("record-transparent-codec").toStdString();
     defaults.recordSolidAlpha = flagValue(parser, "record-solid-alpha", defaults.recordSolidAlpha);

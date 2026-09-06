@@ -1,4 +1,6 @@
 #include "plugin/recording.hpp"
+#include "plugin/audio_session.hpp"
+#include "shared/audio_timeline.hpp"
 
 #include "plugin/artifact_capture.hpp"
 #include "plugin/notification.hpp"
@@ -216,7 +218,7 @@ int normalizedAnimationDurationSeconds(std::int64_t seconds) {
 bool allowEnvironmentName(std::string_view name) {
     if (name == "HOME" || name == "USER" || name == "LOGNAME" || name == "LANG" || name == "XDG_RUNTIME_DIR" || name == "XDG_CURRENT_DESKTOP" ||
         name == "XDG_SESSION_TYPE" || name == "WAYLAND_DISPLAY" || name == "DISPLAY" || name == "DBUS_SESSION_BUS_ADDRESS" ||
-        name == "HYPRLAND_INSTANCE_SIGNATURE")
+        name == "HYPRLAND_INSTANCE_SIGNATURE" || name == "PULSE_SERVER" || name == "PULSE_COOKIE")
         return true;
     return name.starts_with("LC_");
 }
@@ -1012,6 +1014,8 @@ class RawVideoEncoder {
             return false;
 
         auto pixels = std::make_shared<std::vector<unsigned char>>(std::move(frame.rgba));
+        m_lastPixels = pixels;
+        m_totalFrames += std::max(1, repeats);
         m_frames.push_back(QueuedEncoderFrame{.pixels = std::move(pixels), .repeats = std::max(1, repeats)});
         m_cv.notify_one();
         return true;
@@ -1022,6 +1026,20 @@ class RawVideoEncoder {
 
         if (m_worker.joinable())
             m_worker.join();
+    }
+
+    std::int64_t frameCount() const {
+        std::lock_guard lock(m_mutex);
+        return m_totalFrames;
+    }
+
+    void padTo(std::int64_t count) {
+        std::lock_guard lock(m_mutex);
+        if (!m_stopping && m_lastPixels && count > m_totalFrames) {
+            m_frames.push_back(QueuedEncoderFrame{.pixels = m_lastPixels, .repeats = static_cast<int>(count - m_totalFrames)});
+            m_totalFrames = count;
+            m_cv.notify_one();
+        }
     }
 
     void requestStop(bool drain) {
@@ -1122,6 +1140,8 @@ class RawVideoEncoder {
     mutable std::mutex    m_mutex;
     std::condition_variable m_cv;
     std::deque<QueuedEncoderFrame>       m_frames;
+    std::shared_ptr<std::vector<unsigned char>> m_lastPixels;
+    std::int64_t m_totalFrames = 0;
     bool                                  m_stopping = false;
     std::atomic_bool                      m_workerFinished = true;
     std::atomic_bool                      m_ffmpegSucceeded = false;
@@ -1163,6 +1183,13 @@ struct FinishingRawRecording {
 std::unique_ptr<FinishingRawRecording> g_finishingRawRecording;
 
 struct ActiveGsrRecording {
+    std::thread waiter;
+    std::atomic_bool exited = false;
+    std::atomic_int exitCode = -1;
+    bool stopRequested = false;
+    bool showResult = true;
+    std::string finishMessage = "recording finished";
+    ~ActiveGsrRecording() { if (waiter.joinable()) waiter.join(); }
     pid_t                 pid = -1;
     SP<CEventLoopTimer>   timer;
     Time::steady_tp       startedAt;
@@ -1174,6 +1201,20 @@ struct ActiveGsrRecording {
 
 std::unique_ptr<ActiveGsrRecording> g_gsrRecording;
 RecordingStateServer               g_recordingStateServer;
+std::unique_ptr<AudioSession> g_audio;
+std::int64_t g_audioFirstFrameUs = 0;
+struct FinishingAudio {
+    std::unique_ptr<AudioSession> session;
+    SP<CEventLoopTimer> timer;
+    CaptureDefaults defaults;
+    std::filesystem::path output;
+    std::string message;
+    bool showResult = false;
+};
+std::unique_ptr<FinishingAudio> g_finishingAudio;
+std::vector<std::unique_ptr<AudioSession>> g_retiredAudio;
+SP<CEventLoopTimer> g_retiredAudioTimer;
+
 
 LaunchResult startCompositorRecording(RecordingRequest request);
 
@@ -1181,7 +1222,66 @@ void notifyRecording(const std::string& message, NotificationLevel level = Notif
     notifyUser(message, level, timeoutMs);
 }
 
+void pollAudioErrors(AudioSession* session) {
+    if (session) for (const auto& error : session->messages())
+        notifyRecording(error, NotificationLevel::Error, 7000);
+}
+
+void retireAudio() {
+    if (!g_audio) return;
+    g_audio->abandon();
+    g_retiredAudio.push_back(std::move(g_audio));
+    if (!g_retiredAudioTimer && g_pEventLoopManager) {
+        g_retiredAudioTimer = makeShared<CEventLoopTimer>(std::chrono::milliseconds(100), [](SP<CEventLoopTimer> self, void*) {
+            std::erase_if(g_retiredAudio, [](const auto& session) { return session->finished(); });
+            if (g_retiredAudio.empty()) {
+                g_pEventLoopManager->removeTimer(g_retiredAudioTimer);
+                g_retiredAudioTimer.reset();
+            } else self->updateTimeout(std::chrono::milliseconds(100));
+        }, nullptr);
+        g_pEventLoopManager->addTimer(g_retiredAudioTimer);
+    }
+}
+
+void beginAudio(const RecordingRequest& request, const std::filesystem::path& output) {
+    retireAudio();
+    g_audioFirstFrameUs = 0;
+    if (request.defaults.recordAudio == RecordAudio::Off || recordFormatIsImageAnimation(request.defaults.recordFormat)) return;
+    auto helper = recordingHelperPath(request.defaults);
+    auto shell = trustedProgramPath("sh");
+    std::string error = "trusted audio helper unavailable";
+    auto session = std::make_unique<AudioSession>();
+    if (!helper || !shell || !session->start(request.defaults, output, *helper, *shell, childEnvironment(), error)) {
+        notifyRecording("Sound: " + error + "; video recording continues", NotificationLevel::Error, 7000);
+        return;
+    }
+    g_audio = std::move(session);
+}
+
 void finishRecordingOutput(const CaptureDefaults& defaults, const std::filesystem::path& outputPath, const std::string& message, bool launchResultHelper) {
+    if (g_audio && g_pEventLoopManager) {
+        g_finishingAudio = std::make_unique<FinishingAudio>();
+        auto& pending = *g_finishingAudio;
+        pending.session = std::move(g_audio);
+        pending.defaults = defaults; pending.output = outputPath; pending.message = message; pending.showResult = launchResultHelper;
+        pending.session->finalize(outputPath, g_audioFirstFrameUs, defaults.recordFormat);
+        g_recordingStateServer.beginFinalizing();
+        pending.timer = makeShared<CEventLoopTimer>(std::chrono::milliseconds(100), [](SP<CEventLoopTimer> self, void*) {
+            if (!g_finishingAudio) return;
+            pollAudioErrors(g_finishingAudio->session.get());
+            if (!g_finishingAudio->session->finished()) { self->updateTimeout(std::chrono::milliseconds(100)); return; }
+            auto done = std::move(g_finishingAudio);
+            g_pEventLoopManager->removeTimer(done->timer);
+            done->timer.reset();
+            if (!done->session->succeeded())
+                notifyRecording("Sound merge failed; original video kept. Audio recovery: " + done->session->directory().string(), NotificationLevel::Error, 7000);
+            finishRecordingOutput(done->defaults, done->output, done->message, done->showResult);
+            if (!g_finishingAudio) g_recordingStateServer.clear();
+        }, nullptr);
+        g_pEventLoopManager->addTimer(pending.timer);
+        notifyRecording("Merging sound: " + outputPath.string());
+        return;
+    }
     setOwnerOnlyPermissions(outputPath);
     notifyRecording(message + ": " + outputPath.string());
 
@@ -1202,6 +1302,7 @@ void finishGsrRecordingOutput(const CaptureDefaults& defaults, const std::filesy
     if (!recordingOutputHasBytes(outputPath)) {
         std::error_code ec;
         std::filesystem::remove(outputPath, ec);
+        retireAudio();
         notifyRecording("gpu-screen-recorder produced no video data: " + outputPath.string(), NotificationLevel::Error, 7000);
         return;
     }
@@ -1213,32 +1314,32 @@ bool reapGsrRecordingIfExited() {
     if (!g_gsrRecording)
         return false;
 
-    int status = 0;
-    const pid_t result = waitpid(g_gsrRecording->pid, &status, WNOHANG);
-    if (result == 0)
+    pollAudioErrors(g_audio.get());
+    if (!g_gsrRecording->exited.load())
         return true;
-    if (result == g_gsrRecording->pid || (result < 0 && errno == ECHILD)) {
+    {
         g_recordingStateServer.beginFinalizing();
         auto recording = std::move(g_gsrRecording);
         if (recording->timer && g_pEventLoopManager)
             g_pEventLoopManager->removeTimer(recording->timer);
-        const bool failedExit = result == recording->pid && (!WIFEXITED(status) || WEXITSTATUS(status) != 0);
-        if ((!recordingOutputHasBytes(recording->outputPath) || failedExit) && recording->allowCompositorFallback) {
+        const bool failedExit = recording->exitCode.load() != 0;
+        if ((!recordingOutputHasBytes(recording->outputPath) || failedExit) && recording->allowCompositorFallback && !recording->stopRequested) {
             std::error_code ec;
             std::filesystem::remove(recording->outputPath, ec);
-            g_recordingStateServer.clear();
+            if (!g_finishingAudio) g_recordingStateServer.clear();
             const auto fallback = startCompositorRecording(std::move(recording->request));
             if (fallback.success) {
                 notifyRecording("gpu-screen-recorder failed; continuing with compositor recording", NotificationLevel::Warning, 5000);
                 return true;
             }
+            retireAudio();
             notifyRecording("recording backends failed: gpu-screen-recorder produced no data; compositor: " + fallback.error,
                             NotificationLevel::Error,
                             7000);
             return false;
         }
-        finishGsrRecordingOutput(recording->defaults, recording->outputPath, "recording finished", true);
-        g_recordingStateServer.clear();
+        finishGsrRecordingOutput(recording->defaults, recording->outputPath, recording->finishMessage, recording->showResult);
+        if (!g_finishingAudio) g_recordingStateServer.clear();
         return false;
     }
 
@@ -1278,19 +1379,20 @@ void completeFinishingRawRecording() {
         std::filesystem::remove(recording->encoderOutputPath, ec);
         if (recording->encoderOutputPath != recording->outputPath)
             std::filesystem::remove(recording->outputPath, ec);
+        retireAudio();
         notifyRecording("ffmpeg encoder produced no valid video data: " + recording->outputPath.string(), NotificationLevel::Error, 7000);
-        g_recordingStateServer.clear();
+        if (!g_finishingAudio) g_recordingStateServer.clear();
         return;
     }
 
     if (recording->transcodeToApng) {
         startApngTranscodeFromFinishedRecording(*recording);
-        g_recordingStateServer.clear();
+        if (!g_finishingAudio) g_recordingStateServer.clear();
         return;
     }
 
     finishRecordingOutput(recording->defaults, recording->outputPath, recording->message, recording->launchResultHelper);
-    g_recordingStateServer.clear();
+    if (!g_finishingAudio) g_recordingStateServer.clear();
 }
 
 bool reapFinishingRawRecordingIfActive() {
@@ -1322,18 +1424,14 @@ void scheduleFinishingRawRecordingPoll() {
 LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
     if (g_gsrRecording) {
         g_recordingStateServer.beginFinalizing();
-        auto recording = std::move(g_gsrRecording);
-        if (recording->timer && g_pEventLoopManager)
-            g_pEventLoopManager->removeTimer(recording->timer);
-        recording->timer.reset();
-        if (recording->pid > 0) {
-            kill(recording->pid, SIGINT);
-            int status = 0;
-            while (waitpid(recording->pid, &status, 0) < 0 && errno == EINTR) {
-            }
+        auto& recording = g_gsrRecording;
+        if (!recording->stopRequested) {
+            recording->stopRequested = true;
+            recording->showResult = drain;
+            recording->finishMessage = "recording " + reason;
+            if (g_audio) g_audio->stopCapture();
+            if (recording->pid > 0) kill(-recording->pid, SIGINT);
         }
-        finishGsrRecordingOutput(recording->defaults, recording->outputPath, "recording " + reason, drain);
-        g_recordingStateServer.clear();
         return {.success = true};
     }
 
@@ -1341,11 +1439,14 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
         return {.success = false, .error = "no active recording"};
 
     auto recording = std::move(g_recording);
+    if (g_audio) g_audio->stopCapture();
     g_recordingStateServer.beginFinalizing();
     if (recording->timer && g_pEventLoopManager)
         g_pEventLoopManager->removeTimer(recording->timer);
     recording->timer.reset();
     if (recording->encoder && drain && g_pEventLoopManager) {
+        const auto count = std::max<std::int64_t>(1, (Time::steadyNow() - recording->startedAt) / recording->interval);
+        recording->encoder->padTo(count);
         recording->encoder->requestStop(true);
 
         g_finishingRawRecording = std::make_unique<FinishingRawRecording>();
@@ -1372,12 +1473,12 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
     if (!drain && recording->transcodeToApng) {
         std::error_code ec;
         std::filesystem::remove(recording->encoderOutputPath, ec);
-        g_recordingStateServer.clear();
+        if (!g_finishingAudio) g_recordingStateServer.clear();
         return {.success = true};
     }
 
     finishRecordingOutput(recording->request.defaults, recording->outputPath, "recording " + reason, drain);
-    g_recordingStateServer.clear();
+    if (!g_finishingAudio) g_recordingStateServer.clear();
     return {.success = true};
 }
 
@@ -1419,6 +1520,7 @@ void captureRecordingTick(SP<CEventLoopTimer> self) {
         return;
     }
 
+    pollAudioErrors(g_audio.get());
     const auto tickStartedAt = Time::steadyNow();
     if (g_recording->request.defaults.recordMaxSeconds > 0 &&
         std::chrono::duration_cast<std::chrono::seconds>(tickStartedAt - g_recording->startedAt).count() >= g_recording->request.defaults.recordMaxSeconds) {
@@ -1455,7 +1557,8 @@ void captureRecordingTick(SP<CEventLoopTimer> self) {
         bool enqueued = false;
         if (processed) {
             ScopedTiming timing("record.enqueue");
-            const int repeats = std::clamp(framesDue + g_recording->pendingFrameRepeats, 1, MAX_PENDING_FRAME_REPEATS);
+            const auto targetFrames = static_cast<std::int64_t>((Time::steadyNow() - g_recording->startedAt) / g_recording->interval) + 1;
+            const int repeats = static_cast<int>(std::clamp<std::int64_t>(targetFrames - g_recording->encoder->frameCount(), 1, MAX_PENDING_FRAME_REPEATS));
             enqueued = g_recording->encoder->enqueue(std::move(*frame), repeats);
         }
 
@@ -1509,7 +1612,7 @@ void scheduleRecordingTimer() {
     g_pEventLoopManager->addTimer(g_recording->timer);
 }
 
-LaunchResult spawnGpuScreenRecorder(const RecordingRequest& request, const std::filesystem::path& outputPath, pid_t& pid) {
+LaunchResult spawnGpuScreenRecorder(const RecordingRequest& request, const std::filesystem::path& outputPath, SupervisedProcess& process) {
     const auto executable = trustedGpuScreenRecorderPath();
     if (!executable)
         return {.success = false, .error = "no trusted gpu-screen-recorder executable found"};
@@ -1522,6 +1625,8 @@ LaunchResult spawnGpuScreenRecorder(const RecordingRequest& request, const std::
     const int fps = std::clamp<int>(static_cast<int>(request.defaults.recordFps), 1, 240);
     std::vector<std::string> args{*executable};
     args.insert(args.end(), extraFlags->begin(), extraFlags->end());
+    if (request.defaults.recordAudio != RecordAudio::Off)
+        args.insert(args.end(), {"-write-first-frame-ts", "yes"});
     args.push_back("-c");
     args.push_back(gsrContainerFormat(request.defaults.recordFormat));
     args.push_back("-k");
@@ -1551,11 +1656,10 @@ LaunchResult spawnGpuScreenRecorder(const RecordingRequest& request, const std::
     posix_spawn_file_actions_t fileActions {};
     if (const int error = posix_spawn_file_actions_init(&fileActions); error != 0)
         return {.success = false, .error = std::string("spawn setup failed: ") + std::strerror(error)};
-#if defined(__GLIBC__) && defined(__GLIBC_PREREQ) && __GLIBC_PREREQ(2, 34)
-    posix_spawn_file_actions_addclosefrom_np(&fileActions, 3);
-#endif
-
-    const int spawnError = posix_spawn(&pid, argv[0], &fileActions, nullptr, argv.data(), envp.data());
+    auto shell = trustedProgramPath("sh");
+    if (!shell) { posix_spawn_file_actions_destroy(&fileActions); return {.success = false, .error = "trusted sh unavailable"}; }
+    process = spawnSupervisedProcess(*shell, args, envp.data(), fileActions, true);
+    const int spawnError = process.spawnError;
     posix_spawn_file_actions_destroy(&fileActions);
     if (spawnError != 0)
         return {.success = false, .error = std::string("gpu-screen-recorder exec failed: ") + std::strerror(spawnError)};
@@ -1571,12 +1675,18 @@ LaunchResult startGsrRecording(const RecordingRequest& request, bool allowCompos
     const auto  outputPath = uniqueOutputPath(request.defaults, outputPathError);
     if (!outputPath)
         return {.success = false, .error = outputPathError.empty() ? "recording output path failed" : outputPathError};
-    pid_t      pid = -1;
-    if (const auto result = spawnGpuScreenRecorder(request, *outputPath, pid); !result.success)
+    beginAudio(request, *outputPath);
+    SupervisedProcess process;
+    if (const auto result = spawnGpuScreenRecorder(request, *outputPath, process); !result.success)
         return result;
 
     g_gsrRecording = std::make_unique<ActiveGsrRecording>();
-    g_gsrRecording->pid = pid;
+    g_gsrRecording->pid = process.pid;
+    auto* active = g_gsrRecording.get();
+    active->waiter = std::thread([active, process]() mutable {
+        active->exitCode.store(waitSupervisedProcess(process).value_or(-1));
+        active->exited.store(true);
+    });
     g_gsrRecording->startedAt = Time::steadyNow();
     g_gsrRecording->outputPath = *outputPath;
     g_gsrRecording->defaults = request.defaults;
@@ -1608,6 +1718,13 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
                         5000);
     }
 
+    std::string outputPathError;
+    const auto  outputPath = uniqueOutputPath(request.defaults, outputPathError);
+    if (!outputPath)
+        return {.success = false, .error = outputPathError.empty() ? "recording output path failed" : outputPathError};
+
+    beginAudio(request, *outputPath);
+    auto firstFrameAt = Time::steadyNow();
     resetRecordingCaptureState();
     auto firstFrame = captureRecordingFrame(frameRequest);
     if (!firstFrame || !makeEvenFrame(*firstFrame))
@@ -1623,11 +1740,6 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
 
     const int requestedFps = std::clamp<int>(static_cast<int>(request.defaults.recordFps), 1, 240);
     const int fps = effectiveRecordingFps(frameRequest, requestedFps);
-    std::string outputPathError;
-    const auto  outputPath = uniqueOutputPath(request.defaults, outputPathError);
-    if (!outputPath)
-        return {.success = false, .error = outputPathError.empty() ? "recording output path failed" : outputPathError};
-
     auto        encoderOutputPath = *outputPath;
     std::string encoderFormat = format;
     std::string encoderCodec = concreteCodec;
@@ -1656,13 +1768,20 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
 
     const int width = firstFrame->width;
     const int height = firstFrame->height;
+    // The earlier frame only established encoder dimensions. Start the media
+    // clock after encoder probing/spawn so startup work cannot shift sound.
+    firstFrameAt = Time::steadyNow();
+    g_audioFirstFrameUs = audio::monotonicUs();
+    firstFrame = captureRecordingFrame(frameRequest);
+    if (!firstFrame || !makeEvenFrame(*firstFrame))
+        return {.success = false, .error = "failed to capture initial recording frame"};
     encoder->enqueue(std::move(*firstFrame));
 
     g_recording = std::make_unique<ActiveRecording>();
     g_recording->request = std::move(frameRequest);
     g_recording->encoder = std::move(encoder);
     g_recording->interval = frameIntervalForFps(fps);
-    g_recording->startedAt = Time::steadyNow();
+    g_recording->startedAt = firstFrameAt;
     g_recording->nextFrameAt = g_recording->startedAt + g_recording->interval;
     g_recording->outputPath = *outputPath;
     g_recording->encoderOutputPath = encoderOutputPath;
@@ -1707,8 +1826,10 @@ bool recordingCanUseGsr(const RecordingRequest& request) {
 
 } // namespace
 
-LaunchResult startRecordingFromRequestFile(const std::string& path) {
-    if (g_recording || reapGsrRecordingIfExited() || reapFinishingRawRecordingIfActive())
+LaunchResult startRecordingFromRequestFile(const std::string& path, const std::string& configuredHelper) {
+    const bool gsrBusy = reapGsrRecordingIfExited();
+    const bool rawBusy = reapFinishingRawRecordingIfActive();
+    if (g_finishingAudio || g_recording || gsrBusy || rawBusy)
         return {.success = false, .error = "recording already active"};
     if (!g_pEventLoopManager)
         return {.success = false, .error = "Hyprland event loop unavailable"};
@@ -1721,12 +1842,25 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
     if (!request)
         return {.success = false, .error = "invalid recording request metadata"};
 
+    request->defaults.helper = configuredHelper;
     request->defaults.recordFormat = sanitizedRecordFormat(request->defaults.recordFormat);
     if (request->mode != CaptureMode::Window)
         request->defaults.recordSolidAlpha = false;
     if (isImageAnimationRecordFormat(request->defaults.recordFormat))
         request->defaults.recordMaxSeconds = normalizedAnimationDurationSeconds(request->defaults.recordMaxSeconds);
 
+    if (recordFormatIsImageAnimation(request->defaults.recordFormat))
+        request->defaults.recordAudio = RecordAudio::Off;
+    if (request->defaults.recordAudio != RecordAudio::Off) {
+        std::string flagsError;
+        auto flags = splitShellLikeFlags(request->defaults.recordGsrFlags, flagsError);
+        if (!flagsError.empty()) return {.success = false, .error = flagsError};
+        for (const auto& flag : flags) {
+            const auto key = flag.substr(0, flag.find('='));
+            if (key == "-a" || key == "-ac" || key == "-ab" || key == "-ffmpeg-audio-opts" || key == "-ffmpeg-opts" || key == "-write-first-frame-ts")
+                return {.success = false, .error = "Sound conflicts with record_gsr_flags " + key + "; remove this flag or turn Sound off"};
+        }
+    }
     const bool canUseGsr = recordingCanUseGsr(*request);
     const bool preferGsr = canUseGsr &&
         (request->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible ||
@@ -1741,18 +1875,22 @@ LaunchResult startRecordingFromRequestFile(const std::string& path) {
             notifyRecording("gpu-screen-recorder start failed; using compositor recording", NotificationLevel::Warning, 5000);
             return fallback;
         }
+        retireAudio();
         return {.success = false, .error = "recording backends failed: gpu-screen-recorder: " + primary.error + "; compositor: " + fallback.error};
     }
 
     const auto primary = startCompositorRecording(*request);
-    if (primary.success || !canUseGsr)
+    if (primary.success || !canUseGsr) {
+        if (!primary.success) retireAudio();
         return primary;
+    }
 
     const auto fallback = startGsrRecording(*request, false);
     if (fallback.success) {
         notifyRecording("compositor recording start failed; using gpu-screen-recorder", NotificationLevel::Warning, 5000);
         return fallback;
     }
+    retireAudio();
     return {.success = false, .error = "recording backends failed: compositor: " + primary.error + "; gpu-screen-recorder: " + fallback.error};
 }
 
@@ -1775,6 +1913,18 @@ std::filesystem::path recordingStateSocketPath() {
 void shutdownRecording() {
     if (g_recording || g_gsrRecording)
         stopRecordingInternal("stopped during plugin unload", false);
+    if (g_gsrRecording) {
+        if (g_gsrRecording->waiter.joinable()) g_gsrRecording->waiter.join();
+        reapGsrRecordingIfExited();
+    }
+    retireAudio();
+    if (g_finishingAudio) {
+        if (g_finishingAudio->timer && g_pEventLoopManager) g_pEventLoopManager->removeTimer(g_finishingAudio->timer);
+        g_finishingAudio.reset();
+    }
+    if (g_retiredAudioTimer && g_pEventLoopManager) g_pEventLoopManager->removeTimer(g_retiredAudioTimer);
+    g_retiredAudioTimer.reset();
+    g_retiredAudio.clear();
     if (g_finishingRawRecording) {
         auto recording = std::move(g_finishingRawRecording);
         if (recording->timer && g_pEventLoopManager)
@@ -1787,7 +1937,7 @@ void shutdownRecording() {
             std::filesystem::remove(recording->encoderOutputPath, ec);
         }
     }
-    g_recordingStateServer.clear();
+    if (!g_finishingAudio) g_recordingStateServer.clear();
     g_recordingStateServer.stop();
 }
 

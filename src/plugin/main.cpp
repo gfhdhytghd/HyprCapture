@@ -160,6 +160,9 @@ void registerConfigValues() {
     addStringConfig("record_fps_options", "Recording frame rate choices", "15 24 30 60");
     addIntConfig("record_window_fps_limit", "Compositor window recording FPS cap", 12);
     addIntConfig("record_window_real_bg_fps_limit", "Real-background window recording FPS cap", 8);
+    addStringConfig("record_audio", "Recording sound: off, system, microphone, mix", "off");
+    addStringConfig("record_audio_output", "System sound output device or default", "default");
+    addStringConfig("record_audio_input", "Microphone source or default", "default");
     addStringConfig("record_codec", "Default recording codec", "auto");
     addStringConfig("record_transparent_codec", "Default transparent recording codec", "auto");
     addBoolConfig("record_solid_alpha", "Keep alpha outside follow-system/white/black window recording content when the encoder supports it", false);
@@ -220,6 +223,9 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.recordFilenameTemplate = configString("record_filename_template", defaults.recordFilenameTemplate);
     defaults.recordFormat = configString("record_format", defaults.recordFormat);
     defaults.recordTransparentFormat = configString("record_transparent_format", defaults.recordTransparentFormat);
+    defaults.recordAudio = hyprcapture::parseRecordAudio(configString("record_audio", "off"));
+    defaults.recordAudioOutput = configString("record_audio_output", "default");
+    defaults.recordAudioInput = configString("record_audio_input", "default");
     defaults.recordCodec = configString("record_codec", defaults.recordCodec);
     defaults.recordTransparentCodec = configString("record_transparent_codec", defaults.recordTransparentCodec);
     defaults.recordSolidAlpha = configBool("record_solid_alpha", defaults.recordSolidAlpha);
@@ -310,7 +316,7 @@ SDispatchResult dispatchRecordStop(const std::string&) {
 }
 
 SDispatchResult dispatchRecordStart(const std::string& args) {
-    const auto result = hyprcapture::startRecordingFromRequestFile(args);
+    const auto result = hyprcapture::startRecordingFromRequestFile(args, readDefaults().helper);
     if (!result.success)
         hyprcapture::notifyUser(result.error, hyprcapture::NotificationLevel::Error, 5000);
     return dispatchResult(result);

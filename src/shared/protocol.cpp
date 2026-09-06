@@ -88,6 +88,9 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"recordFilenameTemplate", boundedString(defaults.recordFilenameTemplate, MAX_METADATA_STRING_BYTES)},
         {"recordFormat", boundedString(defaults.recordFormat, MAX_METADATA_STRING_BYTES)},
         {"recordTransparentFormat", boundedString(defaults.recordTransparentFormat, MAX_METADATA_STRING_BYTES)},
+        {"recordAudio", toString(defaults.recordAudio)},
+        {"recordAudioOutput", boundedString(defaults.recordAudioOutput, MAX_METADATA_STRING_BYTES)},
+        {"recordAudioInput", boundedString(defaults.recordAudioInput, MAX_METADATA_STRING_BYTES)},
         {"recordCodec", boundedString(defaults.recordCodec, MAX_METADATA_STRING_BYTES)},
         {"recordTransparentCodec", boundedString(defaults.recordTransparentCodec, MAX_METADATA_STRING_BYTES)},
         {"recordSolidAlpha", defaults.recordSolidAlpha},
@@ -233,6 +236,13 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
             return false;
         defaults.notificationBackend = parseNotificationBackend(value, defaults.notificationBackend);
     }
+    if (!stringValue(obj, "recordAudio", value, MAX_METADATA_STRING_BYTES, false))
+        return false;
+    if (obj.contains("recordAudio")) {
+        if (value != "off" && value != "system" && value != "microphone" && value != "mix")
+            return false;
+        defaults.recordAudio = parseRecordAudio(value);
+    }
     if (stringValue(obj, "recordWindowBackend", value, MAX_METADATA_STRING_BYTES, false))
         defaults.recordWindowBackend = parseRecordWindowBackend(value, defaults.recordWindowBackend);
     else
@@ -267,6 +277,8 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         stringValue(obj, "recordFilenameTemplate", defaults.recordFilenameTemplate, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "recordFormat", defaults.recordFormat, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "recordTransparentFormat", defaults.recordTransparentFormat, MAX_METADATA_STRING_BYTES, false) &&
+        stringValue(obj, "recordAudioOutput", defaults.recordAudioOutput, MAX_METADATA_STRING_BYTES, false) &&
+        stringValue(obj, "recordAudioInput", defaults.recordAudioInput, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "recordCodec", defaults.recordCodec, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "recordTransparentCodec", defaults.recordTransparentCodec, MAX_METADATA_STRING_BYTES, false) &&
         boolValue(obj, "recordSolidAlpha", defaults.recordSolidAlpha, false) &&

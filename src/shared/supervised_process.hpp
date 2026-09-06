@@ -18,7 +18,7 @@ struct SupervisedProcess {
 };
 
 SupervisedProcess spawnSupervisedProcess(const std::string& shell, const std::vector<std::string>& args,
-                                        char* const envp[], posix_spawn_file_actions_t& actions);
+                                        char* const envp[], posix_spawn_file_actions_t& actions, bool ownProcessGroup = false);
 // Consumes statusFd and reaps the supervisor when the caller permits zombies.
 std::optional<int> waitSupervisedProcess(SupervisedProcess& process);
 

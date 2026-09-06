@@ -314,6 +314,10 @@ std::optional<int> configureSpawnFileDescriptorPolicy(SpawnFileActions& actions,
 
 } // namespace
 
+std::optional<std::string> recordingHelperPath(const CaptureDefaults& defaults) {
+    return firstRunnableHelper(defaults.helper);
+}
+
 LaunchResult launchHelper(const LaunchRequest& request) {
     const auto helper = firstRunnableHelper(request.defaults.helper);
     if (!helper)
@@ -390,6 +394,9 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(request.defaults.recordFormat);
     args.push_back("--record-transparent-format");
     args.push_back(request.defaults.recordTransparentFormat);
+    args.insert(args.end(), {"--record-audio", toString(request.defaults.recordAudio),
+                             "--record-audio-output", request.defaults.recordAudioOutput,
+                             "--record-audio-input", request.defaults.recordAudioInput});
     args.push_back("--record-codec");
     args.push_back(request.defaults.recordCodec);
     args.push_back("--record-transparent-codec");

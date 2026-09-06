@@ -10,7 +10,7 @@
 namespace hyprcapture {
 
 SupervisedProcess spawnSupervisedProcess(const std::string& shell, const std::vector<std::string>& args,
-                                        char* const envp[], posix_spawn_file_actions_t& actions) {
+                                        char* const envp[], posix_spawn_file_actions_t& actions, bool ownProcessGroup) {
     if (args.empty())
         return {.spawnError = EINVAL};
     int pipeFds[2];
@@ -54,9 +54,15 @@ SupervisedProcess spawnSupervisedProcess(const std::string& shell, const std::ve
         sigset_t defaults;
         sigemptyset(&defaults);
         sigaddset(&defaults, SIGCHLD);
+        if (ownProcessGroup) {
+            sigaddset(&defaults, SIGINT);
+            sigaddset(&defaults, SIGTERM);
+        }
         error = posix_spawnattr_setsigdefault(&attributes, &defaults);
         if (!error)
-            error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGDEF);
+            error = posix_spawnattr_setflags(&attributes, POSIX_SPAWN_SETSIGDEF | (ownProcessGroup ? POSIX_SPAWN_SETPGROUP : 0));
+        if (!error && ownProcessGroup)
+            error = posix_spawnattr_setpgroup(&attributes, 0);
         if (!error)
             error = posix_spawn(&pid, shell.c_str(), &actions, &attributes, argv.data(), envp);
     }

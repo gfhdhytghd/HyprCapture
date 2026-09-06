@@ -7,7 +7,7 @@ namespace hyprcapture {
 
 struct LaunchResult;
 
-LaunchResult startRecordingFromRequestFile(const std::string& path);
+LaunchResult startRecordingFromRequestFile(const std::string& path, const std::string& configuredHelper = {});
 LaunchResult stopRecording(const std::string& reason = "stopped");
 bool isRecordingActive();
 bool initializeRecordingStateServer(std::string* error = nullptr);

@@ -1,3 +1,8 @@
+#include <QScrollArea>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QCoreApplication>
 #include "ui/capture_overlay.hpp"
 
 #include "ui/clipboard_utils.hpp"
@@ -66,6 +71,10 @@ class InlineSelect final : public QWidget {
 
     void addItems(const QStringList& items);
     void setPrefix(const QString& prefix);
+    void setLabels(const std::map<QString, QString>& labels) { m_labels = labels; addItems(m_items); setCurrentText(m_current); }
+    void setOnOpening(std::function<void()> callback) { m_onOpening = std::move(callback); }
+    void setCompactWidth(int width) { if (m_compactWidth == width) return; m_compactWidth = width; addItems(m_items); setCurrentText(m_current); }
+
     void setOnChanged(std::function<void()> onChanged);
     void setCurrentText(const QString& text);
     QString currentText() const;
@@ -77,6 +86,7 @@ class InlineSelect final : public QWidget {
     QString buttonText(const QString& text) const;
     void updateButtonIcon();
     void showPopup();
+    void positionPopup();
     void choose(const QString& text);
 
     QWidget*     m_popupParent = nullptr;
@@ -87,6 +97,10 @@ class InlineSelect final : public QWidget {
     QStringList  m_items;
     QString      m_current;
     QString      m_prefix;
+    std::map<QString, QString> m_labels;
+    std::function<void()> m_onOpening;
+    int m_compactWidth = 0;
+
     std::function<void()> m_onChanged;
 };
 
@@ -1274,7 +1288,16 @@ InlineSelect::InlineSelect(QWidget* popupParent, QWidget* parent) : QWidget(pare
     m_panel->setStyleSheet(popupStyleSheet(QApplication::palette()));
     m_panel->hide();
 
-    m_panelLayout = new QVBoxLayout(m_panel);
+    auto* panelLayout = new QVBoxLayout(m_panel);
+    panelLayout->setContentsMargins(0, 0, 0, 0);
+    auto* scroll = new QScrollArea(m_panel);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidgetResizable(true);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* content = new QWidget(scroll);
+    scroll->setWidget(content);
+    panelLayout->addWidget(scroll);
+    m_panelLayout = new QVBoxLayout(content);
     m_panelLayout->setContentsMargins(5, 5, 5, 5);
     m_panelLayout->setSpacing(2);
     updateButtonIcon();
@@ -1288,7 +1311,11 @@ void InlineSelect::addItems(const QStringList& items) {
     }
 
     for (const auto& item : m_items) {
-        auto* button = new QPushButton(item, m_panel);
+        const auto found = m_labels.find(item);
+        const auto label = found == m_labels.end() ? item : found->second;
+        auto* button = new QPushButton(m_button->fontMetrics().elidedText(label, Qt::ElideRight, 380), m_panel);
+        button->setToolTip(label);
+        button->setProperty("value", item);
         button->setCheckable(true);
         connect(button, &QPushButton::clicked, this, [this, item] { choose(item); });
         m_panelLayout->addWidget(button);
@@ -1298,12 +1325,15 @@ void InlineSelect::addItems(const QStringList& items) {
     const auto metrics = m_button->fontMetrics();
     for (const auto& item : m_items)
         width = std::max(width, metrics.horizontalAdvance(buttonText(item)) + 42);
-    m_buttonWidth = width;
+    m_buttonWidth = m_compactWidth > 0 ? std::min(width, m_compactWidth) : width;
     m_button->setMinimumWidth(m_buttonWidth);
-    m_panel->setMinimumWidth(width);
+    m_button->setMaximumWidth(m_compactWidth > 0 ? m_compactWidth : QWIDGETSIZE_MAX);
+    m_panel->setMinimumWidth(std::min(width, 440));
 
     if (m_current.isEmpty() && !m_items.isEmpty())
         setCurrentText(m_items.first());
+    else setCurrentText(m_current);
+    if (isPopupVisible()) positionPopup();
 }
 
 void InlineSelect::setPrefix(const QString& prefix) {
@@ -1318,9 +1348,11 @@ void InlineSelect::setOnChanged(std::function<void()> onChanged) {
 
 void InlineSelect::setCurrentText(const QString& text) {
     m_current = text;
-    m_button->setText(buttonText(text));
+    const auto fullText = buttonText(text);
+    m_button->setToolTip(fullText);
+    m_button->setText(m_compactWidth > 0 ? m_button->fontMetrics().elidedText(fullText, Qt::ElideRight, std::max(30, m_compactWidth - 42)) : fullText);
     for (auto* button : m_panel->findChildren<QPushButton*>())
-        button->setChecked(button->text() == text);
+        button->setChecked(button->property("value").toString() == text);
 }
 
 QString InlineSelect::currentText() const {
@@ -1364,9 +1396,10 @@ bool InlineSelect::isPopupVisible() const {
 }
 
 QString InlineSelect::buttonText(const QString& text) const {
-    if (m_prefix.isEmpty())
-        return text;
-    return m_prefix + QStringLiteral(": ") + text;
+    const auto found = m_labels.find(text);
+    const auto label = found == m_labels.end() ? text : found->second;
+    if (m_prefix.isEmpty()) return label;
+    return m_prefix + QStringLiteral(": ") + label;
 }
 
 void InlineSelect::updateButtonIcon() {
@@ -1376,16 +1409,22 @@ void InlineSelect::updateButtonIcon() {
     m_button->setIcon(iconFromSvg(kSelectArrowSvg, kSelectArrowIconSize, rotationDegrees));
 }
 
-void InlineSelect::showPopup() {
-    if (g_openSelect && g_openSelect != this)
-        g_openSelect->hidePopup();
-    m_panel->adjustSize();
+void InlineSelect::positionPopup() {
+    m_panel->setFixedSize(std::min(std::max(160, m_panel->minimumWidth()), std::max(1, m_popupParent->width() - 16)),
+                          std::min(std::max(40, m_panelLayout->sizeHint().height() + 4), std::min(360, std::max(1, m_popupParent->height() - 16))));
     QPoint pos = mapTo(m_popupParent, QPoint(0, height() + 5));
     if (pos.x() + m_panel->width() > m_popupParent->width() - 8)
         pos.setX(std::max(8, m_popupParent->width() - m_panel->width() - 8));
     if (pos.y() + m_panel->height() > m_popupParent->height() - 8)
         pos.setY(std::max(8, mapTo(m_popupParent, QPoint(0, 0)).y() - m_panel->height() - 5));
     m_panel->move(pos);
+}
+
+void InlineSelect::showPopup() {
+    if (m_onOpening) m_onOpening();
+    if (g_openSelect && g_openSelect != this)
+        g_openSelect->hidePopup();
+    positionPopup();
     m_panel->raise();
     m_panel->show();
     m_button->setChecked(true);
@@ -1529,6 +1568,13 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
     m_recordError = source.m_recordError;
     m_recordFormatAuto = source.m_recordFormatAuto;
     m_recordCodecAuto = source.m_recordCodecAuto;
+    m_defaults.recordAudio = source.m_defaults.recordAudio;
+    m_defaults.recordAudioOutput = source.m_defaults.recordAudioOutput;
+    m_defaults.recordAudioInput = source.m_defaults.recordAudioInput;
+    if (m_soundMode) m_soundMode->setCurrentText(qString(hyprcapture::toString(m_defaults.recordAudio)));
+    if (m_soundOutput) m_soundOutput->setCurrentText(qString(m_defaults.recordAudioOutput));
+    if (m_soundInput) m_soundInput->setCurrentText(qString(m_defaults.recordAudioInput));
+
     if (m_recordToggle)
         m_recordToggle->setChecked(m_record);
     if (m_fullscreenScope)
@@ -1915,6 +1961,7 @@ void CaptureOverlay::buildToolbar() {
     recordLayout->addWidget(m_recordCodec);
 
     m_recordFormat = new InlineSelect(this, m_recordOptions);
+    m_recordFormat->setObjectName("recordFormat");
     m_recordFormat->setPrefix("Format");
     m_recordFormat->addItems(QStringList{"mp4", "mov", "webm", "mkv", "gif", "apng", "webp"});
     m_recordFormat->setCurrentText(defaultRecordFormatForBackground(m_defaults, currentRecordBackground()));
@@ -1956,6 +2003,47 @@ void CaptureOverlay::buildToolbar() {
     recordLayout->addWidget(m_recordBackend);
 
     rootLayout->addWidget(m_recordOptions);
+
+    m_soundOptions = new QWidget(m_toolbar);
+    m_soundOptions->setObjectName("soundOptions");
+    auto* soundLayout = new QHBoxLayout(m_soundOptions);
+    soundLayout->setContentsMargins(0, 0, 0, 0);
+    soundLayout->setSpacing(5);
+    m_soundMode = new InlineSelect(this, m_soundOptions);
+    m_soundMode->setObjectName("soundMode");
+    m_soundMode->setPrefix("Sound");
+    m_soundMode->addItems({"off", "system", "microphone", "mix"});
+    m_soundMode->setLabels({{"off", "Off"}, {"system", "System"}, {"microphone", "Microphone"}, {"mix", "Mix"}});
+    m_soundMode->setCurrentText(qString(hyprcapture::toString(m_defaults.recordAudio)));
+    m_soundMode->setOnChanged([this, onRecordOptionChanged] {
+        m_defaults.recordAudio = hyprcapture::parseRecordAudio(m_soundMode->currentText().toStdString());
+        onRecordOptionChanged();
+    });
+    soundLayout->addWidget(m_soundMode);
+    m_soundOutput = new InlineSelect(this, m_soundOptions);
+    m_soundOutput->setObjectName("soundOutput");
+    m_soundInput = new InlineSelect(this, m_soundOptions);
+    m_soundInput->setObjectName("soundInput");
+    m_soundOutput->setPrefix("Output");
+    m_soundInput->setPrefix("Mic");
+    for (auto* select : {m_soundOutput, m_soundInput}) {
+        select->setCompactWidth(210);
+        select->addItems({"default"});
+        select->setLabels({{"default", "System default"}});
+        select->setOnOpening([this] { refreshSoundDevices(); });
+        soundLayout->addWidget(select);
+    }
+    m_soundOutput->setCurrentText(qString(m_defaults.recordAudioOutput));
+    m_soundInput->setCurrentText(qString(m_defaults.recordAudioInput));
+    m_soundOutput->setOnChanged([this, onRecordOptionChanged] {
+        m_defaults.recordAudioOutput = m_soundOutput->currentText().toStdString(); onRecordOptionChanged();
+    });
+    m_soundInput->setOnChanged([this, onRecordOptionChanged] {
+        m_defaults.recordAudioInput = m_soundInput->currentText().toStdString(); onRecordOptionChanged();
+    });
+    rootLayout->addWidget(m_soundOptions);
+    refreshSoundDevices();
+
 
     m_recordWarning = new QLabel(m_toolbar);
     m_recordWarning->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
@@ -2042,6 +2130,7 @@ void CaptureOverlay::hideOptionPopups() {
         m_fullscreenScope->hidePopup();
     if (m_windowBackground)
         m_windowBackground->hidePopup();
+    for (auto* select : {m_soundMode, m_soundOutput, m_soundInput}) if (select) select->hidePopup();
     if (m_recordCodec)
         m_recordCodec->hidePopup();
     if (m_recordFormat)
@@ -2463,6 +2552,42 @@ void CaptureOverlay::updateRecordWarning() {
     relayoutToolbar();
 }
 
+void CaptureOverlay::refreshSoundDevices() {
+    if (m_soundDevicesLoading || !m_soundInput) return;
+    m_soundDevicesLoading = true;
+    auto* process = new QProcess(this);
+    connect(process, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this, [this, process](int code, QProcess::ExitStatus status) {
+        m_soundDevicesLoading = false;
+        const auto object = QJsonDocument::fromJson(process->readAllStandardOutput()).object();
+        if (code == 0 && status == QProcess::NormalExit) {
+            const auto fill = [](InlineSelect* select, const QJsonArray& devices) {
+                const auto current = select->currentText();
+                QStringList names{"default"};
+                std::map<QString, QString> labels{{"default", "System default"}};
+                for (const auto& value : devices) {
+                    const auto device = value.toObject();
+                    const auto name = device.value("name").toString();
+                    if (name.isEmpty() || names.contains(name)) continue;
+                    names << name;
+                    auto description = device.value("description").toString();
+                    labels[name] = description.isEmpty() ? name : description;
+                }
+                if (!names.contains(current)) { names << current; labels[current] = current + " (unavailable)"; }
+                select->setLabels(labels); select->addItems(names); select->setCurrentText(current);
+            };
+            fill(m_soundOutput, object.value("outputs").toArray());
+            fill(m_soundInput, object.value("inputs").toArray());
+            m_soundOptions->setToolTip({});
+        } else m_soundOptions->setToolTip("Audio devices unavailable; video recording remains available");
+        process->deleteLater();
+    });
+    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) { m_soundDevicesLoading = false; process->deleteLater(); }
+    });
+    QTimer::singleShot(4000, process, [process] { if (process->state() != QProcess::NotRunning) process->kill(); });
+    process->start(QCoreApplication::applicationFilePath(), {"--sound-list"});
+}
+
 void CaptureOverlay::updateRecordOptionsVisibility() {
     if (!m_recordOptions)
         return;
@@ -2481,6 +2606,15 @@ void CaptureOverlay::updateRecordOptionsVisibility() {
     updateSelect(m_recordFps, visible);
     updateSelect(m_recordDuration, imageAnimation);
     updateSelect(m_recordBackend, visible && !imageAnimation);
+    updateSelect(m_soundMode, visible);
+    updateSelect(m_soundOutput, visible && !imageAnimation && (m_defaults.recordAudio == hyprcapture::RecordAudio::System || m_defaults.recordAudio == hyprcapture::RecordAudio::Mix));
+    updateSelect(m_soundInput, visible && !imageAnimation && (m_defaults.recordAudio == hyprcapture::RecordAudio::Microphone || m_defaults.recordAudio == hyprcapture::RecordAudio::Mix));
+    m_soundOptions->setVisible(visible);
+    m_soundMode->setEnabled(!imageAnimation);
+    m_soundMode->setToolTip(imageAnimation ? "Animation formats do not support sound" : "Recording sound");
+    if (imageAnimation) m_soundMode->setCurrentText("Not supported");
+    else m_soundMode->setCurrentText(qString(hyprcapture::toString(m_defaults.recordAudio)));
+
 
     m_recordOptions->setVisible(visible);
     m_recordOptions->setSizePolicy(visible ? QSizePolicy::Fixed : QSizePolicy::Ignored, visible ? QSizePolicy::Fixed : QSizePolicy::Ignored);
@@ -3560,6 +3694,13 @@ void CaptureOverlay::relayoutToolbar() {
     if (!m_toolbar)
         return;
 
+    if (m_soundOptions && m_soundOutput && m_soundInput) {
+        const int count = (m_soundOutput->isVisible() ? 1 : 0) + (m_soundInput->isVisible() ? 1 : 0);
+        const int deviceWidth = std::clamp((width() - 64 - 165) / std::max(1, count), 65, 210);
+        m_soundOutput->setCompactWidth(deviceWidth);
+        m_soundInput->setCompactWidth(deviceWidth);
+        m_soundOptions->setFixedWidth(std::min(m_soundOptions->sizeHint().width(), std::max(1, width() - 52)));
+    }
     m_toolbar->setMinimumWidth(0);
     m_toolbar->setMaximumWidth(QWIDGETSIZE_MAX);
     m_toolbar->adjustSize();
@@ -3815,6 +3956,9 @@ QString CaptureOverlay::prepareRecordingRequest() {
     const bool imageAnimation = isImageAnimationRecordFormat(recordFormat);
     request.defaults.recordFormat = recordFormat.toStdString();
     request.defaults.recordFilenameTemplate = recordTemplateWithFormat(m_defaults.recordFilenameTemplate, recordFormat).toStdString();
+    request.defaults.recordAudio = imageAnimation ? hyprcapture::RecordAudio::Off : m_defaults.recordAudio;
+    request.defaults.recordAudioOutput = m_defaults.recordAudioOutput;
+    request.defaults.recordAudioInput = m_defaults.recordAudioInput;
     request.defaults.recordCodec = imageAnimation ? recordFormat.toStdString() : codecConfigFromChoice(currentRecordCodec()).toStdString();
     request.defaults.recordFps = currentRecordFps();
     request.defaults.recordMaxSeconds = currentRecordMaxSeconds();

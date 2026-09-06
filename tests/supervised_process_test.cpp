@@ -66,6 +66,22 @@ int main() {
     close(input[0]);
     require(process.spawnError == 0 && hyprcapture::waitSupervisedProcess(process) == 0, "raw input preserved");
 
+    // GSR must be signalled as a group without killing the compositor, and the
+    // supervisor must still report the child's result under SA_NOCLDWAIT.
+    int ready[2];
+    require(pipe2(ready, O_CLOEXEC) == 0, "group readiness pipe");
+    require(posix_spawn_file_actions_init(&actions) == 0, "group actions");
+    posix_spawn_file_actions_adddup2(&actions, ready[1], STDOUT_FILENO);
+    auto grouped = hyprcapture::spawnSupervisedProcess("/bin/sh",
+        {"/bin/sh", "-c", "trap 'exit 0' INT; printf ready; while :; do sleep 1; done"}, environ, actions, true);
+    posix_spawn_file_actions_destroy(&actions);
+    close(ready[1]);
+    char readiness[5];
+    require(read(ready[0], readiness, sizeof(readiness)) == 5, "group child ready");
+    close(ready[0]);
+    require(kill(-grouped.pid, SIGINT) == 0, "signal recording process group");
+    require(hyprcapture::waitSupervisedProcess(grouped) == 0, "group stop preserves exit report");
+
     require(sigaction(SIGCHLD, &original, nullptr) == 0, "restore signals");
     require(run({"/bin/sh", "-c", "exit 23"}) == 23, "normal parent policy");
     std::cout << "supervised process tests passed\n";
