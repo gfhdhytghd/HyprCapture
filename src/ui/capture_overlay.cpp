@@ -2016,7 +2016,7 @@ void CaptureOverlay::buildToolbar() {
     m_recordBackend->setOnChanged(onRecordOptionChanged);
     recordLayout->addWidget(m_recordBackend);
 
-    rootLayout->addWidget(m_recordOptions);
+    rootLayout->addWidget(m_recordOptions, 0, Qt::AlignHCenter);
 
     m_soundOptions = new QWidget(m_toolbar);
     m_soundOptions->setObjectName("soundOptions");
