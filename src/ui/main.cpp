@@ -11,6 +11,9 @@
 #include <QCommandLineParser>
 #include <QCursor>
 #include <QDir>
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusVirtualObject>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
@@ -263,7 +266,17 @@ class RecordingCountdownDisplay final : public QWidget {
     int m_remaining = 0;
 };
 
-class RecordingCountdownController final : public QObject {
+constexpr auto COUNTDOWN_SERVICE = "org.hyprcapture.RecordingCountdown";
+constexpr auto COUNTDOWN_PATH = "/org/hyprcapture/RecordingCountdown";
+constexpr auto COUNTDOWN_INTERFACE = "org.hyprcapture.RecordingCountdown";
+
+void cancelRecordingCountdown() {
+    const auto message = QDBusMessage::createMethodCall(QString::fromLatin1(COUNTDOWN_SERVICE), QString::fromLatin1(COUNTDOWN_PATH),
+                                                       QString::fromLatin1(COUNTDOWN_INTERFACE), QStringLiteral("Cancel"));
+    QDBusConnection::sessionBus().call(message, QDBus::Block, 1000);
+}
+
+class RecordingCountdownController final : public QDBusVirtualObject {
   public:
     RecordingCountdownController(QString requestPath, int seconds)
         : m_requestPath(std::move(requestPath)), m_remaining(std::clamp(seconds, 1, MAX_RECORD_COUNTDOWN_SECONDS)) {
@@ -277,13 +290,37 @@ class RecordingCountdownController final : public QObject {
         m_timer.setInterval(1000);
     }
 
-    void start() {
+    QString introspect(const QString&) const override {
+        return QStringLiteral("<interface name=\"org.hyprcapture.RecordingCountdown\"><method name=\"Cancel\"/></interface>");
+    }
+
+    bool handleMessage(const QDBusMessage& message, const QDBusConnection& connection) override {
+        if (message.interface() != QLatin1String(COUNTDOWN_INTERFACE) || message.member() != QStringLiteral("Cancel"))
+            return false;
+        m_cancelled = true;
+        m_timer.stop();
+        QFile::remove(m_requestPath);
+        for (auto& display : m_displays)
+            display->hide();
+        connection.send(message.createReply());
+        qApp->quit();
+        return true;
+    }
+
+    bool start() {
+        auto bus = QDBusConnection::sessionBus();
+        if (!bus.registerVirtualObject(QString::fromLatin1(COUNTDOWN_PATH), this) ||
+            !bus.registerService(QString::fromLatin1(COUNTDOWN_SERVICE))) {
+            QFile::remove(m_requestPath);
+            return false;
+        }
         for (auto& display : m_displays) {
             display->setRemaining(m_remaining);
             display->show();
             display->raise();
         }
         m_timer.start();
+        return true;
     }
 
   private:
@@ -303,6 +340,8 @@ class RecordingCountdownController final : public QObject {
             display->hide();
         qApp->processEvents(QEventLoop::ExcludeUserInputEvents);
         QTimer::singleShot(120, this, [this] {
+            if (m_cancelled)
+                return;
             const auto result = dispatchRecordingStart(m_requestPath);
             if (!result.success)
                 QFile::remove(m_requestPath);
@@ -311,6 +350,7 @@ class RecordingCountdownController final : public QObject {
     }
 
     QString m_requestPath;
+    bool    m_cancelled = false;
     int     m_remaining = 0;
     QTimer  m_timer;
     std::vector<std::unique_ptr<RecordingCountdownDisplay>> m_displays;
@@ -797,7 +837,8 @@ int main(int argc, char** argv) {
         if (!hyprcapture::ui::isPrivateRuntimeFile(requestPath, MAX_RECORD_REQUEST_BYTES))
             return 1;
         RecordingCountdownController countdown(requestPath, defaults.recordCountdownSeconds);
-        countdown.start();
+        if (!countdown.start())
+            return 1;
         return app.exec();
     }
 
@@ -810,6 +851,8 @@ int main(int argc, char** argv) {
 
     if (hasArgument(argc, argv, "--recording-result"))
         return showRecordingResult(defaults, parser.value("recording-result"));
+
+    cancelRecordingCountdown();
 
     QString sessionJson = parser.value("session-json");
     if (parser.isSet("session-json-file")) {
