@@ -459,6 +459,7 @@ int main() {
     require(audio::resolveOutput("default", CaptureMode::Window, "0x123") == "default", "explicit default overrides window auto");
     for (auto mode : {RecordAudio::Off, RecordAudio::System, RecordAudio::Microphone, RecordAudio::Mix}) {
         recording.defaults.recordAudio = mode;
+        recording.defaults.recordAudioEchoCancellation = mode != RecordAudio::Off;
         recording.defaults.recordAudioMix = "manual";
         recording.defaults.recordAudioSystemGain = -6;
         recording.defaults.recordAudioMicGain = 12;
@@ -466,6 +467,7 @@ int main() {
         recording.defaults.recordAudioInput = "mic name with spaces";
         const auto decoded = decodeRecordingRequestJson(encodeRecordingRequestJson(recording));
         require(decoded && decoded->defaults.recordAudio == mode, "sound mode roundtrip");
+        require(decoded->defaults.recordAudioEchoCancellation == recording.defaults.recordAudioEchoCancellation, "echo cancellation roundtrip");
         require(decoded->defaults.recordAudioMix == "manual" && decoded->defaults.recordAudioSystemGain == -6 && decoded->defaults.recordAudioMicGain == 12, "mix settings roundtrip");
         require(decoded->defaults.recordAudioOutput == recording.defaults.recordAudioOutput, "output device roundtrip");
         require(decoded->defaults.recordAudioInput == recording.defaults.recordAudioInput, "input device roundtrip");

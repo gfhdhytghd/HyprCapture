@@ -1,5 +1,6 @@
 #include <QScrollArea>
 #include <QSlider>
+#include <QCheckBox>
 #include "ui/audio_meter.hpp"
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -1579,6 +1580,8 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
     m_recordError = source.m_recordError;
     m_recordFormatAuto = source.m_recordFormatAuto;
     m_recordCodecAuto = source.m_recordCodecAuto;
+    m_defaults.recordAudioEchoCancellation = source.m_defaults.recordAudioEchoCancellation;
+    if (m_echoCancellation) m_echoCancellation->setChecked(m_defaults.recordAudioEchoCancellation);
     m_defaults.recordAudioMix = source.m_defaults.recordAudioMix;
     m_defaults.recordAudioSystemGain = source.m_defaults.recordAudioSystemGain;
     m_defaults.recordAudioMicGain = source.m_defaults.recordAudioMicGain;
@@ -2087,7 +2090,17 @@ void CaptureOverlay::buildToolbar() {
             label->setText(name + "   " + (value == -61 ? QString("Mute") : QString::number(value) + " dB"));
         };
         updateGain(gain); connect(slider, &QSlider::valueChanged, this, updateGain);
-        layout->addWidget(label); layout->addWidget(slider); layout->addWidget(meter);
+        auto* title = new QHBoxLayout; title->setSpacing(4); title->addWidget(label); title->addStretch();
+        if (name == "Mic") {
+            m_echoCancellation = new QCheckBox("AEC", strip);
+            m_echoCancellation->setObjectName("echoCancellation");
+            m_echoCancellation->setAccessibleName("Microphone echo cancellation");
+            m_echoCancellation->setToolTip("Remove speaker playback from the microphone using PipeWire / WebRTC");
+            m_echoCancellation->setChecked(m_defaults.recordAudioEchoCancellation);
+            connect(m_echoCancellation, &QCheckBox::toggled, this, [this](bool enabled) { m_defaults.recordAudioEchoCancellation = enabled; });
+            title->addWidget(m_echoCancellation);
+        }
+        layout->addLayout(title); layout->addWidget(slider); layout->addWidget(meter);
         mixerLayout->addWidget(strip, 1);
     };
     channel("Sound", m_systemGain, m_systemMeter, m_defaults.recordAudioSystemGain);
@@ -2659,7 +2672,7 @@ void CaptureOverlay::updateSoundMeter() {
     }
     // Preview both channels independently of which channels will be recorded.
     const QStringList args{"--sound-meter", "mix",
-                           qString(source), qString(m_defaults.recordAudioInput)};
+                           qString(source), qString(m_defaults.recordAudioInput), m_defaults.recordAudioEchoCancellation ? "1" : "0"};
     const QString key = args.join(QChar(0x1f));
     if (m_meterProcess && (!wanted || key != m_meterKey)) {
         m_meterProcess->disconnect(this);
@@ -2680,6 +2693,11 @@ void CaptureOverlay::updateSoundMeter() {
             const int end = buffer->indexOf('\n');
             const auto object = QJsonDocument::fromJson(buffer->left(end)).object(); buffer->remove(0, end + 1);
             if (object.contains("error")) m_systemMeter->setToolTip(object["error"].toString());
+            if (object.contains("aec") && m_echoCancellation) {
+                const auto state = object["aec"].toString();
+                m_echoCancellation->setText(state == "unavailable" ? "AEC !" : "AEC");
+                m_echoCancellation->setToolTip("PipeWire / WebRTC echo cancellation: " + state);
+            }
             if (!object.contains("levels")) continue;
             const auto levels = object["levels"].toObject();
             auto apply = [&levels](AudioMeter* meter, const char* role) {

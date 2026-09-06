@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include "ui/audio_meter.hpp"
 #include <QSlider>
+#include <QCheckBox>
 #include "ui/capture_overlay.hpp"
 #include "audio/helper.hpp"
 #include <QApplication>
@@ -118,6 +119,13 @@ int main(int argc, char** argv) {
     if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND"))
         for (const char* name : {"soundMeter", "micMeter"})
             require(std::abs(overlay.findChild<QWidget*>(name)->property("postGainPeak").toDouble() - .1) < .0001, "Off preview receives live levels");
+    auto* aec = overlay.findChild<QCheckBox*>("echoCancellation");
+    require(aec && aec->isChecked() && preview->arguments().last() == "1", "AEC defaults on in preview");
+    aec->setChecked(false); QTest::qWait(150);
+    preview = nullptr;
+    for (auto* process : overlay.findChildren<QProcess*>())
+        if (process->arguments().value(0) == "--sound-meter" && process->state() == QProcess::Running) preview = process;
+    require(preview && preview->arguments().last() == "0", "AEC switch reaches helper");
     require(button(overlay, "soundInput")->isVisible() && button(overlay, "soundOutput")->isVisible(), "off keeps all sound options visible");
     choose(overlay, "soundMode", "microphone");
     QTest::qWait(150);
@@ -160,7 +168,8 @@ int main(int argc, char** argv) {
         require(second.rect().contains(geometry), "sound controls within narrow overlay");
     }
     require(second.findChild<QSlider*>("micGain")->value() == 6, "gain survives monitor switch");
-    for (const char* name : {"soundMixer", "micGain", "soundGain", "micMeter", "soundMeter"}) {
+    require(!second.findChild<QCheckBox*>("echoCancellation")->isChecked(), "AEC setting survives monitor switch");
+    for (const char* name : {"soundMixer", "micGain", "soundGain", "micMeter", "soundMeter", "echoCancellation"}) {
         auto* widget = second.findChild<QWidget*>(name);
         require(widget && widget->isVisible(), "manual narrow mixer visible");
         require(second.rect().contains(QRect(widget->mapTo(&second, QPoint(0, 0)), widget->size())), "fourth row fits narrow overlay");

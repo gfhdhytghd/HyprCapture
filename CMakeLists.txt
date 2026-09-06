@@ -35,6 +35,7 @@ pkg_check_modules(HYPR_DEPS REQUIRED hyprland)
 pkg_check_modules(GIO REQUIRED gio-2.0 gio-unix-2.0)
 pkg_check_modules(LUA REQUIRED lua)
 pkg_check_modules(PULSE REQUIRED IMPORTED_TARGET libpulse)
+pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg DBus)
 find_package(LayerShellQt REQUIRED)
@@ -102,6 +103,7 @@ target_link_options(hyprcapture PRIVATE -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecsta
 
 add_executable(hyprcapture-ui
   src/audio/helper.cpp
+  src/audio/echo_source.cpp
   src/ui/main.cpp
   src/ui/clipboard_utils.cpp
   src/ui/capture_overlay.cpp
@@ -119,7 +121,7 @@ target_include_directories(hyprcapture-ui PRIVATE src)
 target_include_directories(hyprcapture-ui PRIVATE ${GIO_INCLUDE_DIRS})
 target_link_directories(hyprcapture-ui PRIVATE ${GIO_LIBRARY_DIRS})
 target_link_libraries(hyprcapture-ui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface nlohmann_json::nlohmann_json)
-target_link_libraries(hyprcapture-ui PRIVATE ${GIO_LIBRARIES} PkgConfig::PULSE)
+target_link_libraries(hyprcapture-ui PRIVATE ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
 target_link_options(hyprcapture-ui PRIVATE -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
 
 if(BUILD_TESTING)
@@ -128,7 +130,7 @@ if(BUILD_TESTING)
   list(REMOVE_ITEM HYPRCAPTURE_UI_TEST_SOURCES src/ui/main.cpp)
   add_executable(hyprcapture-sound-ui-test tests/sound_ui_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
   target_include_directories(hyprcapture-sound-ui-test PRIVATE src ${GIO_INCLUDE_DIRS})
-  target_link_libraries(hyprcapture-sound-ui-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE)
+  target_link_libraries(hyprcapture-sound-ui-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
   add_test(NAME hyprcapture-sound-ui-test COMMAND hyprcapture-sound-ui-test)
   set_tests_properties(hyprcapture-sound-ui-test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
   add_executable(hyprcapture-audio-timeline-test tests/audio_timeline_test.cpp)

@@ -55,6 +55,7 @@ struct CaptureDefaults {
     std::string      recordPreset = "veryfast";
     std::string      recordGsrFlags;
     RecordAudio      recordAudio = RecordAudio::Off;
+    bool             recordAudioEchoCancellation = true;
     std::string      recordAudioMix = "voice-priority";
     std::int64_t     recordAudioSystemGain = 0; // dB; -61 means muted
     std::int64_t     recordAudioMicGain = 0;

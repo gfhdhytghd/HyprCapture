@@ -14,6 +14,7 @@
 #include <vector>
 
 class QButtonGroup;
+class QCheckBox;
 class QEnterEvent;
 class QGraphicsOpacityEffect;
 class QLabel;
@@ -244,6 +245,7 @@ class CaptureOverlay final : public QMainWindow {
     InlineSelect* m_soundPreset = nullptr;
     QSlider* m_systemGain = nullptr;
     QSlider* m_micGain = nullptr;
+    QCheckBox* m_echoCancellation = nullptr;
     AudioMeter* m_systemMeter = nullptr;
     AudioMeter* m_micMeter = nullptr;
     QProcess* m_meterProcess = nullptr;

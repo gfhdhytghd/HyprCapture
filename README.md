@@ -43,6 +43,8 @@ https://github.com/user-attachments/assets/2c986639-7a3d-44ee-9f33-1b9b79ad9f1d
 - nlohmann-json
 - Qt 6 Core, Gui, and Widgets
 - LayerShellQt `layer-shell-qt`
+- libpipewire-0.3 development headers (`libpipewire` on Arch, `libpipewire-0.3-dev` on Debian/Ubuntu)
+- PipeWire WebRTC AEC module (`aec/libspa-aec-webrtc`) for microphone echo cancellation
 - libpulse development headers (`libpulse` on Arch, `libpulse-dev` on Debian/Ubuntu)
 - FFmpeg (including `ffprobe`, AAC and Opus encoders) for recording output
 - PulseAudio or PipeWire with its PulseAudio compatibility service for sound recording
@@ -414,6 +416,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `record_window_fps_limit` | int | `12` | Safety cap for window recording with the current compositor-readback backend. Use `0` to disable the cap. |
 | `record_window_real_bg_fps_limit` | int | `8` | Additional safety cap for window recording with `window_background = "real"`. Use `0` to disable the cap. |
 | `record_audio` | string | `off` | Sound mode: `off`, `system`, `microphone`, or `mix`. Mix produces one audio track containing both sources. |
+| `record_audio_echo_cancellation` | int | `1` | Enable PipeWire/WebRTC microphone echo cancellation; `0` disables it. |
 | `record_audio_mix` | string | `voice-priority` | `manual`, `auto-balance`, or `voice-priority`. |
 | `record_audio_system_gain` | int | `0` | System gain in dB, −60 to +24; −61 mutes. |
 | `record_audio_mic_gain` | int | `0` | Microphone gain in dB, −60 to +24; −61 mutes. |
@@ -438,6 +441,8 @@ The recording toolbar has a third **Sound** row. Choose **Off**, **System**, **M
 Both recording backends use a separate headless helper process for sound. Mix outputs a single stereo track. Choose **Manual**, **Auto balance**, or **Voice priority** (default) in the Sound row. Auto balance applies a microphone high-pass filter, gentle noise gate and bounded speech normalization, plus system-sound compression and attenuation. Voice priority also ducks system sound when the processed microphone level rises; this is level-based ducking, not speech recognition.
 
 Manual shows a fourth row with separate **Sound** and **Mic** gain sliders (−60 to +24 dB, plus Mute), post-gain sample-peak/RMS meters in dBFS, a 1.2-second peak hold and clipping indication. The preview always samples both selected sources independently of the recording Sound mode (including Off), without playback or PCM storage, and stops when the manual panel closes. Sound mode controls only which channels are included in the recording. Gain changes affect the recording, not desktop playback volume. Each meter represents its channel before summing and the final limiter; the sum can exceed 0 dBFS even when the individual channels do not. Both channels feed a final limiter. Settings are chosen before recording; the panel is not a live recording mixer. Gain settings also apply after processing in automatic presets.
+
+The **AEC** checkbox next to Mic is enabled by default. It uses PipeWire's `libpipewire-module-echo-cancel` with `aec/libspa-aec-webrtc` in `monitor.mode`, reusing its echo cancellation, buffering and clock compensation. The reference is the actual playback output (system default when capturing a window), so other applications' speaker audio can be removed from the microphone without adding them to the recorded Sound channel. No playback streams or system defaults are moved. The processed microphone feeds both the meter and the recording before gain and mixing presets. WebRTC AGC and extra noise suppression are disabled to preserve the existing gain controls. Module nodes live only for the helper's lifetime. `AEC !` and an error indicate that AEC was unavailable and the original microphone is being used. Actual suppression depends on speaker/microphone geometry and needs a brief adaptation period; digital simulation is not a guarantee for a particular room.
 
 If a device is missing or disconnects, HyprCapture reports the error and keeps recording video; the failed source becomes silent while another source continues. Output devices and microphones are not automatically switched or reconnected during a recording. Window sources follow playback streams from the selected application process and its children, including streams created after recording starts; unrelated applications on the same output are excluded. Window capture waits silently when that application is not playing audio and never falls back to desktop audio. Applications that share one process/audio service across multiple windows (for example, browsers) cannot always be isolated per window. Matching uses process identity, not window title or application name. The source menu refreshes when opened; a closed window selection remains marked unavailable.
 
@@ -492,3 +497,5 @@ Temporary compositor artifacts and thumbnail/clipboard scratch files are written
 - Do not run `hyprpm update` or reload the plugin while an active screenshot overlay is being used.
 
 To verify application audio isolation against a running PipeWire server, run `python3 tests/audio_application_live_test.py build-codex/hyprcapture-ui`. This creates private test outputs without changing the default output, and checks multiple streams, subprocess matching, late playback and live metering.
+
+AEC integration test: `python3 tests/audio_echo_live_test.py build-codex/hyprcapture-ui` uses private synthetic playback/microphone nodes to check echo suppression, double talk, unmodified defaults and node cleanup.

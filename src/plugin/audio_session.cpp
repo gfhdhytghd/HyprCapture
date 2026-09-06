@@ -39,7 +39,7 @@ bool AudioSession::start(const CaptureDefaults& defaults, const std::filesystem:
     fcntl(m_reader, F_SETFL, fcntl(m_reader, F_GETFL) | O_NONBLOCK);
     auto process = spawn({m_helper, "--sound-capture", toString(defaults.recordAudio), defaults.recordAudioOutput,
                           defaults.recordAudioInput, m_directory.string(), defaults.recordAudioMix,
-                          std::to_string(defaults.recordAudioSystemGain), std::to_string(defaults.recordAudioMicGain)}, control[0]);
+                          std::to_string(defaults.recordAudioSystemGain), std::to_string(defaults.recordAudioMicGain), defaults.recordAudioEchoCancellation ? "1" : "0"}, control[0]);
     close(control[0]);
     if (process.spawnError) { error = strerror(process.spawnError); return false; }
     m_worker = std::thread([this, process]() mutable {

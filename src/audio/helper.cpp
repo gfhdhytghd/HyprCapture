@@ -1,4 +1,5 @@
 #include "audio/helper.hpp"
+#include "audio/echo_source.hpp"
 #include "shared/audio_timeline.hpp"
 #include "shared/trusted_path.hpp"
 #include <pulse/pulseaudio.h>
@@ -119,7 +120,11 @@ struct Recorder {
     std::array<Track, 2> tracks;
     std::int64_t origin = monotonicUs();
     bool meterOnly = false;
-    QTimer meterTimer, applicationTimer;
+    QTimer meterTimer, applicationTimer, echoPoll;
+    std::unique_ptr<EchoSource> echo;
+    bool echoEnabled = false, echoStarting = false, echoActive = false;
+    QString originalMicrophone;
+
     QJsonArray windows;
     int applicationPid = 0;
     QByteArray applicationStart;
@@ -241,9 +246,54 @@ struct Recorder {
             consumed += n;
         }
     }
+    void echoStatus(const QString& state) {
+        const auto data = QJsonDocument(QJsonObject{{"aec", state}}).toJson(QJsonDocument::Compact) + '\n';
+        (void)!write(STDOUT_FILENO, data.constData(), data.size());
+    }
+    void fallbackEcho(const QString& reason) {
+        if (!echoStarting && !echoActive) return;
+        echoPoll.stop(); echoStarting = echoActive = false;
+        auto& mic = tracks[1];
+        const int fd = mic.fd; mic.fd = -1; closeTrack(mic); mic = Track{}; mic.fd = fd;
+        echo.reset();
+        report("Echo cancellation unavailable (" + reason + "); microphone continues without AEC");
+        echoStatus("unavailable");
+        openTrack(mic, "Microphone", originalMicrophone);
+    }
+    bool startEcho(const QString& microphone) {
+        originalMicrophone = microphone;
+        QString outputName = (applicationSource || output == "auto" || output == "default") ? defaultSink : output;
+        bool found = false;
+        for (const auto& sink : sinks) if (sink.name == outputName) found = true;
+        QString error;
+        echo = std::make_unique<EchoSource>();
+        if (!found || !echo->start(microphone, outputName, error)) {
+            echo.reset(); report("Echo cancellation unavailable: " + (found ? error : "playback output not found") + "; microphone continues without AEC");
+            echoStatus("unavailable"); return false;
+        }
+        echoStarting = true; echoStatus("starting");
+        QObject::connect(&echoPoll, &QTimer::timeout, [&] {
+            if (!echoStarting || !echo || !context) return;
+            auto* op = pa_context_get_source_info_by_name(context, echo->name().toUtf8().constData(), [](pa_context*, const pa_source_info* info, int, void* data) {
+                auto& r = *static_cast<Recorder*>(data);
+                if (!info || !r.echoStarting) return;
+                r.echoPoll.stop(); r.echoStarting = false; r.echoActive = true;
+                r.openTrack(r.tracks[1], "Microphone", QString::fromUtf8(info->name));
+                r.tracks[1].sourceIndex = info->index;
+                r.echoStatus("active");
+            }, this);
+            if (op) pa_operation_unref(op);
+        });
+        echoPoll.start(30);
+        QTimer::singleShot(3000, [&] { if (echoStarting) fallbackEcho("source startup timed out"); });
+        return true;
+    }
     void fail(Track& t, const QString& reason) {
         if (t.failed) return;
         t.failed = true;
+        if (&t == &tracks[1] && echoActive) {
+            QTimer::singleShot(0, [this, reason] { fallbackEcho(reason); }); return;
+        }
         report(t.role + ": " + reason + "; video recording continues");
     }
     void serverError() {
@@ -259,7 +309,7 @@ struct Recorder {
         if (listOnly) {
             QJsonArray outputs, inputs;
             for (const auto& d : sinks) outputs.append(QJsonObject{{"name", d.name}, {"description", d.description}});
-            for (const auto& d : sources) if (d.monitor.isEmpty()) inputs.append(QJsonObject{{"name", d.name}, {"description", d.description}});
+            for (const auto& d : sources) if (d.monitor.isEmpty() && !d.name.startsWith("hyprcapture-aec-")) inputs.append(QJsonObject{{"name", d.name}, {"description", d.description}});
             auto bytes = QJsonDocument(QJsonObject{{"outputs", outputs}, {"inputs", inputs}, {"windows", windows}}).toJson(QJsonDocument::Compact) + '\n';
             (void)!write(STDOUT_FILENO, bytes.constData(), bytes.size());
             QCoreApplication::quit();
@@ -290,14 +340,15 @@ struct Recorder {
             auto name = input == "default" ? defaultSource : input;
             bool found = false;
             for (const auto& d : sources) if (d.name == name && d.monitor.isEmpty()) found = true;
-            openTrack(tracks[1], "Microphone", found ? name : QString{});
+            if (!found || !echoEnabled || !startEcho(name)) openTrack(tracks[1], "Microphone", found ? name : QString{});
+            if (!echoEnabled) echoStatus("off");
         }
     }
     void openTrack(Track& t, const QString& role, const QString& source) {
         t.owner = this; t.role = role; t.device = source;
         if (source.isEmpty()) { fail(t, "selected device unavailable"); return; }
         for (const auto& d : sources) if (d.name == source) t.sourceIndex = d.index;
-        if (!meterOnly) {
+        if (!meterOnly && t.fd < 0) {
         if (t.sinkInput != PA_INVALID_INDEX) t.fd = fcntl(tracks[0].fd, F_DUPFD_CLOEXEC, 3);
         else {
         const auto path = QFile::encodeName(directory + (role == "System" ? "/system.f32" : "/microphone.f32"));
@@ -413,6 +464,10 @@ struct Recorder {
         }, this);
         if (pa_context_connect(context, nullptr, PA_CONTEXT_NOAUTOSPAWN, nullptr) < 0) serverError();
         QObject::connect(&pump, &QTimer::timeout, [&] {
+            if (echo) {
+                echo->iterate();
+                if (echo->failed()) fallbackEcho("audio processing module stopped");
+            }
             for (int i = 0; i < 64; ++i) {
                 int result = 0;
                 const int dispatched = pa_mainloop_iterate(loop, 0, &result);
@@ -563,17 +618,20 @@ int runHelper(int argc, char** argv) {
     recorder.listOnly = args.value(1) == "--sound-list";
     recorder.meterOnly = args.value(1) == "--sound-meter";
     if (recorder.meterOnly) {
-        if (args.size() != 5) return 2;
+        if (args.size() != 5 && args.size() != 6) return 2;
+        if (args.size() == 6) { if (args[5] != "0" && args[5] != "1") return 2; recorder.echoEnabled = args[5] == "1"; }
         recorder.mode = args[2]; recorder.output = args[3]; recorder.input = args[4];
         if (recorder.mode != "system" && recorder.mode != "microphone" && recorder.mode != "mix") return 2;
     } else if (!recorder.listOnly) {
-        if ((args.size() != 6 && args.size() != 9) || args[1] != "--sound-capture" || !privateDirectory(args[5])) return 2;
+        if ((args.size() != 6 && args.size() != 9 && args.size() != 10) || args[1] != "--sound-capture" || !privateDirectory(args[5])) return 2;
         recorder.mode = args[2]; recorder.output = args[3]; recorder.input = args[4]; recorder.directory = args[5];
         if (recorder.mode != "system" && recorder.mode != "microphone" && recorder.mode != "mix") return 2;
         QFile metadata(recorder.directory + "/session.json");
         if (!metadata.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return 2;
         QJsonObject meta{{"originUs", static_cast<double>(recorder.origin)}, {"mode", recorder.mode}};
-        if (args.size() == 9) {
+        if (args.size() == 10) { if (args[9] != "0" && args[9] != "1") return 2; recorder.echoEnabled = args[9] == "1"; }
+        meta["echoCancellationRequested"] = recorder.echoEnabled;
+        if (args.size() >= 9) {
             bool systemOK = false, micOK = false;
             const int systemGain = args[7].toInt(&systemOK), micGain = args[8].toInt(&micOK);
             if (!systemOK || !micOK || systemGain < -61 || systemGain > 24 || micGain < -61 || micGain > 24 ||
