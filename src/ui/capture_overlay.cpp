@@ -1313,13 +1313,18 @@ void InlineSelect::addItems(const QStringList& items) {
     for (const auto& item : m_items) {
         const auto found = m_labels.find(item);
         const auto label = found == m_labels.end() ? item : found->second;
-        auto* button = new QPushButton(m_button->fontMetrics().elidedText(label, Qt::ElideRight, 380), m_panel);
+        auto* button = new QPushButton(m_button->fontMetrics().elidedText(label, Qt::ElideRight, 380), m_panelLayout->parentWidget());
         button->setToolTip(label);
         button->setProperty("value", item);
         button->setCheckable(true);
         connect(button, &QPushButton::clicked, this, [this, item] { choose(item); });
         m_panelLayout->addWidget(button);
+        // A live refresh must make new items participate in sizeHint now,
+        // before the popup is sized; Qt otherwise defers their visibility.
+        button->show();
     }
+    m_panelLayout->invalidate();
+    m_panelLayout->activate();
 
     int width = 0;
     const auto metrics = m_button->fontMetrics();

@@ -64,10 +64,20 @@ int main(int argc, char** argv) {
     for (auto* option : overlay.findChildren<QPushButton*>())
         if (option->property("value").toString() == expectedOutput) discovered = option;
     require(discovered && discovered->isVisible(), "async discovery must show device in open popup");
-    auto* popup = discovered->parentWidget();
-    require(popup->rect().contains(discovered->geometry()), "device option must fit its popup content");
+    auto* viewport = discovered->parentWidget()->parentWidget();
+    require(viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size())), "discovered device must fit visible scroll viewport, not just hidden content");
     QTest::mouseClick(discovered, Qt::LeftButton);
     require(button(overlay, "soundOutput")->toolTip().contains(expectedLabel), "discovered device selectable");
+    QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton);
+    QTest::qWait(400);
+    discovered = nullptr;
+    for (auto* option : overlay.findChildren<QPushButton*>())
+        if (option->property("value").toString() == expectedOutput) discovered = option;
+    require(discovered && discovered->isVisible(), "device survives repeated refresh");
+    viewport = discovered->parentWidget()->parentWidget();
+    require(viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size())), "reopening must not collapse popup to default row");
+    QTest::mouseClick(discovered, Qt::LeftButton);
+
     auto* sound = overlay.findChild<QWidget*>("soundOptions");
     require(sound && sound->isVisible(), "third row visible for video");
     require(button(overlay, "soundMode")->text().contains("Mix"), "initial mix selection");
