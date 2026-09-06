@@ -36,6 +36,7 @@ pkg_check_modules(GIO REQUIRED gio-2.0 gio-unix-2.0)
 pkg_check_modules(LUA REQUIRED lua)
 pkg_check_modules(PULSE REQUIRED IMPORTED_TARGET libpulse)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+pkg_check_modules(FFMPEG_MUX REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg DBus Network)
 find_package(LayerShellQt REQUIRED)
@@ -85,6 +86,7 @@ add_library(hyprcapture SHARED
   src/plugin/window_gpu_sender.cpp
   src/plugin/window_gpu_export.cpp
   src/plugin/recording.cpp
+  src/plugin/timestamped_rgba.cpp
   src/plugin/recording_state.cpp
   src/plugin/session_launcher.cpp
   src/plugin/timing.cpp
@@ -99,6 +101,7 @@ add_library(hyprcapture SHARED
 target_include_directories(hyprcapture BEFORE PRIVATE src ${HYPRLAND_DERIVED_INCLUDE_DIRS} ${LUA_INCLUDE_DIRS})
 target_link_directories(hyprcapture PRIVATE ${HYPR_DEPS_LIBRARY_DIRS} ${LUA_LIBRARY_DIRS})
 target_link_libraries(hyprcapture PRIVATE ${HYPR_DEPS_LIBRARIES} ${LUA_LIBRARIES} nlohmann_json::nlohmann_json)
+target_link_libraries(hyprcapture PRIVATE PkgConfig::FFMPEG_MUX)
 target_link_options(hyprcapture PRIVATE -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
 
 add_executable(hyprcapture-ui
@@ -206,6 +209,16 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-recording-codec-test PRIVATE src)
   target_compile_options(hyprcapture-recording-codec-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-recording-codec-test COMMAND hyprcapture-recording-codec-test)
+
+  add_executable(hyprcapture-timestamped-rgba-fixture tests/timestamped_rgba_fixture.cpp src/plugin/timestamped_rgba.cpp)
+  target_include_directories(hyprcapture-timestamped-rgba-fixture PRIVATE src)
+  target_link_libraries(hyprcapture-timestamped-rgba-fixture PRIVATE PkgConfig::FFMPEG_MUX)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME hyprcapture-recording-timestamps-test COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_timestamps_test.py
+      $<TARGET_FILE:hyprcapture-timestamped-rgba-fixture> $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(hyprcapture-recording-timestamps-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
+  endif()
 
   add_executable(hyprcapture-rgba-transform-test
     tests/rgba_transform_test.cpp

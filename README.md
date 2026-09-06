@@ -47,6 +47,7 @@ https://github.com/user-attachments/assets/2c986639-7a3d-44ee-9f33-1b9b79ad9f1d
 - PipeWire WebRTC AEC module (`aec/libspa-aec-webrtc`) for microphone echo cancellation
 - libpulse development headers (`libpulse` on Arch, `libpulse-dev` on Debian/Ubuntu)
 - FFmpeg (including `ffprobe`, AAC and Opus encoders) for recording output
+- FFmpeg development libraries `libavformat`, `libavcodec`, and `libavutil` for timestamped RGBA transport (`ffmpeg` on Arch; `libavformat-dev libavcodec-dev libavutil-dev` on Debian/Ubuntu)
 - PulseAudio or PipeWire with its PulseAudio compatibility service for sound recording
 - `wl-clipboard` for persistent Wayland clipboard ownership
 
@@ -466,6 +467,8 @@ hl.config({
 ```
 
 `auto` prefers H.264 for canvases up to 4096 pixels in both dimensions and HEVC for larger compositor recordings. For example, a 5204×3356 window tries HEVC NVENC/VAAPI first. All hardware candidates are probed at the actual output dimensions; if the preferred family fails, the other hardware family is tried before software H.264. Selecting `h264` or `h265` explicitly keeps that codec family, including its software fallback. For alpha-preserving window recordings, use `webm`/VP9, `mkv`/FFV1, APNG, or WebP; `mp4` is blocked by the overlay when `window_background = "transparent"`. MOV/HEVC alpha exists in Apple's ecosystem, but this Linux FFmpeg path does not currently encode that alpha profile, so transparent MOV is also blocked. WebP animation uses `libwebp_anim` in lossy mode at quality 75.
+
+Normal compositor video recordings carry the captured frame’s monotonic timestamp through a NUT RGBA stream to FFmpeg. A slow encoder skips capture opportunities instead of accumulating repeated frames; elapsed time remains correct and audio uses the same first-frame clock. At stop, at most one terminal sample holds the last picture through the recording end. GIF, APNG intermediates, and WebP retain their existing animation timing.
 
 The compositor recording path uses synchronous compositor readback. To avoid making Hyprland sluggish, window recordings are capped by `record_window_fps_limit` until the GPU-only encoder path lands. GIF, APNG, and WebP use the same compositor path for fullscreen and region captures, so keep area and FPS modest. For visible on-screen windows where 60 fps matters more than offscreen/occlusion-safe capture, set `record_window_backend = "gsr-visible"` and use a normal video format.
 

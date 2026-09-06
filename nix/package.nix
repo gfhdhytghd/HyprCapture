@@ -24,6 +24,7 @@ hyprlandPlugins.mkHyprlandPlugin {
   ];
 
   buildInputs = [
+    ffmpeg
     glib
     kdePackages.layer-shell-qt
     kdePackages.qtbase

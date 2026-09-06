@@ -6,6 +6,7 @@
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <optional>
@@ -28,6 +29,7 @@ struct RecordingFrame {
     std::vector<unsigned char> rgba;
     int                        width = 0;
     int                        height = 0;
+    std::int64_t               captureMonotonicUs = 0;
 };
 
 struct WindowStreamCaptureRequest {

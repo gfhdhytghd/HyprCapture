@@ -1,5 +1,6 @@
 #include "plugin/recording.hpp"
 #include "plugin/recording_codec.hpp"
+#include "plugin/timestamped_rgba.hpp"
 #include "plugin/audio_session.hpp"
 #include "shared/audio_timeline.hpp"
 #include "shared/audio_source.hpp"
@@ -74,6 +75,7 @@ struct RgbaColor {
 struct QueuedEncoderFrame {
     std::shared_ptr<const std::vector<unsigned char>> pixels;
     int                                               repeats = 1;
+    std::int64_t                                      ptsUs = 0;
 };
 
 struct PipeFds {
@@ -807,7 +809,8 @@ class RawVideoEncoder {
                     std::string           codec,
                     std::string           preset,
                     bool                  preserveAlpha,
-                    std::size_t           maxQueuedFrames)
+                    std::size_t           maxQueuedFrames,
+                    bool                  timestamped)
         : m_outputPath(std::move(outputPath)),
           m_width(width),
           m_height(height),
@@ -816,7 +819,8 @@ class RawVideoEncoder {
           m_codec(std::move(codec)),
           m_preset(std::move(preset)),
           m_preserveAlpha(preserveAlpha),
-          m_maxQueuedFrames(std::max<std::size_t>(1, maxQueuedFrames)) {}
+          m_maxQueuedFrames(std::max<std::size_t>(1, maxQueuedFrames)),
+          m_timestamped(timestamped) {}
 
     ~RawVideoEncoder() {
         stopAndJoin(false);
@@ -849,7 +853,7 @@ class RawVideoEncoder {
             args.push_back(*vaapiDevice);
         }
 
-        const std::vector<std::string> inputArgs{
+        const auto inputArgs = m_timestamped ? timestampedRgbaInputArgs() : std::vector<std::string>{
             "-f",
             "rawvideo",
             "-pix_fmt",
@@ -949,6 +953,10 @@ class RawVideoEncoder {
             args.push_back("-pix_fmt");
             args.push_back("yuv420p");
         }
+        if (m_timestamped) {
+            const auto timestampArgs = timestampedRgbaOutputArgs();
+            args.insert(args.end(), timestampArgs.begin(), timestampArgs.end());
+        }
         if (m_format == "mp4" || m_format == "mov") {
             args.push_back("-movflags");
             args.push_back("+faststart");
@@ -992,15 +1000,23 @@ class RawVideoEncoder {
         return !m_stopping && m_frames.size() < m_maxQueuedFrames;
     }
 
-    bool enqueue(RecordingFrame&& frame, int repeats = 1) {
+    bool timestamped() const { return m_timestamped; }
+
+    bool enqueue(RecordingFrame&& frame, int repeats = 1, std::int64_t ptsUs = 0) {
         std::lock_guard lock(m_mutex);
         if (m_stopping || m_frames.size() >= m_maxQueuedFrames)
             return false;
 
+        // PBO warmup can deliver an already presented frame. Discard it rather
+        // than assigning a newer timestamp to old pixels.
+        if (m_timestamped && ptsUs <= m_lastPtsUs)
+            return true;
+        if (m_timestamped) repeats = 1;
+        m_lastPtsUs = ptsUs;
         auto pixels = std::make_shared<std::vector<unsigned char>>(std::move(frame.rgba));
         m_lastPixels = pixels;
         m_totalFrames += std::max(1, repeats);
-        m_frames.push_back(QueuedEncoderFrame{.pixels = std::move(pixels), .repeats = std::max(1, repeats)});
+        m_frames.push_back(QueuedEncoderFrame{.pixels = std::move(pixels), .repeats = std::max(1, repeats), .ptsUs = ptsUs});
         m_cv.notify_one();
         return true;
     }
@@ -1022,6 +1038,18 @@ class RawVideoEncoder {
         if (!m_stopping && m_lastPixels && count > m_totalFrames) {
             m_frames.push_back(QueuedEncoderFrame{.pixels = m_lastPixels, .repeats = static_cast<int>(count - m_totalFrames)});
             m_totalFrames = count;
+            m_cv.notify_one();
+        }
+    }
+
+    void finishAt(std::int64_t endUs) {
+        std::lock_guard lock(m_mutex);
+        const auto pts = recordingTailPts(m_lastPtsUs, endUs, m_fps);
+        // One terminal sample gives the final held picture its wall-clock end.
+        // This is bounded even after a long stall; never enqueue N duplicates.
+        if (!m_stopping && m_lastPixels && pts > m_lastPtsUs) {
+            m_frames.push_back(QueuedEncoderFrame{.pixels = m_lastPixels, .repeats = 1, .ptsUs = pts});
+            m_lastPtsUs = pts;
             m_cv.notify_one();
         }
     }
@@ -1077,8 +1105,9 @@ class RawVideoEncoder {
     }
 
     void workerMain() {
-        bool writeFailed = false;
-        while (true) {
+        TimestampedRgbaWriter timestampWriter;
+        bool writeFailed = m_timestamped && !timestampWriter.open(m_writeFd, m_width, m_height, m_fps);
+        while (!writeFailed) {
             QueuedEncoderFrame frame;
             {
                 std::unique_lock lock(m_mutex);
@@ -1095,18 +1124,26 @@ class RawVideoEncoder {
             if (!frame.pixels)
                 continue;
 
-            for (int i = 0; i < frame.repeats; ++i) {
-                if (!writeAll(*frame.pixels)) {
-                    writeFailed = true;
-                    break;
+            if (m_timestamped) {
+                ScopedTiming timing("record.encoder_write");
+                writeFailed = !timestampWriter.write(*frame.pixels, frame.ptsUs);
+            } else {
+                for (int i = 0; i < frame.repeats; ++i) {
+                    if (!writeAll(*frame.pixels)) {
+                        writeFailed = true;
+                        break;
+                    }
                 }
             }
             if (writeFailed)
                 break;
         }
 
+        if (m_timestamped && !writeFailed)
+            writeFailed = !timestampWriter.finish();
         closeFd(m_writeFd);
         waitForFfmpeg();
+        if (writeFailed) m_ffmpegSucceeded.store(false, std::memory_order_release);
         m_workerFinished.store(true, std::memory_order_release);
     }
 
@@ -1119,6 +1156,8 @@ class RawVideoEncoder {
     std::string           m_preset;
     bool                  m_preserveAlpha = false;
     std::size_t           m_maxQueuedFrames = MAX_FRAME_QUEUE;
+    bool                  m_timestamped = false;
+    std::int64_t          m_lastPtsUs = -1;
     int                   m_writeFd = -1;
     SupervisedProcess     m_process;
     mutable std::mutex    m_mutex;
@@ -1138,6 +1177,7 @@ struct ActiveRecording {
     SP<CEventLoopTimer>                      timer;
     Time::steady_dur                         interval{std::chrono::milliseconds(33)};
     Time::steady_tp                          startedAt;
+    std::int64_t                             captureOriginUs = 0;
     Time::steady_tp                          nextFrameAt;
     std::filesystem::path                    outputPath;
     std::filesystem::path                    encoderOutputPath;
@@ -1444,7 +1484,10 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
     recording->timer.reset();
     if (recording->encoder && drain && g_pEventLoopManager) {
         const auto count = std::max<std::int64_t>(1, (Time::steadyNow() - recording->startedAt) / recording->interval);
-        recording->encoder->padTo(count);
+        if (recording->encoder->timestamped())
+            recording->encoder->finishAt(audio::monotonicUs() - recording->captureOriginUs);
+        else
+            recording->encoder->padTo(count);
         recording->encoder->requestStop(true);
 
         g_finishingRawRecording = std::make_unique<FinishingRawRecording>();
@@ -1555,9 +1598,14 @@ void captureRecordingTick(SP<CEventLoopTimer> self) {
         bool enqueued = false;
         if (processed) {
             ScopedTiming timing("record.enqueue");
-            const auto targetFrames = static_cast<std::int64_t>((Time::steadyNow() - g_recording->startedAt) / g_recording->interval) + 1;
-            const int repeats = static_cast<int>(std::clamp<std::int64_t>(targetFrames - g_recording->encoder->frameCount(), 1, MAX_PENDING_FRAME_REPEATS));
-            enqueued = g_recording->encoder->enqueue(std::move(*frame), repeats);
+            if (g_recording->encoder->timestamped()) {
+                const auto ptsUs = frame->captureMonotonicUs - g_recording->captureOriginUs;
+                enqueued = g_recording->encoder->enqueue(std::move(*frame), 1, ptsUs);
+            } else {
+                const auto targetFrames = static_cast<std::int64_t>((Time::steadyNow() - g_recording->startedAt) / g_recording->interval) + 1;
+                const int repeats = static_cast<int>(std::clamp<std::int64_t>(targetFrames - g_recording->encoder->frameCount(), 1, MAX_PENDING_FRAME_REPEATS));
+                enqueued = g_recording->encoder->enqueue(std::move(*frame), repeats);
+            }
         }
 
         if (enqueued) {
@@ -1760,7 +1808,8 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
                                                      encoderCodec,
                                                      sanitizedPreset(request.defaults.recordPreset),
                                                      preserveAlpha,
-                                                     encoderQueueLimit);
+                                                     encoderQueueLimit,
+                                                     !isImageAnimationRecordFormat(format));
     if (const auto result = encoder->start(); !result.success)
         return result;
 
@@ -1768,11 +1817,13 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
     const int height = firstFrame->height;
     // The earlier frame only established encoder dimensions. Start the media
     // clock after encoder probing/spawn so startup work cannot shift sound.
-    firstFrameAt = Time::steadyNow();
-    g_audioFirstFrameUs = audio::monotonicUs();
+    resetRecordingCaptureState(); // Discard PBO samples from pre-encoder dimension probing.
     firstFrame = captureRecordingFrame(frameRequest);
-    if (!firstFrame || !makeEvenFrame(*firstFrame))
+    if (!firstFrame || !makeEvenFrame(*firstFrame) ||
+        !fitFrameIntoCanvasNearest(*firstFrame, width, height, recordingCanvasFill(frameRequest.defaults.windowBackground)))
         return {.success = false, .error = "failed to capture initial recording frame"};
+    g_audioFirstFrameUs = firstFrame->captureMonotonicUs;
+    firstFrameAt = Time::steadyNow() - std::chrono::microseconds(audio::monotonicUs() - g_audioFirstFrameUs);
     encoder->enqueue(std::move(*firstFrame));
 
     g_recording = std::make_unique<ActiveRecording>();
@@ -1780,6 +1831,7 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
     g_recording->encoder = std::move(encoder);
     g_recording->interval = frameIntervalForFps(fps);
     g_recording->startedAt = firstFrameAt;
+    g_recording->captureOriginUs = g_audioFirstFrameUs;
     g_recording->nextFrameAt = g_recording->startedAt + g_recording->interval;
     g_recording->outputPath = *outputPath;
     g_recording->encoderOutputPath = encoderOutputPath;

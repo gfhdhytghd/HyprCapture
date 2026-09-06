@@ -11,6 +11,7 @@
 #include "plugin/window_gpu_export.hpp"
 #include "plugin/window_gpu_sender.hpp"
 #include "shared/rgba_transform.hpp"
+#include "shared/audio_timeline.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
@@ -97,6 +98,7 @@ struct RgbaReadback {
     int                        cropTopY = 0;
     int                        width = 0;
     int                        height = 0;
+    std::int64_t               captureMonotonicUs = 0;
 };
 
 struct PixelBounds {
@@ -254,6 +256,7 @@ struct AsyncPboReadbackState {
     static constexpr int BUFFER_COUNT = 3;
 
     GLuint      buffers[BUFFER_COUNT] = {0, 0, 0};
+    std::int64_t captureTimesUs[BUFFER_COUNT] = {};
     std::size_t bytes = 0;
     int         width = 0;
     int         height = 0;
@@ -1215,7 +1218,7 @@ bool ensureAsyncPboReadback(AsyncPboReadbackState& state, int width, int height,
     return true;
 }
 
-bool issueAsyncPboReadback(AsyncPboReadbackState& state, const RgbaReadbackRegion& region, int framebufferHeight, bool directGlY) {
+bool issueAsyncPboReadback(AsyncPboReadbackState& state, const RgbaReadbackRegion& region, int framebufferHeight, bool directGlY, std::int64_t captureUs) {
     if (state.pending >= AsyncPboReadbackState::BUFFER_COUNT)
         return false;
 
@@ -1225,6 +1228,7 @@ bool issueAsyncPboReadback(AsyncPboReadbackState& state, const RgbaReadbackRegio
     const int readY = directGlY ? region.srcTopY : framebufferHeight - region.srcTopY - region.srcHeight;
     glReadPixels(region.srcX, readY, region.srcWidth, region.srcHeight, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    state.captureTimesUs[target] = captureUs;
     ++state.pending;
     state.next = (target + 1) % AsyncPboReadbackState::BUFFER_COUNT;
     return true;
@@ -1245,6 +1249,7 @@ bool mapPendingPboReadback(AsyncPboReadbackState& state, RgbaReadback& readback,
     std::copy(ptr, ptr + state.bytes, readback.pixels.data());
     glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    readback.captureMonotonicUs = state.captureTimesUs[source];
     --state.pending;
     return true;
 }
@@ -1254,14 +1259,16 @@ GLuint framebufferId(CFramebuffer& framebuffer) {
     return glFramebuffer ? glFramebuffer->getFBID() : 0;
 }
 
-RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int cropTopY, int cropWidth, int cropHeight, bool directGlY = false, bool asyncPbo = false) {
+RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int cropTopY, int cropWidth, int cropHeight, bool directGlY = false, bool asyncPbo = false, std::int64_t captureUs = 0) {
     const int framebufferWidth = positiveRoundedIntFromDouble(framebuffer.m_size.x);
     const int framebufferHeight = positiveRoundedIntFromDouble(framebuffer.m_size.y);
     RgbaReadbackRegion region;
     if (!prepareRgbaReadbackRegion(framebufferWidth, framebufferHeight, cropX, cropTopY, cropWidth, cropHeight, region))
         return {};
 
+    if (!captureUs) captureUs = audio::monotonicUs();
     RgbaReadback readback;
+    readback.captureMonotonicUs = captureUs;
     readback.cropX = region.outputCropX;
     readback.cropTopY = region.outputCropTopY;
     readback.width = region.outputWidth;
@@ -1285,12 +1292,12 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
 
         if (useAsyncPbo && ensureAsyncPboReadback(g_windowRecordingPboReadback, region.outputWidth, region.outputHeight, region.outputBytes)) {
             bool hasMappedFrame = mapPendingPboReadback(g_windowRecordingPboReadback, readback);
-            if (!issueAsyncPboReadback(g_windowRecordingPboReadback, region, framebufferHeight, directGlY)) {
+            if (!issueAsyncPboReadback(g_windowRecordingPboReadback, region, framebufferHeight, directGlY, captureUs)) {
                 hasMappedFrame = mapPendingPboReadback(g_windowRecordingPboReadback, readback, true);
                 if (!hasMappedFrame)
                     resetAsyncPboReadback(g_windowRecordingPboReadback);
                 else
-                    issueAsyncPboReadback(g_windowRecordingPboReadback, region, framebufferHeight, directGlY);
+                    issueAsyncPboReadback(g_windowRecordingPboReadback, region, framebufferHeight, directGlY, captureUs);
             }
             if (!hasMappedFrame) {
                 const int readY = directGlY ? region.srcTopY : framebufferHeight - region.srcTopY - region.srcHeight;
@@ -2203,7 +2210,8 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     }
 
     ScopedTiming timing("window.readback");
-    readback = readRgbaFramebufferRegion(*framebuffer, 0, 0, width, height, false, options.asyncReadback);
+    readback = readRgbaFramebufferRegion(*framebuffer, 0, 0, width, height, false, options.asyncReadback,
+        std::chrono::duration_cast<std::chrono::microseconds>(frozenTime.time_since_epoch()).count());
     if (readback.pixels.empty())
         return {};
 
@@ -3222,6 +3230,7 @@ std::optional<RecordingFrame> captureDesktopRegionRecordingFrame(const Rect& tar
         return std::nullopt;
 
     RecordingFrame frame;
+    frame.captureMonotonicUs = audio::monotonicUs();
     frame.width = outputWidth;
     frame.height = outputHeight;
     frame.rgba.assign(outputBytes, 0);
@@ -3354,6 +3363,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
     if (readback.pixels.empty())
         return std::nullopt;
 
+    const auto captureUs = readback.captureMonotonicUs;
     const bool cropShadow = request.defaults.windowShadow == DecorationPolicy::Remove;
     if (cropShadow) {
         const CBox visibleBox = renderedWindowGoalMainSurfaceBox(window);
@@ -3391,7 +3401,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
         compositeContentOverSolidBackground(readback, (*solidBackgroundRgb)[0], (*solidBackgroundRgb)[1], (*solidBackgroundRgb)[2]);
     }
 
-    return RecordingFrame{.rgba = std::move(readback.pixels), .width = readback.width, .height = readback.height};
+    return RecordingFrame{.rgba = std::move(readback.pixels), .width = readback.width, .height = readback.height, .captureMonotonicUs = captureUs};
 }
 
 } // namespace
