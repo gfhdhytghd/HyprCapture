@@ -2646,7 +2646,7 @@ void CaptureOverlay::refreshSoundDevices() {
 }
 
 void CaptureOverlay::updateSoundMeter() {
-    const bool wanted = isVisible() && m_overlayActive && m_soundMixer && m_soundMixer->isVisible() && m_defaults.recordAudio != hyprcapture::RecordAudio::Off;
+    const bool wanted = isVisible() && m_overlayActive && m_soundMixer && m_soundMixer->isVisible();
     const auto* target = selectedWindow();
     if (!target) target = hoveredWindow();
     const auto source = hyprcapture::audio::resolveOutput(m_defaults.recordAudioOutput, m_mode, target ? target->address.toStdString() : "");
@@ -2657,7 +2657,8 @@ void CaptureOverlay::updateSoundMeter() {
         if (windowSource) hint += (hint.isEmpty() ? "" : "\n") + QString("Captures the window application's audio; windows sharing a process may share audio.");
         m_soundOutput->setSelectionHint(hint);
     }
-    const QStringList args{"--sound-meter", qString(hyprcapture::toString(m_defaults.recordAudio)),
+    // Preview both channels independently of which channels will be recorded.
+    const QStringList args{"--sound-meter", "mix",
                            qString(source), qString(m_defaults.recordAudioInput)};
     const QString key = args.join(QChar(0x1f));
     if (m_meterProcess && (!wanted || key != m_meterKey)) {
@@ -2726,8 +2727,8 @@ void CaptureOverlay::updateRecordOptionsVisibility() {
     m_soundPreset->setEnabled(!imageAnimation);
     const bool manual = visible && !imageAnimation && m_defaults.recordAudioMix == "manual";
     m_soundMixer->setVisible(manual);
-    m_systemGain->setEnabled(m_defaults.recordAudio != hyprcapture::RecordAudio::Microphone);
-    m_micGain->setEnabled(m_defaults.recordAudio != hyprcapture::RecordAudio::System);
+    m_systemGain->setEnabled(true);
+    m_micGain->setEnabled(true);
     m_soundMode->setEnabled(!imageAnimation);
     m_soundMode->setToolTip(imageAnimation ? "Animation formats do not support sound" : "Recording sound");
     if (imageAnimation) m_soundMode->setCurrentText("Not supported");

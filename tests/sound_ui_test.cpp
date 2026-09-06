@@ -110,11 +110,19 @@ int main(int argc, char** argv) {
     choose(overlay, "soundMode", "off");
     choose(overlay, "soundPreset", "manual");
     require(overlay.findChild<QWidget*>("soundMixer")->isVisible(), "manual fourth row visible even with Sound off");
-    QTest::qWait(150);
+    QTest::qWait(300);
+    QProcess* preview = nullptr;
     for (auto* process : overlay.findChildren<QProcess*>())
-        require(process->arguments().value(0) != "--sound-meter" || process->state() == QProcess::NotRunning, "Sound off does not start microphone or system capture");
+        if (process->arguments().value(0) == "--sound-meter") preview = process;
+    require(preview && preview->state() == QProcess::Running && preview->arguments().value(1) == "mix", "Sound off still previews both channels");
+    if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND"))
+        for (const char* name : {"soundMeter", "micMeter"})
+            require(std::abs(overlay.findChild<QWidget*>(name)->property("postGainPeak").toDouble() - .1) < .0001, "Off preview receives live levels");
     require(button(overlay, "soundInput")->isVisible() && button(overlay, "soundOutput")->isVisible(), "off keeps all sound options visible");
     choose(overlay, "soundMode", "microphone");
+    QTest::qWait(150);
+    require(preview->state() == QProcess::Running && preview->arguments().value(1) == "mix", "recording mode leaves preview running");
+    require(overlay.findChild<QSlider*>("soundGain")->isEnabled() && overlay.findChild<QSlider*>("micGain")->isEnabled(), "both preview gains stay adjustable");
     require(button(overlay, "soundInput")->isVisible() && button(overlay, "soundOutput")->isVisible(), "microphone keeps all devices visible");
     choose(overlay, "recordFormat", "gif");
     require(!button(overlay, "soundMode")->isEnabled(), "animations disable audio");
