@@ -1878,7 +1878,9 @@ void CaptureOverlay::buildToolbar() {
     auto* rootLayout = new QVBoxLayout(m_toolbar);
     rootLayout->setContentsMargins(10, 7, 10, 7);
     rootLayout->setSpacing(5);
-    rootLayout->setSizeConstraint(QLayout::SetFixedSize);
+    // relayoutToolbar() owns the screen-width clamp; asynchronous label changes
+    // must not reset the toolbar to its unconstrained size hint.
+    rootLayout->setSizeConstraint(QLayout::SetNoConstraint);
 
     auto* layout = new QHBoxLayout();
     layout->setContentsMargins(0, 0, 0, 0);
@@ -2116,6 +2118,7 @@ void CaptureOverlay::buildToolbar() {
     m_aecOptions->setObjectName("aecOptions");
     auto* aecLayout = new QHBoxLayout(m_aecOptions);
     aecLayout->setContentsMargins(0,0,0,0); aecLayout->setSpacing(4);
+    aecLayout->addStretch();
     m_echoCancellation = new InlineSelect(this, m_aecOptions);
     m_echoCancellation->setObjectName("echoCancellation");
     m_echoCancellation->setPrefix("AEC"); m_echoCancellation->setCompactWidth(110);
@@ -2141,8 +2144,10 @@ void CaptureOverlay::buildToolbar() {
     retest->setToolTip("Download missing models and retest this computer without microphone capture");
     connect(retest,&QPushButton::clicked,this,[this]{refreshAecStatus(true);});aecLayout->addWidget(retest);
     m_aecStatus = new QLabel("AEC · checking",m_aecOptions);m_aecStatus->setObjectName("aecStatus");
-    m_aecStatus->setMinimumWidth(0);m_aecStatus->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);
-    aecLayout->addWidget(m_aecStatus,1);rootLayout->addWidget(m_aecOptions);
+    m_aecStatus->setMinimumWidth(1);m_aecStatus->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Preferred);
+    aecLayout->addWidget(m_aecStatus);
+    aecLayout->addStretch();
+    rootLayout->addWidget(m_aecOptions, 0, Qt::AlignHCenter);
     QTimer::singleShot(0,this,[this]{refreshAecStatus();});
     m_soundMixer = new QWidget(m_toolbar);
     m_soundMixer->setObjectName("soundMixer");
@@ -2167,7 +2172,7 @@ void CaptureOverlay::buildToolbar() {
     };
     channel("Sound", m_systemGain, m_systemMeter, m_defaults.recordAudioSystemGain);
     channel("Mic", m_micGain, m_micMeter, m_defaults.recordAudioMicGain);
-    rootLayout->addWidget(m_soundMixer);
+    rootLayout->addWidget(m_soundMixer, 0, Qt::AlignHCenter);
     auto* meterLifecycle = new QTimer(this);
     connect(meterLifecycle, &QTimer::timeout, this, &CaptureOverlay::updateSoundMeter);
     meterLifecycle->start(100);
