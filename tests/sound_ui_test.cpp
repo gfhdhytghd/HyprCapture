@@ -108,6 +108,11 @@ int main(int argc, char** argv) {
     require(button(overlay, "soundMode")->text().contains("Mix"), "initial mix selection");
     require(button(overlay, "soundInput")->toolTip().contains("very-long"), "full device tooltip");
     choose(overlay, "soundMode", "off");
+    choose(overlay, "soundPreset", "manual");
+    require(overlay.findChild<QWidget*>("soundMixer")->isVisible(), "manual fourth row visible even with Sound off");
+    QTest::qWait(150);
+    for (auto* process : overlay.findChildren<QProcess*>())
+        require(process->arguments().value(0) != "--sound-meter" || process->state() == QProcess::NotRunning, "Sound off does not start microphone or system capture");
     require(button(overlay, "soundInput")->isVisible() && button(overlay, "soundOutput")->isVisible(), "off keeps all sound options visible");
     choose(overlay, "soundMode", "microphone");
     require(button(overlay, "soundInput")->isVisible() && button(overlay, "soundOutput")->isVisible(), "microphone keeps all devices visible");

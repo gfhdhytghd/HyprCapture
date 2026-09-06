@@ -2646,7 +2646,7 @@ void CaptureOverlay::refreshSoundDevices() {
 }
 
 void CaptureOverlay::updateSoundMeter() {
-    const bool wanted = isVisible() && m_overlayActive && m_soundMixer && m_soundMixer->isVisible();
+    const bool wanted = isVisible() && m_overlayActive && m_soundMixer && m_soundMixer->isVisible() && m_defaults.recordAudio != hyprcapture::RecordAudio::Off;
     const auto* target = selectedWindow();
     if (!target) target = hoveredWindow();
     const auto source = hyprcapture::audio::resolveOutput(m_defaults.recordAudioOutput, m_mode, target ? target->address.toStdString() : "");
@@ -2724,7 +2724,7 @@ void CaptureOverlay::updateRecordOptionsVisibility() {
     m_soundOptions->setVisible(visible);
     updateSelect(m_soundPreset, visible);
     m_soundPreset->setEnabled(!imageAnimation);
-    const bool manual = visible && !imageAnimation && m_defaults.recordAudioMix == "manual" && m_defaults.recordAudio != hyprcapture::RecordAudio::Off;
+    const bool manual = visible && !imageAnimation && m_defaults.recordAudioMix == "manual";
     m_soundMixer->setVisible(manual);
     m_systemGain->setEnabled(m_defaults.recordAudio != hyprcapture::RecordAudio::Microphone);
     m_micGain->setEnabled(m_defaults.recordAudio != hyprcapture::RecordAudio::System);
