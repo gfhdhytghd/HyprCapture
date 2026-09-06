@@ -314,6 +314,7 @@ hl.config({
             save = true,
             clipboard = true,
             show_thumbnail = true,
+            remember_settings = false,
             allow_quick = false,
             confirm_before_capture = false,
             fusion_mode = false,
@@ -385,6 +386,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `window_shadow` | string | `keep` | Window shadow policy. Supports `keep` and `remove`. Transparent window recordings keep shadows and normalize the alpha falloff so the shadow fades out instead of encoding as a hard border. |
 | `notification_backend` | string | `hyprland` | Backend for screenshot notifications plus non-error recording status and warnings. `hyprland` uses Hyprland's overlay; `system` uses the desktop notification service through `notify-send` (libnotify), includes the saved screenshot as its image/icon hint, and falls back to the Hyprland overlay when the command cannot be launched. Errors always use the Hyprland overlay so missing external notification infrastructure cannot hide failures. |
 | `include_cursor` | bool | `false` | Include the cursor visible when the capture session starts in fullscreen, region, and window screenshots. The interactive overlay cursor is not baked into the output. |
+| `remember_settings` | bool | `false` | Restore the last interactive mode, fullscreen scope, window background, recording format/codec/FPS/duration/backend and sound settings. Saves on capture or cancel (including Esc) to `$XDG_CONFIG_HOME/hyprcapture/last-settings.ini` (default `~/.config/hyprcapture/last-settings.ini`). Quick capture and the stop-recording UI bypass this state. The open/record dispatcher still determines screenshot versus recording. Saved choices override configured defaults while enabled; disabling this option uses the configured defaults again. |
 | `allow_quick` | bool | `false` | Enable no-confirmation `hl.plugin.hyprcapture.quick()` calls. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |
 | `confirm_before_capture` | bool | `false` | For `hl.plugin.hyprcapture.open()`, require an explicit confirmation after choosing a fullscreen, region, or window target. Region targets can be moved or resized; window targets can be switched before confirming. `quick()` and direct `record()` calls keep their existing no-extra-confirmation behavior. |
 | `fusion_mode` | bool | `false` | Fuse region and window interactions in one overlay: drag anywhere, including from the desktop background, to capture a region; single-click a window to capture that window; or single-click the background to capture the clicked monitor. The toolbar keeps the fullscreen action and configuration controls; fullscreen multi-monitor scope is shown only when multiple monitors are present. |

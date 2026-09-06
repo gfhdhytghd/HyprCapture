@@ -141,6 +141,7 @@ void registerConfigValues() {
     addBoolConfig("clipboard", "Copy captures to the clipboard", true);
     addBoolConfig("show_thumbnail", "Show a result thumbnail after capture", true);
     addBoolConfig("include_cursor", "Include the cursor in captures", false);
+    addBoolConfig("remember_settings", "Restore the previous interactive capture settings", false);
     addBoolConfig("allow_quick", "Enable no-confirmation quick capture calls", false);
     addBoolConfig("confirm_before_capture", "Require explicit confirmation after target selection for normal open captures", false);
     addBoolConfig("fusion_mode", "Fuse region and window interactions in one overlay", false);
@@ -208,6 +209,7 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.showThumbnail = configBool("show_thumbnail", defaults.showThumbnail);
     defaults.screenshotNotification = configBool("screenshot_notification", defaults.screenshotNotification);
     defaults.includeCursor = configBool("include_cursor", defaults.includeCursor);
+    defaults.rememberSettings = configBool("remember_settings", defaults.rememberSettings);
     defaults.allowQuick = configBool("allow_quick", defaults.allowQuick);
     defaults.confirmBeforeCapture = configBool("confirm_before_capture", defaults.confirmBeforeCapture);
     defaults.fushionMode = configBool("fusion_mode", defaults.fushionMode) || configBool("fushion_mode", defaults.fushionMode);

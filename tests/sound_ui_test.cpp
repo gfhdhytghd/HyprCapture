@@ -1,3 +1,7 @@
+#include <QTemporaryDir>
+#include <QSettings>
+#include "ui/remembered_settings.hpp"
+#include "shared/protocol.hpp"
 #include <QTimer>
 #include <QSocketNotifier>
 #include <unistd.h>
@@ -57,6 +61,9 @@ int main(int argc, char** argv) {
     }
     if (argc > 1 && std::string_view(argv[1]).starts_with("--sound-"))
         return hyprcapture::audio::runHelper(argc, argv);
+    QTemporaryDir configDir;
+    require(configDir.isValid(), "temporary settings directory");
+    qputenv("XDG_CONFIG_HOME", configDir.path().toUtf8());
     QApplication app(argc, argv);
     QString expectedOutput = "test-output", expectedLabel = "Test speakers";
     if (qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
@@ -183,5 +190,65 @@ int main(int argc, char** argv) {
     for (auto* owner : {&second, &overlay})
         for (auto* process : owner->findChildren<QProcess*>())
             if (process->arguments().value(0) == "--sound-meter") require(process->state() == QProcess::NotRunning, "closing overlay stops live capture");
+    hyprcapture::CaptureDefaults remembered;
+    remembered.rememberSettings = true;
+    // Exercise the plugin session transport as well as a real widget edit + Esc.
+    hyprcapture::CaptureSession session;
+    session.id = "remember-settings-test";
+    session.defaults = remembered;
+    const auto encoded = hyprcapture::encodeSessionJson(session);
+    const auto decoded = hyprcapture::decodeSessionJson(encoded);
+    require(decoded && decoded->defaults.rememberSettings, "remember option survives session transport");
+    {
+        CaptureOverlay first({}, false, true, false, QString::fromStdString(encoded));
+        first.show();
+        QTest::qWait(50);
+        choose(first, "recordFormat", "mkv");
+        choose(first, "soundMode", "microphone");
+        // Like focus-mode monitor handoff: only the finishing peer saves.
+        CaptureOverlay peer(first, QRect(0, 0, 1280, 720), true);
+        peer.adoptInteractionState(first);
+        first.setOverlayActive(false);
+        peer.show();
+        QTest::keyClick(&peer, Qt::Key_Escape);
+        QTest::qWait(200);
+    }
+    {
+        CaptureOverlay reopened(remembered, false, true, false, "{}");
+        require(button(reopened, "recordFormat")->toolTip().contains("mkv"), "format survives close and reopen");
+        require(button(reopened, "soundMode")->toolTip().contains("Microphone"), "sound survives close and reopen");
+    }
+    {
+        auto disabled = remembered;
+        disabled.rememberSettings = false;
+        CaptureOverlay reopened(disabled, false, true, false, "{}");
+        require(button(reopened, "recordFormat")->toolTip().contains("mp4"), "disabled uses configured format");
+        require(hyprcapture::ui::saveSettings(disabled), "disabled save is a no-op");
+    }
+    {
+        // Do not process events: quick captures are scheduled for the next event loop.
+        CaptureOverlay quick(remembered, true, true, false, "{}");
+        require(button(quick, "recordFormat")->toolTip().contains("mp4"), "quick skips remembered settings");
+        QMetaObject::invokeMethod(&quick, "finishingStarted", Qt::DirectConnection);
+        CaptureOverlay stop(remembered, false, true, true, "{}");
+        QMetaObject::invokeMethod(&stop, "finishingStarted", Qt::DirectConnection);
+        auto check = remembered;
+        require(hyprcapture::ui::restoreSettings(check) && check.recordFormat == "mkv", "quick and stop do not overwrite settings");
+    }
+    {
+        QSettings settings(configDir.path() + "/hyprcapture/last-settings.ini", QSettings::IniFormat);
+        settings.setValue("recordFps", -20);
+        settings.setValue("recordCodec", "invalid-codec");
+        settings.setValue("recordAudioOutput", "window:0x123");
+        settings.setValue("saveDir", "/unexpected");
+        settings.sync();
+        auto check = remembered;
+        const auto configuredPath = check.saveDir;
+        require(hyprcapture::ui::restoreSettings(check), "read saved state");
+        require(check.recordFps == 30 && check.recordCodec == "auto", "invalid values fall back to configured defaults");
+        require(check.recordAudioOutput == "auto", "window targets are not restored");
+        require(check.saveDir == configuredPath, "unrelated configuration is not restored");
+    }
+    std::cout << "Remember settings: reopen, Esc, monitor handoff, disabled, quick, stop and invalid state passed\n";
     std::cout << "Sound UI: modes, animation restore, long names, narrow layout and monitor sync passed\n";
 }

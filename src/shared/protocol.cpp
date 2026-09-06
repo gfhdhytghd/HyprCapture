@@ -73,6 +73,7 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"screenshotNotification", defaults.screenshotNotification},
         {"includeCursor", defaults.includeCursor},
         {"allowQuick", defaults.allowQuick},
+        {"rememberSettings", defaults.rememberSettings},
         {"confirmBeforeCapture", defaults.confirmBeforeCapture},
         {"fushionMode", defaults.fushionMode},
         {"captureFullscreenClientsAsMonitor", defaults.captureFullscreenClientsAsMonitor},
@@ -277,6 +278,7 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
     return boolValue(obj, "save", defaults.save, false) && boolValue(obj, "clipboard", defaults.clipboard, false) &&
         boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
         boolValue(obj, "allowQuick", defaults.allowQuick, false) && boolValue(obj, "confirmBeforeCapture", defaults.confirmBeforeCapture, false) &&
+        boolValue(obj, "rememberSettings", defaults.rememberSettings, false) &&
         boolValue(obj, "fushionMode", defaults.fushionMode, false) &&
         boolValue(obj, "captureFullscreenClientsAsMonitor", defaults.captureFullscreenClientsAsMonitor, false) &&
         stringValue(obj, "fullscreenPreviewRounding", defaults.fullscreenPreviewRounding, MAX_METADATA_STRING_BYTES, false) &&

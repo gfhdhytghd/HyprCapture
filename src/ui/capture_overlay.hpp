@@ -239,6 +239,7 @@ class CaptureOverlay final : public QMainWindow {
     QPropertyAnimation* m_fadeAnimation = nullptr;
     InlineSelect* m_fullscreenScope = nullptr;
     InlineSelect* m_windowBackground = nullptr;
+    void saveRememberedSettings();
     void refreshSoundDevices();
     void updateSoundMeter();
     QWidget* m_soundMixer = nullptr;

@@ -10,6 +10,7 @@
 
 #include "ui/clipboard_utils.hpp"
 #include "ui/overlay_paint.hpp"
+#include "ui/remembered_settings.hpp"
 #include "ui/result_thumbnail.hpp"
 #include "ui/screenshot_notification.hpp"
 #include "ui/watermark.hpp"
@@ -1457,6 +1458,11 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     QElapsedTimer parseTimer;
     parseTimer.start();
     parseSessionJson(sessionJson);
+    if (!m_quick && !m_recordActive && hyprcapture::ui::restoreSettings(m_defaults)) {
+        m_mode = m_defaults.mode;
+        m_recordFormatAuto = false;
+        m_recordCodecAuto = false;
+    }
     m_confirmBeforeCapture = m_defaults.confirmBeforeCapture && !m_quick && !m_record && !m_recordActive;
     beginHymissionCaptureInputSuppression();
     traceTiming(QStringLiteral("parse_session"), parseTimer.elapsed());
@@ -1509,6 +1515,7 @@ void CaptureOverlay::initializeOverlay(const QRect& overlayGeometry) {
     QElapsedTimer toolbarTimer;
     toolbarTimer.start();
     buildToolbar();
+    connect(this, &CaptureOverlay::finishingStarted, this, &CaptureOverlay::saveRememberedSettings);
     traceTiming(QStringLiteral("build_toolbar"), toolbarTimer.elapsed());
 
     winId();
@@ -1531,7 +1538,35 @@ void CaptureOverlay::initializeOverlay(const QRect& overlayGeometry) {
         m_toolbar->setVisible(m_overlayActive);
 }
 
+void CaptureOverlay::saveRememberedSettings() {
+    if (!m_defaults.rememberSettings || m_quick || m_recordActive)
+        return;
+    auto snapshot = m_defaults;
+    snapshot.mode = m_mode;
+    snapshot.fullscreenScope = currentFullscreenScope();
+    snapshot.windowBackground = currentWindowBackground();
+    snapshot.recordFps = currentRecordFps();
+    snapshot.recordMaxSeconds = currentRecordMaxSeconds();
+    snapshot.recordWindowBackend = currentRecordBackend();
+    if (m_record) {
+        if (currentRecordBackground() == hyprcapture::WindowBackground::Transparent) {
+            snapshot.recordTransparentFormat = currentRecordFormat().toStdString();
+            snapshot.recordTransparentCodec = currentRecordCodec().toStdString();
+        } else {
+            snapshot.recordFormat = currentRecordFormat().toStdString();
+            snapshot.recordCodec = currentRecordCodec().toStdString();
+        }
+    }
+    if (m_systemGain) snapshot.recordAudioSystemGain = m_systemGain->value();
+    if (m_micGain) snapshot.recordAudioMicGain = m_micGain->value();
+    if (!hyprcapture::ui::saveSettings(snapshot))
+        qWarning("HyprCapture: could not save remembered settings");
+}
+
 CaptureOverlay::~CaptureOverlay() {
+    // QProcess destruction may emit finished after the toolbar children are gone.
+    for (auto* process : findChildren<QProcess*>())
+        process->disconnect(this);
     if (m_meterProcess) { m_meterProcess->disconnect(this); m_meterProcess->kill(); m_meterProcess->waitForFinished(1000); }
     endHymissionCaptureInputSuppression();
 }

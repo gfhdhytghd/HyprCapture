@@ -107,6 +107,7 @@ add_executable(hyprcapture-ui
   src/ui/main.cpp
   src/ui/clipboard_utils.cpp
   src/ui/capture_overlay.cpp
+  src/ui/remembered_settings.cpp
   src/ui/overlay_paint.cpp
   src/ui/result_thumbnail.cpp
   src/ui/screenshot_notification.cpp

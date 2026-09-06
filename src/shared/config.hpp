@@ -32,6 +32,7 @@ struct CaptureDefaults {
     bool             showThumbnail = true;
     bool             screenshotNotification = true;
     bool             includeCursor = false;
+    bool             rememberSettings = false;
     bool             allowQuick = false;
     bool             confirmBeforeCapture = false;
     bool             fushionMode = false;

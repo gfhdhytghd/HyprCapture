@@ -708,6 +708,7 @@ int main(int argc, char** argv) {
         {"thumbnail", "Show thumbnail.", "0|1", "1"},
         {"screenshot-notification", "Show a notification after a successful screenshot.", "0|1", "1"},
         {"include-cursor", "Include cursor.", "0|1", "0"},
+        {"remember-settings", "Restore previous interactive settings.", "0|1", "0"},
         {"confirm-before-capture", "Require explicit confirmation after target selection for normal open captures.", "0|1", "0"},
         {{"fushion-mode", "fusion-mode"}, "Enable fushion toolbar behavior.", "0|1", "0"},
         {"capture-fullscreen-clients-as-monitor", "Capture fullscreen clients as their monitor in window/fusion mode.", "0|1", "0"},
@@ -797,6 +798,7 @@ int main(int argc, char** argv) {
     defaults.showThumbnail = flagValue(parser, "thumbnail", defaults.showThumbnail);
     defaults.screenshotNotification = flagValue(parser, "screenshot-notification", defaults.screenshotNotification);
     defaults.includeCursor = flagValue(parser, "include-cursor", defaults.includeCursor);
+    defaults.rememberSettings = flagValue(parser, "remember-settings", defaults.rememberSettings);
     defaults.confirmBeforeCapture = flagValue(parser, "confirm-before-capture", defaults.confirmBeforeCapture);
     defaults.fushionMode = flagValue(parser, "fushion-mode", defaults.fushionMode);
     defaults.captureFullscreenClientsAsMonitor =
