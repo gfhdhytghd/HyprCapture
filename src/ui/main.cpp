@@ -21,6 +21,9 @@
 #include <QImageReader>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
+#include <QLocalSocket>
+#include <functional>
 #include <QPaintEvent>
 #include <QPainter>
 #include <QPixmap>
@@ -495,6 +498,94 @@ class ResultThumbnailCollection {
     std::vector<std::unique_ptr<ResultThumbnail>> m_thumbnails;
 };
 
+// Decode exactly the first video frame without blocking the UI event loop.
+void loadRecordingFirstFrame(const QString& path, QObject* context, std::function<void(const QPixmap&)> ready) {
+    const QString ffmpeg = hyprcapture::ui::trustedSystemProgram(QStringLiteral("ffmpeg"));
+    if (ffmpeg.isEmpty()) {
+        ready({});
+        return;
+    }
+    auto* process = new QProcess(context);
+    auto* timeout = new QTimer(process);
+    timeout->setSingleShot(true);
+    QObject::connect(timeout, &QTimer::timeout, process, [process] { process->kill(); });
+    process->setProcessEnvironment(hyprcapture::ui::trustedProcessEnvironment());
+    process->setProgram(ffmpeg);
+    process->setArguments({"-hide_banner", "-loglevel", "error", "-nostdin", "-i", path,
+                           "-map", "0:v:0", "-frames:v", "1", "-vf",
+                           "scale=720:480:force_original_aspect_ratio=decrease", "-f", "image2pipe", "-c:v", "png", "pipe:1"});
+    auto complete = [process, ready](bool success) {
+        QPixmap frame;
+        if (success)
+            frame.loadFromData(process->readAllStandardOutput(), "PNG");
+        if (!frame.isNull()) {
+            QPixmap canvas = recordingThumbnailPixmap(false);
+            QPainter painter(&canvas);
+            painter.setRenderHint(QPainter::SmoothPixmapTransform);
+            const QSizeF bounds = canvas.deviceIndependentSize();
+            const QSizeF size = QSizeF(frame.size()).scaled(bounds, Qt::KeepAspectRatio);
+            painter.drawPixmap(QRectF(QPointF((bounds.width() - size.width()) / 2, (bounds.height() - size.height()) / 2), size), frame, frame.rect());
+            painter.end();
+            frame = canvas;
+        }
+        ready(frame);
+        process->deleteLater();
+    };
+    QObject::connect(process, &QProcess::finished, context, [complete](int code, QProcess::ExitStatus status) {
+        complete(code == 0 && status == QProcess::NormalExit);
+    });
+    QObject::connect(process, &QProcess::errorOccurred, context, [complete](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart)
+            complete(false);
+    });
+    process->start();
+    timeout->start(15000);
+}
+
+int showRecordingPending(const hyprcapture::CaptureDefaults& defaults, const QString& path, const QString& socketPath) {
+    const QByteArray nativeSocket = QFile::encodeName(socketPath);
+    struct stat socketStat {};
+    if (!defaults.showThumbnail || !QFileInfo(socketPath).isAbsolute() ||
+        !trustedDirectory(QFileInfo(socketPath).absolutePath()) ||
+        lstat(nativeSocket.constData(), &socketStat) != 0 || !S_ISSOCK(socketStat.st_mode) || socketStat.st_uid != geteuid())
+        return 1;
+    ResultThumbnailCollection thumbnails(recordingThumbnailPixmap(false), path, {}, {}, 0, true,
+                                         thumbnailScreens(QString::fromStdString(defaults.thumbnailMonitor)));
+    thumbnails.setTranscodeProgress(-1.0);
+    QLocalSocket socket;
+    QTimer poll;
+    QTimer watchdog;
+    watchdog.setSingleShot(true);
+    QByteArray response;
+    QObject::connect(&watchdog, &QTimer::timeout, qApp, &QApplication::quit);
+    QObject::connect(&socket, &QLocalSocket::errorOccurred, qApp, [](QLocalSocket::LocalSocketError error) {
+        if (error != QLocalSocket::PeerClosedError)
+            qApp->quit();
+    });
+    QObject::connect(&socket, &QLocalSocket::readyRead, qApp, [&] {
+        response += socket.readAll();
+        if (!response.contains('\n'))
+            return;
+        const auto state = QJsonDocument::fromJson(response).object();
+        if (state.value("phase").toString() != "finalizing" || state.value("output").toString() != path) {
+            qApp->quit();
+            return;
+        }
+        thumbnails.show();
+        watchdog.start(3000);
+    });
+    QObject::connect(&poll, &QTimer::timeout, qApp, [&] {
+        if (socket.state() != QLocalSocket::UnconnectedState)
+            return;
+        response.clear();
+        socket.connectToServer(socketPath, QIODevice::ReadOnly);
+    });
+    poll.start(100);
+    watchdog.start(3000);
+    socket.connectToServer(socketPath, QIODevice::ReadOnly);
+    return qApp->exec();
+}
+
 int showRecordingResult(const hyprcapture::CaptureDefaults& defaults, const QString& path) {
     if (!isTrustedRecordingResultPath(path, defaults))
         return 1;
@@ -520,7 +611,14 @@ int showRecordingResult(const hyprcapture::CaptureDefaults& defaults, const QStr
                                          static_cast<int>(defaults.thumbnailTimeoutMs),
                                          true,
                                          thumbnailScreens(QString::fromStdString(defaults.thumbnailMonitor)));
+    thumbnails.setTranscodeProgress(-1.0);
     thumbnails.show();
+    QObject decoderContext;
+    loadRecordingFirstFrame(canonicalPath, &decoderContext, [&](const QPixmap& frame) {
+        if (!frame.isNull())
+            thumbnails.setImagePixmap(frame);
+        thumbnails.finishTranscodeProgress(true, static_cast<int>(defaults.thumbnailTimeoutMs));
+    });
     return qApp->exec();
 }
 
@@ -649,8 +747,10 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
                 hyprcapture::ui::copyFileUrlToClipboard(state->outputPath);
             if (state->thumbnails) {
                 state->thumbnails->setTranscodeProgress(1.0);
-                state->thumbnails->setImagePixmap(recordingThumbnailPixmap(true));
-                state->thumbnails->finishTranscodeProgress(true, static_cast<int>(state->defaults.thumbnailTimeoutMs));
+                loadRecordingFirstFrame(state->outputPath, qApp, [state](const QPixmap& frame) {
+                    state->thumbnails->setImagePixmap(frame.isNull() ? recordingThumbnailPixmap(true) : frame);
+                    state->thumbnails->finishTranscodeProgress(true, static_cast<int>(state->defaults.thumbnailTimeoutMs));
+                });
             } else {
                 qApp->quit();
             }
@@ -755,6 +855,7 @@ int main(int argc, char** argv) {
         {"thumbnail-target", "Path opened or deleted by a thumbnail preview.", "path"},
         {"record-countdown-request", "Show an input-transparent recording countdown for a private request file.", "path"},
         {"recording-result", "Handle a completed recording result.", "path"},
+        {"recording-pending-socket", "Watch recording finalization state.", "path"},
         {"recording-transcode-input", "Transcode an intermediate recording input.", "path"},
         {"recording-transcode-output", "Transcode output path.", "path"},
         {"recording-transcode-alpha", "Preserve alpha while transcoding.", "0|1", "0"},
@@ -859,6 +960,9 @@ int main(int argc, char** argv) {
                                       parser.value("recording-transcode-output"),
                                       flagValue(parser, "recording-transcode-alpha", false),
                                       boundedInt(parser.value("recording-transcode-duration-ms"), 1, 1, 24 * 60 * 60 * 1000));
+
+    if (hasArgument(argc, argv, "--recording-pending-socket"))
+        return showRecordingPending(defaults, parser.value("recording-result"), parser.value("recording-pending-socket"));
 
     if (hasArgument(argc, argv, "--recording-result"))
         return showRecordingResult(defaults, parser.value("recording-result"));

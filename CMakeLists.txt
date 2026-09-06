@@ -37,7 +37,7 @@ pkg_check_modules(LUA REQUIRED lua)
 pkg_check_modules(PULSE REQUIRED IMPORTED_TARGET libpulse)
 pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg DBus)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg DBus Network)
 find_package(LayerShellQt REQUIRED)
 find_package(nlohmann_json REQUIRED)
 
@@ -121,7 +121,7 @@ add_executable(hyprcapture-ui
 target_include_directories(hyprcapture-ui PRIVATE src)
 target_include_directories(hyprcapture-ui PRIVATE ${GIO_INCLUDE_DIRS})
 target_link_directories(hyprcapture-ui PRIVATE ${GIO_LIBRARY_DIRS})
-target_link_libraries(hyprcapture-ui PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface nlohmann_json::nlohmann_json)
+target_link_libraries(hyprcapture-ui PRIVATE Qt6::Network Qt6::Core Qt6::Gui Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface nlohmann_json::nlohmann_json)
 target_link_libraries(hyprcapture-ui PRIVATE ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
 target_link_options(hyprcapture-ui PRIVATE -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
 

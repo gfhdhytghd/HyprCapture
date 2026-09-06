@@ -1407,11 +1407,21 @@ void scheduleFinishingRawRecordingPoll() {
     g_pEventLoopManager->addTimer(g_finishingRawRecording->timer);
 }
 
+void showRecordingFinalizing(const CaptureDefaults& defaults, const std::filesystem::path& output) {
+    if (defaults.showThumbnail && g_recordingStateServer.running()) {
+        const auto result = launchRecordingResultHelper(defaults, output.string(), g_recordingStateServer.socketPath().string());
+        if (!result.success)
+            notifyRecording("recording progress helper failed: " + result.error, NotificationLevel::Error, 5000);
+    }
+}
+
 LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
     if (g_gsrRecording) {
         g_recordingStateServer.beginFinalizing();
         auto& recording = g_gsrRecording;
         if (!recording->stopRequested) {
+            if (drain)
+                showRecordingFinalizing(recording->defaults, recording->outputPath);
             recording->stopRequested = true;
             recording->showResult = drain;
             recording->finishMessage = "recording " + reason;
@@ -1427,6 +1437,8 @@ LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
     auto recording = std::move(g_recording);
     if (g_audio) g_audio->stopCapture();
     g_recordingStateServer.beginFinalizing();
+    if (drain)
+        showRecordingFinalizing(recording->request.defaults, recording->outputPath);
     if (recording->timer && g_pEventLoopManager)
         g_pEventLoopManager->removeTimer(recording->timer);
     recording->timer.reset();

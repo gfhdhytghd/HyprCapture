@@ -514,7 +514,7 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     return {.success = true};
 }
 
-LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const std::string& outputPath) {
+LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const std::string& outputPath, const std::string& pendingSocket) {
     if (outputPath.empty())
         return {.success = false, .error = "recording output path missing"};
 
@@ -526,6 +526,10 @@ LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const 
     args.push_back(*helper);
     args.push_back("--recording-result");
     args.push_back(outputPath);
+    if (!pendingSocket.empty()) {
+        args.push_back("--recording-pending-socket");
+        args.push_back(pendingSocket);
+    }
     args.push_back("--clipboard");
     args.push_back(boolArg(defaults.clipboard));
     args.push_back("--thumbnail");

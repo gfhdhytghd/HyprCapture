@@ -168,7 +168,7 @@ class TranscodeProgressOverlay final : public QWidget {
 
     void setProgress(double progress) {
         m_failed = false;
-        m_progress = std::clamp(progress, 0.0, 1.0);
+        m_progress = progress < 0.0 ? -1.0 : std::clamp(progress, 0.0, 1.0);
         setVisible(true);
         if (!m_spinTimer.isActive())
             m_spinTimer.start();
@@ -202,7 +202,7 @@ class TranscodeProgressOverlay final : public QWidget {
 
         if (!m_failed) {
             painter.setPen(QPen(QColor(59, 130, 246, 235), penWidth, Qt::SolidLine, Qt::RoundCap));
-            painter.drawArc(ring, 90 * 16, static_cast<int>(-360 * 16 * m_progress));
+            painter.drawArc(ring, 90 * 16, static_cast<int>(-360 * 16 * std::max(0.0, m_progress)));
             painter.setPen(QPen(QColor(147, 197, 253, 245), penWidth, Qt::SolidLine, Qt::RoundCap));
             painter.drawArc(ring, static_cast<int>((90.0 - m_rotation) * 16.0), -62 * 16);
         } else {
@@ -215,7 +215,7 @@ class TranscodeProgressOverlay final : public QWidget {
         font.setPointSize(std::clamp(side / 5, 12, 28));
         painter.setFont(font);
         painter.setPen(QColor(255, 255, 255, 245));
-        const QString text = m_failed ? QStringLiteral("Failed") : QStringLiteral("%1%").arg(static_cast<int>(std::round(m_progress * 100.0)));
+        const QString text = m_failed ? QStringLiteral("Failed") : (m_progress < 0.0 ? QStringLiteral("…") : QStringLiteral("%1%").arg(static_cast<int>(std::round(m_progress * 100.0))));
         painter.drawText(ring, Qt::AlignCenter, text);
     }
 
@@ -788,7 +788,7 @@ void ResultThumbnail::enterEvent(QEnterEvent*) {
 }
 
 void ResultThumbnail::leaveEvent(QEvent*) {
-    if (m_closeTimer.interval() > 0)
+    if (!m_transcodeProgressActive && m_closeTimer.interval() > 0)
         m_closeTimer.start();
 }
 
