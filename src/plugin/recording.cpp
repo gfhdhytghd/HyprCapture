@@ -1,4 +1,5 @@
 #include "plugin/recording.hpp"
+#include "plugin/recording_codec.hpp"
 #include "plugin/audio_session.hpp"
 #include "shared/audio_timeline.hpp"
 #include "shared/audio_source.hpp"
@@ -468,19 +469,6 @@ std::string sanitizedCodec(std::string codec) {
     return codec;
 }
 
-std::vector<std::string> concreteCodecCandidates(std::string_view requested) {
-    const auto codec = normalizedToken(requested);
-    if (codec.empty() || codec == "auto" || codec == "h264")
-        return {"h264_nvenc", "h264_vaapi", "libx264"};
-    if (codec == "h265" || codec == "hevc")
-        return {"hevc_nvenc", "hevc_vaapi", "libx265"};
-    if (codec == "av1")
-        return {"av1_nvenc", "av1_vaapi", "libsvtav1"};
-    if (codec == "vp9")
-        return {"vp9_vaapi", "libvpx-vp9"};
-    return {std::string(requested)};
-}
-
 bool probeHardwareEncoder(std::string_view codec, int width, int height) {
     if (!isHardwareCodec(codec))
         return true;
@@ -530,12 +518,7 @@ bool probeHardwareEncoder(std::string_view codec, int width, int height) {
 }
 
 std::string selectConcreteCodec(std::string_view requested, int width, int height) {
-    const auto candidates = concreteCodecCandidates(requested);
-    for (const auto& candidate : candidates) {
-        if (probeHardwareEncoder(candidate, width, height))
-            return candidate;
-    }
-    return candidates.empty() ? "libx264" : candidates.back();
+    return selectRecordingCodec(requested, width, height, probeHardwareEncoder);
 }
 
 std::string effectiveRecordingCodec(const RecordingFrameRequest& request, std::string codec) {

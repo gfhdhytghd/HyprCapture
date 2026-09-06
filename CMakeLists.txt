@@ -202,6 +202,11 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-recording-state-test PRIVATE nlohmann_json::nlohmann_json)
   add_test(NAME hyprcapture-recording-state-test COMMAND hyprcapture-recording-state-test)
 
+  add_executable(hyprcapture-recording-codec-test tests/recording_codec_test.cpp)
+  target_include_directories(hyprcapture-recording-codec-test PRIVATE src)
+  target_compile_options(hyprcapture-recording-codec-test PRIVATE -UNDEBUG)
+  add_test(NAME hyprcapture-recording-codec-test COMMAND hyprcapture-recording-codec-test)
+
   add_executable(hyprcapture-rgba-transform-test
     tests/rgba_transform_test.cpp
     src/shared/rgba_transform.cpp
