@@ -2607,8 +2607,10 @@ void CaptureOverlay::updateRecordOptionsVisibility() {
     updateSelect(m_recordDuration, imageAnimation);
     updateSelect(m_recordBackend, visible && !imageAnimation);
     updateSelect(m_soundMode, visible);
-    updateSelect(m_soundOutput, visible && !imageAnimation && (m_defaults.recordAudio == hyprcapture::RecordAudio::System || m_defaults.recordAudio == hyprcapture::RecordAudio::Mix));
-    updateSelect(m_soundInput, visible && !imageAnimation && (m_defaults.recordAudio == hyprcapture::RecordAudio::Microphone || m_defaults.recordAudio == hyprcapture::RecordAudio::Mix));
+    updateSelect(m_soundOutput, visible);
+    updateSelect(m_soundInput, visible);
+    m_soundOutput->setEnabled(!imageAnimation);
+    m_soundInput->setEnabled(!imageAnimation);
     m_soundOptions->setVisible(visible);
     m_soundMode->setEnabled(!imageAnimation);
     m_soundMode->setToolTip(imageAnimation ? "Animation formats do not support sound" : "Recording sound");
