@@ -6,6 +6,12 @@ using namespace hyprcapture;
 using namespace std::chrono_literals;
 
 int main() {
+    // A release wakes a missed deadline promptly without exceeding the frame
+    // budget when it arrives early; no backlog of missed frames is generated.
+    assert(hyprcapture::windowGpuReadyDelay(16'666, 5'000).count() == 11'666);
+    assert(hyprcapture::windowGpuReadyDelay(16'666, 16'666).count() == 1);
+    assert(hyprcapture::windowGpuReadyDelay(16'666, 40'000).count() == 1);
+
     // At 60Hz, work shorter than the period waits only for the remaining time.
     WindowStreamCadence shortWork;
     assert(scheduleNextWindowStreamTick(shortWork, 0, 5'000, 60) == 11'666us);

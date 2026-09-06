@@ -15,6 +15,12 @@ struct WindowStreamCadence {
     bool         initialized = false;
 };
 
+// Release may arrive after a missed timer deadline. Resume immediately then,
+// but never render earlier than the previous sample's frame-rate budget.
+inline std::chrono::microseconds windowGpuReadyDelay(std::int64_t nextDueUs, std::int64_t nowUs) {
+    return std::chrono::microseconds{std::max<std::int64_t>(1, nextDueUs - nowUs)};
+}
+
 inline std::chrono::microseconds scheduleNextWindowStreamTick(WindowStreamCadence& cadence,
                                                                 std::int64_t tickStartedUs,
                                                                 std::int64_t tickCompletedUs,

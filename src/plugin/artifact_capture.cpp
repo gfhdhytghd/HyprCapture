@@ -6,6 +6,7 @@
 #include "plugin/window_stream_sender.hpp"
 #include "plugin/window_stream_control.hpp"
 #include "plugin/window_stream_extent.hpp"
+#include "plugin/window_capture_geometry.hpp"
 #include "plugin/window_stream_cadence.hpp"
 #include "plugin/window_gpu_export.hpp"
 #include "plugin/window_gpu_sender.hpp"
@@ -195,16 +196,11 @@ struct RgbaReadbackRegion {
 struct WindowRenderOptions {
     CHyprColor clearColor{0.0, 0.0, 0.0, 0.0};
     SP<CTexture> backgroundTexture;
-    // Streaming supplies its own framebuffer and performs a fenced PBO readback
-    // after this common render stage. Recording deliberately keeps its existing
-    // framebuffer/readback path.
+    // All window consumers use the same tight local projection. Streaming
+    // supplies its own allocation and performs readback/export after rendering.
     SP<CFramebuffer>* framebufferOverride = nullptr;
-    int        framebufferWidthOverride = 0;
-    int        framebufferHeightOverride = 0;
-    bool       useExportProjection = false;
     bool       skipReadback = false;
     bool       asyncReadback = false;
-    bool       normalizeRecordingOrientation = false;
     bool       clipBackgroundToWindow = false;
     bool       postprocessAlpha = true;
 };
@@ -329,6 +325,14 @@ struct WindowStreamSession {
     SP<CFramebuffer>                 gpuFramebuffer;
     int                              gpuFramebufferWidth = 0;
     int                              gpuFramebufferHeight = 0;
+    WindowGpuExportCache             gpuExport;
+    std::int64_t                     gpuNextDueUs = 0;
+    struct NotificationSource {
+        wl_event_source* value = nullptr;
+        void reset() { if (value) wl_event_source_remove(std::exchange(value, nullptr)); }
+        ~NotificationSource() { reset(); }
+    } gpuNotification;
+    CHyprSignalListener              gpuTargetUnmapNotification;
 };
 
 std::unique_ptr<WindowStreamSession> g_windowStreamSession;
@@ -1660,11 +1664,6 @@ SP<CFramebuffer>& reusableWindowRecordingMaskFramebuffer() {
     return framebuffer;
 }
 
-SP<CFramebuffer>& reusableWindowRecordingFullMaskFramebuffer() {
-    static SP<CFramebuffer> framebuffer;
-    return framebuffer;
-}
-
 void renderTextureWithAlphaMatte(SP<CTexture> texture, const CBox& box, SP<CFramebuffer> matte) {
     if (!matte)
         return;
@@ -2022,6 +2021,57 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
     return writeRgbaFile(path, readback.pixels);
 }
 
+WindowCaptureGeometry windowCaptureGeometry(const CBox& bounds, const PHLMONITOR& monitor) {
+    return planWindowCaptureGeometry(bounds.x, bounds.y, bounds.w, bounds.h,
+                                     monitor->m_position.x, monitor->m_position.y,
+                                     monitor->m_scale <= 0 ? 1.0 : monitor->m_scale, static_cast<int>(monitor->m_transform));
+}
+
+// Hyprland 0.56's rounded-corner/border shaders consult monitor->m_transform
+// directly even in RPT_EXPORT. Normalize it only for this synchronous local
+// pass, then restore before returning to the compositor. No output state is
+// committed, no monitor dimensions or scale are changed, and no event is sent.
+class WindowLocalProjectionScope {
+  public:
+    explicit WindowLocalProjectionScope(const PHLMONITOR& monitor) : m_monitor(monitor), m_transform(monitor->m_transform),
+        m_fbSize(g_pHyprRenderer->m_renderData.fbSize), m_projection(g_pHyprRenderer->m_renderData.targetProjection),
+        m_type(g_pHyprRenderer->m_renderData.projectionType), m_transformDamage(g_pHyprRenderer->m_renderData.transformDamage),
+        m_noSimplify(g_pHyprRenderer->m_renderData.noSimplify) {
+        glGetIntegerv(GL_VIEWPORT, m_viewport.data());
+        m_monitor->m_transform = WL_OUTPUT_TRANSFORM_NORMAL;
+    }
+    void apply(int width, int height) {
+        g_pHyprRenderer->m_renderData.fbSize = Vector2D{width, height};
+        g_pHyprRenderer->setProjectionType(RPT_EXPORT);
+        g_pHyprRenderer->m_renderData.transformDamage = false;
+        // Pass simplification clips against the physical monitor's bounds.
+        // Export targets can be larger or have a different axis orientation.
+        g_pHyprRenderer->m_renderData.noSimplify = true;
+        g_pHyprOpenGL->setViewport(0, 0, width, height);
+    }
+    ~WindowLocalProjectionScope() {
+        m_monitor->m_transform = m_transform;
+        auto& data = g_pHyprRenderer->m_renderData;
+        data.fbSize = m_fbSize;
+        data.targetProjection = m_projection;
+        data.projectionType = m_type;
+        data.transformDamage = m_transformDamage;
+        data.noSimplify = m_noSimplify;
+        g_pHyprOpenGL->setViewport(m_viewport[0], m_viewport[1], m_viewport[2], m_viewport[3]);
+    }
+    WindowLocalProjectionScope(const WindowLocalProjectionScope&) = delete;
+    WindowLocalProjectionScope& operator=(const WindowLocalProjectionScope&) = delete;
+  private:
+    PHLMONITOR m_monitor;
+    wl_output_transform m_transform;
+    Vector2D m_fbSize;
+    Hyprutils::Math::Mat3x3 m_projection;
+    Render::eRenderProjectionType m_type;
+    bool m_transformDamage;
+    bool m_noSimplify;
+    std::array<GLint, 4> m_viewport{};
+};
+
 RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
                                           const PHLMONITOR& monitor,
                                           const Time::steady_tp& frozenTime,
@@ -2038,35 +2088,21 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     HymissionRawWindowRenderScope rawWindowRenderScope;
     WindowAnimationGoalOverride windowGoal(window);
     const CBox fullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
-    CBox sourceCropBox = fullBox.copy().translate(-monitor->m_position).scale(monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale).round();
-    width = positiveIntFromDouble(sourceCropBox.w);
-    height = positiveIntFromDouble(sourceCropBox.h);
-    const int monitorFramebufferWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
-    const int monitorFramebufferHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
-    const int framebufferWidth = options.framebufferWidthOverride > 0 ? options.framebufferWidthOverride : monitorFramebufferWidth;
-    const int framebufferHeight = options.framebufferHeightOverride > 0 ? options.framebufferHeightOverride : monitorFramebufferHeight;
-    const int monitorTransform = std::clamp(static_cast<int>(monitor->m_transform), 0, 7);
-    // Center in logical output coordinates, including rotated recordings.
-    const bool normalizeWindowArtifact = (trimToAlphaBounds || options.normalizeRecordingOrientation) && monitorTransform != 0;
-    const int renderCanvasWidth =
-        normalizeWindowArtifact ? positiveRoundedIntFromDouble(monitor->m_transformedSize.x) : framebufferWidth;
-    const int renderCanvasHeight =
-        normalizeWindowArtifact ? positiveRoundedIntFromDouble(monitor->m_transformedSize.y) : framebufferHeight;
+    const auto geometry = windowCaptureGeometry(fullBox, monitor);
+    if (!geometry.supported)
+        return {};
+    width = geometry.pixelWidth;
+    height = geometry.pixelHeight;
+    const int framebufferWidth = width;
+    const int framebufferHeight = height;
     std::size_t framebufferBytes = 0;
-    if (!checkedRgbaByteSize(framebufferWidth, framebufferHeight, framebufferBytes))
-        return {};
-    std::size_t cropBytes = 0;
-    if (!checkedRgbaByteSize(width, height, cropBytes))
-        return {};
-    if (budget && !budget->consume(std::max(framebufferBytes, cropBytes)))
+    if (!checkedRgbaByteSize(width, height, framebufferBytes) || (budget && !budget->consume(framebufferBytes)))
         return {};
 
     const double scale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
-    const int targetCropX = width < renderCanvasWidth ? (renderCanvasWidth - width) / 2 : 0;
-    const int targetCropY = height < renderCanvasHeight ? (renderCanvasHeight - height) / 2 : 0;
-    const Vector2D renderOffset = monitor->m_position + Vector2D{targetCropX / scale, targetCropY / scale} - fullBox.pos();
+    const Vector2D renderOffset = monitor->m_position - Vector2D{geometry.x, geometry.y};
     windowGoal.setPositionOffset(renderOffset);
-    CBox renderCropBox = fullBox.copy().translate(renderOffset).translate(-monitor->m_position).scale(scale).round();
+    const CBox renderCropBox{0, 0, width, height};
 
     const auto drmFormat = monitor->m_output && monitor->m_output->state ? monitor->m_output->state->state().drmFormat : DRM_FORMAT_ABGR8888;
     SP<CFramebuffer> localFramebuffer;
@@ -2074,6 +2110,8 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         ((!budget && !trimToAlphaBounds) ? reusableWindowRecordingFramebuffer() : localFramebuffer);
     if (!ensureFramebuffer(framebuffer, "hyprcapture-window", framebufferWidth, framebufferHeight, drmFormat))
         return {};
+    if (timingEnabled())
+        traceTiming(std::format("window.target.{}x{}", framebufferWidth, framebufferHeight));
 
     const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
@@ -2083,21 +2121,16 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         if (!targetFramebuffer)
             return false;
         ScopedTiming timing("window.render");
-        CRegion fakeDamage{0, 0, renderCanvasWidth, renderCanvasHeight};
+        CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
         g_pHyprOpenGL->makeEGLCurrent();
+        WindowLocalProjectionScope projection(monitor);
         g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
         targetFramebuffer->setImageDescription(monitor->workBufferImageDescription());
         if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
             g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
             return false;
         }
-        if (options.useExportProjection) {
-            // beginFullFakeRender sets viewport/projection from the monitor,
-            // even when its framebuffer is larger. The dedicated stream FBO
-            // needs an output projection and viewport matching its own bounds.
-            g_pHyprRenderer->setProjectionType(RPT_EXPORT);
-            g_pHyprOpenGL->setViewport(0, 0, framebufferWidth, framebufferHeight);
-        }
+        projection.apply(framebufferWidth, framebufferHeight);
 
         g_pHyprRenderer->m_bRenderingSnapshot = true;
         FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
@@ -2114,8 +2147,6 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
 
         g_pHyprRenderer->m_renderData.blockScreenShader = true;
         g_pHyprRenderer->endRender();
-        if (options.useExportProjection)
-            g_pHyprOpenGL->setViewport(0, 0, monitorFramebufferWidth, monitorFramebufferHeight);
         g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
         g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
         return true;
@@ -2126,10 +2157,6 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
 
     RgbaReadback readback;
     if (options.backgroundTexture && options.clipBackgroundToWindow) {
-        auto& fullMaskFramebuffer = reusableWindowRecordingFullMaskFramebuffer();
-        if (!ensureFramebuffer(fullMaskFramebuffer, "hyprcapture-window-full-mask", framebufferWidth, framebufferHeight, drmFormat))
-            return {};
-
         auto& matteFramebuffer = reusableWindowRecordingMaskFramebuffer();
         if (!ensureFramebuffer(matteFramebuffer, "hyprcapture-window-mask", width, height, drmFormat))
             return {};
@@ -2138,13 +2165,15 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             ScopedTiming timing("window.mask_render");
             CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
             g_pHyprOpenGL->makeEGLCurrent();
+            WindowLocalProjectionScope projection(monitor);
             g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-            fullMaskFramebuffer->setImageDescription(monitor->workBufferImageDescription());
-            if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, fullMaskFramebuffer)) {
+            matteFramebuffer->setImageDescription(monitor->workBufferImageDescription());
+            if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, matteFramebuffer)) {
                 g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
                 return false;
             }
 
+            projection.apply(framebufferWidth, framebufferHeight);
             g_pHyprRenderer->m_bRenderingSnapshot = true;
             FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
             g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
@@ -2159,8 +2188,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             return true;
         };
 
-        if (!renderMask() || !blitRenderPassFramebufferRegion(*fullMaskFramebuffer, *matteFramebuffer, cropX, cropY, width, height) ||
-            !renderIntoFramebuffer(framebuffer, matteFramebuffer))
+        if (!renderMask() || !renderIntoFramebuffer(framebuffer, matteFramebuffer))
             return {};
     } else if (!renderIntoFramebuffer(framebuffer)) {
         return {};
@@ -2170,27 +2198,16 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     // fenced PBO readback. This keeps recording behavior and its PBO state
     // independent from window-streaming state.
     if (options.skipReadback) {
-        artifactBox = CBox{fullBox.x, fullBox.y, width / scale, height / scale};
+        artifactBox = CBox{geometry.x, geometry.y, geometry.width, geometry.height};
         return {.pixels = {}, .cropX = cropX, .cropTopY = cropY, .width = width, .height = height};
     }
 
     ScopedTiming timing("window.readback");
-    if (!trimToAlphaBounds && normalizeWindowArtifact) {
-        const auto physicalCrop = logicalRgbaCropToFramebuffer({cropX, cropY, width, height}, framebufferWidth, framebufferHeight, monitorTransform);
-        readback = readRgbaFramebufferRegion(*framebuffer, physicalCrop.x, physicalCrop.y, physicalCrop.width, physicalCrop.height, false, options.asyncReadback);
-        readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), monitorTransform);
-        readback.cropX = cropX;
-        readback.cropTopY = cropY;
-    } else {
-        readback = trimToAlphaBounds ? readRgbaFramebufferRegion(*framebuffer, 0, 0, framebufferWidth, framebufferHeight) :
-                                       readRgbaFramebufferRegion(*framebuffer, cropX, cropY, width, height, false, options.asyncReadback);
-    }
+    readback = readRgbaFramebufferRegion(*framebuffer, 0, 0, width, height, false, options.asyncReadback);
     if (readback.pixels.empty())
         return {};
 
     if (trimToAlphaBounds) {
-        if (normalizeWindowArtifact)
-            readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), monitorTransform);
         if (readback.pixels.empty())
             return {};
 
@@ -2205,7 +2222,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
 
     width = readback.width;
     height = readback.height;
-    artifactBox = CBox{fullBox.x + (readback.cropX - cropX) / scale, fullBox.y + (readback.cropTopY - cropY) / scale, width / scale, height / scale};
+    artifactBox = CBox{geometry.x + readback.cropX / scale, geometry.y + readback.cropTopY / scale, width / scale, height / scale};
 
     if (options.postprocessAlpha) {
         ScopedTiming timing("window.alpha_postprocess");
@@ -3306,7 +3323,6 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
     CBox artifactBox;
     WindowRenderOptions renderOptions;
     renderOptions.asyncReadback = true;
-    renderOptions.normalizeRecordingOrientation = true;
     const bool solidAlpha = request.defaults.recordSolidAlpha &&
         (request.defaults.windowBackground == WindowBackground::White || request.defaults.windowBackground == WindowBackground::Black ||
          request.defaults.windowBackground == WindowBackground::FollowSystem);
@@ -3320,7 +3336,9 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
         const CBox fullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
         const auto captureBackground = [&]() {
             ScopedTiming timing("record.realbg_capture");
-            return captureWindowRealBackgroundRecordingFrame(window, monitor, frozenTime, toRect(fullBox));
+            const auto geometry = windowCaptureGeometry(fullBox, monitor);
+            return geometry.supported ? captureWindowRealBackgroundRecordingFrame(window, monitor, frozenTime,
+                {.x = geometry.x, .y = geometry.y, .width = geometry.width, .height = geometry.height}) : nullptr;
         };
         if (auto background = captureBackground()) {
             renderOptions.backgroundTexture = background->texture;
@@ -3691,15 +3709,14 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     // if the window moves before the receiver consumes the fence.
     const CBox sampledBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
     const CBox sampledVisibleBox = renderedWindowGoalMainSurfaceBox(window);
-    const double scale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
-    const CBox sampledPixels = sampledBox.copy().translate(-monitor->m_position).scale(scale).round();
-    const int sampledWidth = positiveIntFromDouble(sampledPixels.w);
-    const int sampledHeight = positiveIntFromDouble(sampledPixels.h);
+    const auto sampledGeometry = windowCaptureGeometry(sampledBox, monitor);
+    const int sampledWidth = sampledGeometry.pixelWidth;
+    const int sampledHeight = sampledGeometry.pixelHeight;
     const auto extentPlan = planWindowStreamFramebuffer(positiveRoundedIntFromDouble(monitor->m_pixelSize.x), positiveRoundedIntFromDouble(monitor->m_pixelSize.y),
                                                         sampledWidth, sampledHeight, static_cast<int>(monitor->m_transform));
     if (sampledWidth <= 0 || sampledHeight <= 0 || !extentPlan.supported)
         return false;
-    const Rect sampledOutputGeometry{.x = sampledBox.x, .y = sampledBox.y, .width = sampledWidth / scale, .height = sampledHeight / scale};
+    const Rect sampledOutputGeometry{.x = sampledGeometry.x, .y = sampledGeometry.y, .width = sampledGeometry.width, .height = sampledGeometry.height};
 
     // Config and decoration values participate in the frame identity just as
     // much as its geometry.  Snapshot them before renderWindow(), which may
@@ -3737,6 +3754,7 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     if (session.gpuFramebuffer && (session.gpuFramebufferWidth != framebufferWidth || session.gpuFramebufferHeight != framebufferHeight)) {
         // Ready is the only state in which replacing the backing allocation is
         // safe.  Busy was handled above; Retired stops the whole session.
+        session.gpuExport.reset();
         session.gpuFramebuffer.reset();
         session.gpuFramebufferWidth = 0;
         session.gpuFramebufferHeight = 0;
@@ -3744,11 +3762,6 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
 
     WindowRenderOptions renderOptions;
     renderOptions.framebufferOverride = &session.gpuFramebuffer;
-    if (extentPlan.dedicatedFramebuffer) {
-        renderOptions.framebufferWidthOverride = framebufferWidth;
-        renderOptions.framebufferHeightOverride = framebufferHeight;
-        renderOptions.useExportProjection = true;
-    }
     renderOptions.skipReadback = true;
     const bool renderDecorations = request.defaults.fushionMode || request.defaults.windowBorder == DecorationPolicy::Keep ||
         request.defaults.windowShadow == DecorationPolicy::Keep;
@@ -3796,14 +3809,26 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     metadata.shadowEnabled = frozenShadowEnabled;
     metadata.shadow = frozenShadow;
 
-    auto packet = exportWindowGpuFrame(framebuffer, metadata);
+    const auto imageBuilds = session.gpuExport.imageBuilds();
+    auto packet = [&] {
+        ScopedTiming exportTiming("window.gpu.export");
+        return session.gpuExport.exportFrame(framebuffer, metadata);
+    }();
+    if (session.gpuExport.imageBuilds() != imageBuilds)
+        traceTiming("window.gpu.image_build");
     if (!packet)
         return false;
     // submit owns the descriptors only on success. A false/Ready result is a
     // permitted try-lock handoff drop: no descriptor reached the peer, so the
     // source allocation has not become externally owned and may be sampled on
     // a later tick. Any other false result is fatal and retires the session.
-    return session.gpuSender->submit(std::move(*packet)) || session.gpuSender->state() == WindowGpuSenderState::Ready;
+    const auto releasedUs = session.gpuSender->lastReleaseUs();
+    const bool submitted = session.gpuSender->submit(std::move(*packet));
+    if (submitted && releasedUs > 0 && timingEnabled()) {
+        const auto nowUs = std::chrono::duration_cast<std::chrono::microseconds>(Time::steadyNow().time_since_epoch()).count();
+        traceTiming("window.gpu.release_to_submit", nowUs - releasedUs);
+    }
+    return submitted || session.gpuSender->state() == WindowGpuSenderState::Ready;
 }
 
 std::optional<WindowStreamCapturedFrame> captureWindowStreamFrameImpl(const WindowStreamCaptureRequest& request,
@@ -3837,16 +3862,15 @@ std::optional<WindowStreamCapturedFrame> captureWindowStreamFrameImpl(const Wind
     // A later PBO mapping must only ever expose this immutable snapshot.
     const CBox sampledBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
     const CBox sampledVisibleBox = renderedWindowGoalMainSurfaceBox(window);
-    const double scale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
-    const CBox sampledPixels = sampledBox.copy().translate(-monitor->m_position).scale(scale).round();
-    const int sampledWidth = positiveIntFromDouble(sampledPixels.w);
-    const int sampledHeight = positiveIntFromDouble(sampledPixels.h);
+    const auto sampledGeometry = windowCaptureGeometry(sampledBox, monitor);
+    const int sampledWidth = sampledGeometry.pixelWidth;
+    const int sampledHeight = sampledGeometry.pixelHeight;
     const auto extentPlan = planWindowStreamFramebuffer(positiveRoundedIntFromDouble(monitor->m_pixelSize.x), positiveRoundedIntFromDouble(monitor->m_pixelSize.y),
                                                         sampledWidth, sampledHeight, static_cast<int>(monitor->m_transform));
     // The renderer rounds physical crop bounds. Publish the corresponding
     // logical extent, not an unrounded box that could describe different
     // pixels on a fractional-scale output.
-    const Rect sampledOutputGeometry{.x = sampledBox.x, .y = sampledBox.y, .width = sampledWidth / scale, .height = sampledHeight / scale};
+    const Rect sampledOutputGeometry{.x = sampledGeometry.x, .y = sampledGeometry.y, .width = sampledGeometry.width, .height = sampledGeometry.height};
     const Rect sampledVisibleGeometry = toRect(sampledVisibleBox);
     const Rect relativeVisibleGeometry{.x = sampledVisibleGeometry.x - sampledOutputGeometry.x,
                                        .y = sampledVisibleGeometry.y - sampledOutputGeometry.y,
@@ -3859,8 +3883,6 @@ std::optional<WindowStreamCapturedFrame> captureWindowStreamFrameImpl(const Wind
         return std::nullopt;
     }
     if (!extentPlan.supported) {
-        // An oversized transformed output has no verified complete local
-        // viewport in this renderer path; reject rather than silently crop.
         noteWindowStreamDiagnostic("unsupported stream extent");
         resetWindowStreamCapture();
         return std::nullopt;
@@ -3910,11 +3932,6 @@ std::optional<WindowStreamCapturedFrame> captureWindowStreamFrameImpl(const Wind
     CBox artifactBox;
     WindowRenderOptions renderOptions;
     renderOptions.framebufferOverride = &stream.framebuffer;
-    if (extentPlan.dedicatedFramebuffer) {
-        renderOptions.framebufferWidthOverride = extentPlan.framebufferWidth;
-        renderOptions.framebufferHeightOverride = extentPlan.framebufferHeight;
-        renderOptions.useExportProjection = true;
-    }
     renderOptions.skipReadback = true;
     const bool renderDecorations = request.defaults.fushionMode || request.defaults.windowBorder == DecorationPolicy::Keep ||
         request.defaults.windowShadow == DecorationPolicy::Keep;
@@ -4016,8 +4033,14 @@ void stopWindowStreamSession() {
         session->drainTimer.reset();
     if (session && session->sender)
         session->sender->stop();
+    if (session)
+        session->gpuNotification.reset();
     if (session && session->gpuSender)
         session->gpuSender.reset();
+    if (g_pHyprOpenGL)
+        g_pHyprOpenGL->makeEGLCurrent();
+    if (session)
+        session->gpuExport.reset();
     // A Retired sender can have receiver-owned DMA-BUF imports. Dropping this
     // compositor-side framebuffer is intentional; it is never reused after
     // an uncertain release or disconnect.
@@ -4070,16 +4093,17 @@ void captureWindowStreamTick(SP<CEventLoopTimer> self) {
         stopWindowStreamSession();
         return;
     }
-    const auto currentFullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
-    const double currentScale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
-    const auto currentPixels = currentFullBox.copy().translate(-monitor->m_position).scale(currentScale).round();
-    if (!planWindowStreamFramebuffer(positiveRoundedIntFromDouble(monitor->m_pixelSize.x), positiveRoundedIntFromDouble(monitor->m_pixelSize.y),
-                                     positiveIntFromDouble(currentPixels.w), positiveIntFromDouble(currentPixels.h), static_cast<int>(monitor->m_transform))
-             .supported) {
-        noteWindowStreamDiagnostic("unsupported extent before capture tick");
-        notifyUser("window stream stopped: oversized transformed output is unsupported", NotificationLevel::Error, 5000);
-        stopWindowStreamSession();
-        return;
+    if (session->transport == WindowStreamTransport::Gpu) {
+        const auto state = session->gpuSender->state();
+        if (state == WindowGpuSenderState::Busy || state == WindowGpuSenderState::Connecting) {
+            self->updateTimeout(std::nullopt);
+            return; // a release/retirement event wakes the main loop
+        }
+        const auto nowUs = std::chrono::duration_cast<std::chrono::microseconds>(tickStartedAt.time_since_epoch()).count();
+        if (nowUs < session->gpuNextDueUs) {
+            self->updateTimeout(windowGpuReadyDelay(session->gpuNextDueUs, nowUs));
+            return;
+        }
     }
     const Rect windowGeometry = toRect(renderedWindowBox(window, window->getFullWindowBoundingBox()));
     const Rect outputGeometry = monitorRect(monitor);
@@ -4117,7 +4141,23 @@ void captureWindowStreamTick(SP<CEventLoopTimer> self) {
     const auto toMicroseconds = [](const Time::steady_tp& time) {
         return std::chrono::duration_cast<std::chrono::microseconds>(time.time_since_epoch()).count();
     };
-    self->updateTimeout(scheduleNextWindowStreamTick(session->cadence, toMicroseconds(tickStartedAt), toMicroseconds(Time::steadyNow()), session->fps));
+    if (session->transport == WindowStreamTransport::Gpu) {
+        session->gpuNextDueUs = toMicroseconds(tickStartedAt) + 1'000'000 / std::clamp(session->fps, 1, 1000);
+        self->updateTimeout(windowGpuReadyDelay(session->gpuNextDueUs, toMicroseconds(Time::steadyNow())));
+    } else {
+        self->updateTimeout(scheduleNextWindowStreamTick(session->cadence, toMicroseconds(tickStartedAt), toMicroseconds(Time::steadyNow()), session->fps));
+    }
+}
+
+int onWindowGpuNotification(int, uint32_t, void* data) {
+    auto* session = static_cast<WindowStreamSession*>(data);
+    if (g_windowStreamSession.get() != session || !session->gpuSender || !session->timer)
+        return 0;
+    session->gpuSender->drainNotifications();
+    const auto nowUs = std::chrono::duration_cast<std::chrono::microseconds>(Time::steadyNow().time_since_epoch()).count();
+    const auto dueUs = session->gpuSender->state() == WindowGpuSenderState::Retired ? 0 : session->gpuNextDueUs;
+    session->timer->updateTimeout(windowGpuReadyDelay(dueUs, nowUs));
+    return 0;
 }
 
 } // namespace
@@ -4152,6 +4192,21 @@ LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
     session->transport = control->transport;
     if (control->transport == WindowStreamTransport::Gpu) {
         session->gpuSender = std::make_unique<WindowGpuSender>(control->socketPath);
+        if (session->gpuSender->notificationFd() < 0 || !g_pCompositor || !g_pCompositor->m_wlEventLoop)
+            return {.success = false, .error = "GPU window stream notification unavailable"};
+        session->gpuNotification.value = wl_event_loop_add_fd(g_pCompositor->m_wlEventLoop, session->gpuSender->notificationFd(),
+                                                             WL_EVENT_READABLE, onWindowGpuNotification, session.get());
+        if (!session->gpuNotification.value)
+            return {.success = false, .error = "GPU window stream notification registration failed"};
+        // A Busy GPU stream has no polling timer. Unmap must still schedule
+        // target validation without waiting for a peer's release timeout.
+        const auto notificationWindow = findWindowByAddress(control->windowAddress);
+        if (!notificationWindow)
+            return {.success = false, .error = "GPU window stream target disappeared"};
+        session->gpuTargetUnmapNotification = notificationWindow->m_events.unmap.listen([target = session.get()] {
+            if (target->timer)
+                target->timer->updateTimeout(std::chrono::microseconds(1));
+        });
     } else {
         session->sender = std::make_unique<WindowStreamSender>(WindowStreamSenderConfig{
             .socketPath = control->socketPath,

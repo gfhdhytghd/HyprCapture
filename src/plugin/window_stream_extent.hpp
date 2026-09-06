@@ -13,24 +13,13 @@ struct WindowStreamFramebufferPlan {
     bool supported = false;
 };
 
-// Plan physical stream bounds without any Hyprland/GL dependency. A rotated
-// output is retained on the established monitor-FBO path only while the full
-// window fits; an oversized rotated target is explicitly unsupported because
-// the current fake-render transform cannot prove a complete local viewport.
+// Compatibility adapter for stream consumers. The common window renderer
+// uses an upright, window-sized export projection on every output transform.
 inline WindowStreamFramebufferPlan planWindowStreamFramebuffer(int monitorWidth, int monitorHeight, int windowWidth, int windowHeight, int monitorTransform) {
-    if (monitorWidth <= 0 || monitorHeight <= 0 || windowWidth <= 0 || windowHeight <= 0)
+    if (monitorWidth <= 0 || monitorHeight <= 0 || windowWidth <= 0 || windowHeight <= 0 || monitorTransform < 0 || monitorTransform > 7)
         return {};
-    const bool oversized = windowWidth > monitorWidth || windowHeight > monitorHeight;
-    if (oversized && monitorTransform != 0)
-        return {};
-    if (oversized)
-        return {.framebufferWidth = windowWidth, .framebufferHeight = windowHeight, .cropX = 0, .cropTopY = 0, .dedicatedFramebuffer = true, .supported = true};
-    return {.framebufferWidth = monitorWidth,
-            .framebufferHeight = monitorHeight,
-            .cropX = (monitorWidth - windowWidth) / 2,
-            .cropTopY = (monitorHeight - windowHeight) / 2,
-            .dedicatedFramebuffer = false,
-            .supported = true};
+    return {.framebufferWidth = windowWidth, .framebufferHeight = windowHeight,
+            .cropX = 0, .cropTopY = 0, .dedicatedFramebuffer = true, .supported = true};
 }
 
 } // namespace hyprcapture

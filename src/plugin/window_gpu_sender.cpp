@@ -5,6 +5,7 @@
 #include <cstring>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/eventfd.h>
 #include <sys/un.h>
 #include <unistd.h>
 #include <utility>
@@ -85,11 +86,22 @@ WindowGpuPacket& WindowGpuPacket::operator=(WindowGpuPacket&& other) noexcept {
     return *this;
 }
 WindowGpuSender::WindowGpuSender(std::string path)
-    : m_path(std::move(path)), m_worker([this](std::stop_token stop) { run(stop); }) {}
+    : m_path(std::move(path)), m_notificationFd(eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC)),
+      m_worker([this](std::stop_token stop) { run(stop); }) {}
 WindowGpuSender::~WindowGpuSender() {
     m_worker.request_stop();
     m_wake.notify_all();
     if (m_worker.joinable()) m_worker.join();
+    if (m_notificationFd >= 0) close(m_notificationFd);
+}
+void WindowGpuSender::notify() noexcept {
+    const std::uint64_t value = 1;
+    // EAGAIN means an earlier notification is already waiting in the loop.
+    while (write(m_notificationFd, &value, sizeof(value)) < 0 && errno == EINTR) {}
+}
+void WindowGpuSender::drainNotifications() noexcept {
+    std::uint64_t value;
+    while (read(m_notificationFd, &value, sizeof(value)) < 0 && errno == EINTR) {}
 }
 bool WindowGpuSender::submit(WindowGpuPacket&& packet) noexcept {
     gpuwire::Frame metadata;
@@ -108,9 +120,13 @@ bool WindowGpuSender::submit(WindowGpuPacket&& packet) noexcept {
 }
 void WindowGpuSender::run(std::stop_token stop) {
     struct Retire {
-        std::atomic<WindowGpuSenderState>& state;
-        ~Retire() { state.store(WindowGpuSenderState::Retired, std::memory_order_release); }
-    } retire{m_state};
+        WindowGpuSender& sender;
+        ~Retire() {
+            sender.m_state.store(WindowGpuSenderState::Retired, std::memory_order_release);
+            sender.notify();
+        }
+    } retire{*this};
+    if (m_notificationFd < 0) return;
     sockaddr_un address{};
     if (m_path.empty() || m_path.size() >= sizeof(address.sun_path) || m_path.find('\0') != std::string::npos) return;
     address.sun_family = AF_UNIX;
@@ -128,6 +144,7 @@ void WindowGpuSender::run(std::stop_token stop) {
     if (getsockopt(socket.value, SOL_SOCKET, SO_PEERCRED, &peer, &length) != 0 ||
         length != sizeof(peer) || peer.uid != getuid() || peer.pid <= 0) return;
     m_state.store(WindowGpuSenderState::Ready, std::memory_order_release);
+    notify();
     while (!stop.stop_requested()) {
         std::optional<WindowGpuPacket> frame;
         {
@@ -139,7 +156,9 @@ void WindowGpuSender::run(std::stop_token stop) {
         if (!waitSocket(socket.value, POLLIN, Clock::now() + std::chrono::milliseconds(500), stop) ||
             !releaseMatches(socket.value, *frame)) return;
         frame.reset();
+        m_lastReleaseUs.store(std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch()).count(), std::memory_order_release);
         m_state.store(WindowGpuSenderState::Ready, std::memory_order_release);
+        notify();
     }
 }
 } // namespace hyprcapture

@@ -5,6 +5,10 @@
 #include <GLES3/gl31.h>
 
 #include <array>
+#include <algorithm>
+#include <fcntl.h>
+#include <filesystem>
+#include <unistd.h>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -42,6 +46,7 @@ class EglScope {
     ~EglScope() {
         if (display_ != EGL_NO_DISPLAY) {
             eglMakeCurrent(display_, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+            if (otherContext_ != EGL_NO_CONTEXT) eglDestroyContext(display_, otherContext_);
             if (context_ != EGL_NO_CONTEXT) eglDestroyContext(display_, context_);
             if (surface_ != EGL_NO_SURFACE) eglDestroySurface(display_, surface_);
             eglTerminate(display_);
@@ -66,6 +71,7 @@ class EglScope {
             EGL_ALPHA_SIZE, 8, EGL_NONE};
         EGLConfig config = nullptr; EGLint count = 0;
         if (eglChooseConfig(display_, configAttrs, &config, 1, &count) != EGL_TRUE || count != 1) return false;
+        config_ = config;
         constexpr EGLint surfaceAttrs[] = {EGL_WIDTH, 2, EGL_HEIGHT, 2, EGL_NONE};
         surface_ = eglCreatePbufferSurface(display_, config, surfaceAttrs);
         constexpr EGLint contextAttrs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
@@ -74,7 +80,14 @@ class EglScope {
                eglMakeCurrent(display_, surface_, surface_, context_) == EGL_TRUE;
     }
     EGLDisplay display() const { return display_; }
+    bool switchContext() {
+        constexpr EGLint attrs[] = {EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE};
+        otherContext_ = eglCreateContext(display_, config_, EGL_NO_CONTEXT, attrs);
+        return otherContext_ != EGL_NO_CONTEXT && eglMakeCurrent(display_, surface_, surface_, otherContext_) == EGL_TRUE;
+    }
   private:
+    EGLConfig config_ = nullptr;
+    EGLContext otherContext_ = EGL_NO_CONTEXT;
     EGLDisplay display_ = EGL_NO_DISPLAY; EGLSurface surface_ = EGL_NO_SURFACE; EGLContext context_ = EGL_NO_CONTEXT;
     EGLint major_ = 0, minor_ = 0;
 };
@@ -124,7 +137,8 @@ int main() {
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &beforeDraw); glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &beforeRead); glGetIntegerv(GL_TEXTURE_BINDING_2D, &beforeTexture);
 
     auto metadata = validMetadata();
-    auto packet = hyprcapture::exportWindowGpuFrame(sourceFbo, metadata);
+    hyprcapture::WindowGpuExportCache cache;
+    auto packet = cache.exportFrame(sourceFbo, metadata);
     assert(packet && packet->imageFd >= 0 && packet->fenceFd >= 0);
     GLint afterDraw = 0, afterRead = 0, afterTexture = 0;
     glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &afterDraw); glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &afterRead); glGetIntegerv(GL_TEXTURE_BINDING_2D, &afterTexture);
@@ -132,7 +146,7 @@ int main() {
     Frame decoded{}; assert(hyprcapture::gpuwire::decode(packet->header.data(), packet->header.size(), decoded));
     assert(decoded.imageWidth == width && decoded.imageHeight == height && decoded.cropWidth == width && decoded.cropHeight == height);
     assert(decoded.fourcc == 0x34324241U && decoded.stride >= width * 4 && decoded.offset <= 0x7fffffffULL);
-    pollfd fence{packet->fenceFd, POLLIN, 0}; assert(poll(&fence, 1, 1000) >= 0);
+    pollfd fence{packet->fenceFd, POLLIN, 0}; assert(poll(&fence, 1, 1000) == 1 && (fence.revents & POLLIN));
 
     auto createImage = reinterpret_cast<PFNEGLCREATEIMAGEKHRPROC>(eglGetProcAddress("eglCreateImageKHR"));
     auto destroyImage = reinterpret_cast<PFNEGLDESTROYIMAGEKHRPROC>(eglGetProcAddress("eglDestroyImageKHR"));
@@ -149,9 +163,103 @@ int main() {
     assert(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE); std::vector<unsigned char> observed(pixels.size());
     glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, observed.data()); assert(glGetError() == GL_NO_ERROR && observed == pixels);
 
+    assert(cache.imageBuilds() == 1 && cache.capabilityQueries() == 1);
+    const auto waitFence = [](const WindowGpuPacket& p) {
+        assert((fcntl(p.imageFd, F_GETFD) & FD_CLOEXEC) && (fcntl(p.fenceFd, F_GETFD) & FD_CLOEXEC));
+        pollfd ready{p.fenceFd, POLLIN, 0};
+        assert(poll(&ready, 1, 1000) == 1 && (ready.revents & POLLIN));
+    };
+    // Reusing storage must publish changed pixels and alpha through the same
+    // import, not an EGL_IMAGE_PRESERVED snapshot of the first frame.
+    for (auto& value : pixels) value ^= 0x5a;
+    glBindTexture(GL_TEXTURE_2D, sourceTexture);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    metadata.sequence = 2;
+    auto second = cache.exportFrame(sourceFbo, metadata);
+    assert(second && second->imageFd != packet->imageFd && second->fenceFd != packet->fenceFd);
+    waitFence(*second);
+    glBindFramebuffer(GL_FRAMEBUFFER, importedFbo);
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, observed.data());
+    assert(glGetError() == GL_NO_ERROR && observed == pixels);
+    assert(cache.imageBuilds() == 1 && cache.capabilityQueries() == 1);
+    second.reset();
+
     auto invalid = hyprcapture::exportWindowGpuFrame(0, metadata); assert(!invalid);
-    auto invalidCrop = metadata; invalidCrop.cropWidth = 0; assert(!hyprcapture::exportWindowGpuFrame(sourceFbo, invalidCrop));
+    auto invalidCrop = metadata; invalidCrop.cropWidth = 0; assert(!cache.exportFrame(sourceFbo, invalidCrop));
     destroyImage(egl.display(), image); glDeleteFramebuffers(1, &importedFbo); glDeleteTextures(1, &importedTexture);
+    // Release old imports before replacing storage. reset is required even
+    // when the driver reuses the same texture/FBO name and dimensions.
+    packet.reset();
+    cache.reset();
+    glBindTexture(GL_TEXTURE_2D, sourceTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 128, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    metadata.logicalWidth = metadata.cropWidth = 128;
+    metadata.logicalHeight = metadata.cropHeight = 64;
+    auto resized = cache.exportFrame(sourceFbo, metadata);
+    assert(resized); waitFence(*resized);
+    assert(hyprcapture::gpuwire::decode(resized->header.data(), resized->header.size(), decoded));
+    assert(decoded.imageWidth == 128 && decoded.imageHeight == 64 && cache.imageBuilds() == 2);
+    resized.reset();
+    cache.reset();
+    glBindTexture(GL_TEXTURE_2D, sourceTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 128, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    auto sameSizeReallocation = cache.exportFrame(sourceFbo, metadata);
+    assert(sameSizeReallocation); waitFence(*sameSizeReallocation);
+    assert(cache.imageBuilds() == 3 && cache.capabilityQueries() == 1);
+    sameSizeReallocation.reset();
+    cache.reset();
+    // The unchanged wire format forbids non-ABGR8888 images. Never retain a
+    // formerly valid export when backing storage changes to an opaque format.
+    glBindTexture(GL_TEXTURE_2D, sourceTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, 128, 64, 0, GL_RGB, GL_UNSIGNED_BYTE, nullptr);
+    assert(!cache.exportFrame(sourceFbo, metadata));
+    cache.reset();
+    glBindTexture(GL_TEXTURE_2D, sourceTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 128, 64, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    const auto openFdCount = [] {
+        return std::distance(std::filesystem::directory_iterator("/proc/self/fd"), std::filesystem::directory_iterator{});
+    };
+    // Isolated export microbenchmark: same texture/layout/fence handling, no
+    // compositor reload and no claims about end-to-end capture or encoding.
+    const auto measure = [&](bool reuse) {
+        std::vector<double> samples;
+        for (int i = 0; i < 120; ++i) {
+            ++metadata.sequence;
+            const auto start = std::chrono::steady_clock::now();
+            auto p = reuse ? cache.exportFrame(sourceFbo, metadata) : hyprcapture::exportWindowGpuFrame(sourceFbo, metadata);
+            const double us = std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now() - start).count();
+            if (!p) { std::fprintf(stderr, "export failed reuse=%d iteration=%d GL=%x EGL=%s\n", reuse, i, glGetError(), eglError()); std::abort(); }
+            waitFence(*p);
+            if (i >= 20) samples.push_back(us);
+        }
+        std::sort(samples.begin(), samples.end());
+        return std::array<double, 2>{samples[samples.size() / 2], samples[samples.size() * 95 / 100]};
+    };
+    const auto transientTiming = measure(false);
+    // Warm cached storage, then verify repeated packets close their duplicate
+    // image/fence FDs while retaining exactly the cache's own allocation.
+    { auto warm = cache.exportFrame(sourceFbo, metadata); assert(warm); waitFence(*warm); }
+    const auto beforeFdCount = openFdCount();
+    const auto cachedTiming = measure(true);
+    assert(openFdCount() == beforeFdCount);
+    std::printf("EXPORT_MICROBENCH us transient_p50=%.3f transient_p95=%.3f cached_p50=%.3f cached_p95=%.3f\n",
+                transientTiming[0], transientTiming[1], cachedTiming[0], cachedTiming[1]);
+    assert(cache.imageBuilds() == 4 && cache.capabilityQueries() == 1);
+
+    cache.reset();
     glDeleteFramebuffers(1, &sourceFbo); glDeleteFramebuffers(1, &drawSentinel); glDeleteFramebuffers(1, &readSentinel); glDeleteTextures(1, &sourceTexture); glDeleteTextures(1, &sentinelTexture);
-    std::puts("PASS GPU export native-fence/layout/state-preservation/import RGBA exact");
+    assert(egl.switchContext());
+    GLuint otherTexture = 0, otherFbo = 0;
+    glGenTextures(1, &otherTexture); glBindTexture(GL_TEXTURE_2D, otherTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glGenFramebuffers(1, &otherFbo); glBindFramebuffer(GL_FRAMEBUFFER, otherFbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, otherTexture, 0);
+    metadata.logicalWidth = metadata.cropWidth = 2;
+    metadata.logicalHeight = metadata.cropHeight = 2;
+    auto contextFrame = cache.exportFrame(otherFbo, metadata);
+    assert(contextFrame); waitFence(*contextFrame);
+    assert(cache.capabilityQueries() == 2 && cache.imageBuilds() == 5);
+    contextFrame.reset(); cache.reset();
+    glDeleteFramebuffers(1, &otherFbo); glDeleteTextures(1, &otherTexture);
+    std::puts("PASS GPU export cache reuse/resize/format/native-fence/state/import RGBA exact");
 }

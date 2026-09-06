@@ -2,6 +2,8 @@
 #include "plugin/window_gpu_wire.hpp"
 
 #include <array>
+#include <atomic>
+#include <memory>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -30,9 +32,9 @@ struct Server {
     std::string path;
     ServerMode mode;
     std::thread thread;
-    bool received = false;
-    bool twoFds = false;
-    int frameCount = 0;
+    std::atomic<bool> received{false};
+    std::atomic<bool> twoFds{false};
+    std::atomic<int> frameCount{0};
 
     explicit Server(ServerMode m) : mode(m) {
         assert(mkdtemp(directory));
@@ -74,6 +76,15 @@ struct Server {
 };
 
 bool waitState(WindowGpuSender& sender, WindowGpuSenderState state, int ms=1200){for(int i=0;i<ms/5;i++){if(sender.state()==state)return true;std::this_thread::sleep_for(5ms);}return sender.state()==state;}
+void expectNotification(WindowGpuSender& sender) {
+    assert(sender.notificationFd() >= 0);
+    assert(fcntl(sender.notificationFd(), F_GETFD) & FD_CLOEXEC);
+    assert(fcntl(sender.notificationFd(), F_GETFL) & O_NONBLOCK);
+    pollfd fd{sender.notificationFd(), POLLIN, 0};
+    assert(poll(&fd, 1, 1000) == 1 && (fd.revents & POLLIN));
+    sender.drainNotifications();
+    assert(poll(&fd, 1, 0) == 0);
+}
 void expectState(WindowGpuSender& sender, WindowGpuSenderState state, const char* label) {
     if (!waitState(sender, state)) {
         std::fprintf(stderr, "state wait failed: %s got=%d want=%d\n", label,
@@ -89,13 +100,14 @@ void assertClosed(int fd){errno=0;assert(fcntl(fd,F_GETFD)==-1&&errno==EBADF);}
 int main(){
     { Server server(ServerMode::Ack); WindowGpuSender sender(server.path);
       expectState(sender, WindowGpuSenderState::Ready, "ack initial");
+      expectNotification(sender); assert(sender.lastReleaseUs() == 0);
       int a,b; auto p=packet(metadata(1,2),a,b); assert(sender.submit(std::move(p))); assert(sender.state()==WindowGpuSenderState::Busy);
       int c,d; auto second=packet(metadata(2,1),c,d); assert(!sender.submit(std::move(second))); second=WindowGpuPacket{}; assertClosed(c); assertClosed(d);
-      expectState(sender, WindowGpuSenderState::Ready, "ack first"); assertClosed(a); assertClosed(b);
+      expectState(sender, WindowGpuSenderState::Ready, "ack first"); expectNotification(sender); assert(sender.lastReleaseUs() > 0); assertClosed(a); assertClosed(b);
       int badImage,badFence; auto bad=packet(metadata(3,2),badImage,badFence); bad.header[116]=1; assert(!sender.submit(std::move(bad))); bad=WindowGpuPacket{}; assertClosed(badImage); assertClosed(badFence);
       int oldSeqImage,oldSeqFence; auto oldSeq=packet(metadata(1,1),oldSeqImage,oldSeqFence); assert(!sender.submit(std::move(oldSeq))); oldSeq=WindowGpuPacket{}; assertClosed(oldSeqImage); assertClosed(oldSeqFence);
       int oldEpochImage,oldEpochFence; auto oldEpoch=packet(metadata(3,1),oldEpochImage,oldEpochFence); assert(!sender.submit(std::move(oldEpoch))); oldEpoch=WindowGpuPacket{}; assertClosed(oldEpochImage); assertClosed(oldEpochFence);
-      int e,f; assert(sender.submit(packet(metadata(2,2),e,f))); if (!waitState(sender, WindowGpuSenderState::Ready)) { std::fprintf(stderr, "ack second diagnostic state=%d frames=%d received=%d two=%d\n", int(sender.state()), server.frameCount, int(server.received), int(server.twoFds)); std::abort(); } assert(server.received&&server.twoFds); }
+      int e,f; assert(sender.submit(packet(metadata(2,2),e,f))); if (!waitState(sender, WindowGpuSenderState::Ready)) { std::fprintf(stderr, "ack second diagnostic state=%d frames=%d received=%d two=%d\n", int(sender.state()), server.frameCount.load(), int(server.received), int(server.twoFds)); std::abort(); } assert(server.received&&server.twoFds); }
     { Server server(ServerMode::NoAck); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"noack initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"noack retire");assertClosed(a);assertClosed(b);int c,d;auto reuse=packet(metadata(2,1),c,d);assert(!sender.submit(std::move(reuse)));reuse=WindowGpuPacket{};assertClosed(c);assertClosed(d); }
     { Server server(ServerMode::AncillaryRelease); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"ancillary initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"ancillary retire");assertClosed(a);assertClosed(b); }
     { Server server(ServerMode::Disconnect); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"disconnect initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"disconnect retire");assertClosed(a);assertClosed(b); }
@@ -105,7 +117,20 @@ int main(){
         int image, fence;
         assert(sender.submit(packet(metadata(1, 1), image, fence)));
         expectState(sender, WindowGpuSenderState::Retired, "bad release retired");
+        expectNotification(sender);
         assertClosed(image); assertClosed(fence);
+    }
+    { Server server(ServerMode::NoAck);
+      auto sender = std::make_unique<WindowGpuSender>(server.path);
+      expectState(*sender, WindowGpuSenderState::Ready, "stop initial");
+      const int eventFd = sender->notificationFd();
+      int image, fence; assert(sender->submit(packet(metadata(1, 1), image, fence)));
+      for (int i = 0; i < 100 && !server.received.load(); ++i) std::this_thread::sleep_for(5ms);
+      assert(server.received.load());
+      const auto before = std::chrono::steady_clock::now();
+      sender.reset();
+      assert(std::chrono::steady_clock::now() - before < 100ms);
+      assertClosed(eventFd); assertClosed(image); assertClosed(fence);
     }
     std::puts("PASS window GPU sender bounded ACK/retire/FD ownership suite");
 }
