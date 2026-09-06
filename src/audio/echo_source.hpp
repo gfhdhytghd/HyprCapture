@@ -3,13 +3,13 @@
 #include <memory>
 
 namespace hyprcapture::audio {
-// Owns PipeWire's mature WebRTC echo-cancel module in this helper process.
-// monitor.mode observes existing playback; no applications are rerouted.
+// Owns the isolated DTLN worker. PipeWire monitor mode observes playback without
+// moving applications; a worker failure returns capture to the raw microphone.
 class EchoSource {
 public:
     EchoSource();
     ~EchoSource();
-    bool start(const QString& microphone, const QString& output, QString& error);
+    bool start(const QString& microphone, const QString& output, int model, const QString& backend, QString& error);
     void iterate();
     bool failed() const;
     QString name() const;

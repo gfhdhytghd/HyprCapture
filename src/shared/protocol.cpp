@@ -91,6 +91,7 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"recordTransparentFormat", boundedString(defaults.recordTransparentFormat, MAX_METADATA_STRING_BYTES)},
         {"recordAudio", toString(defaults.recordAudio)},
         {"recordAudioEchoCancellation", defaults.recordAudioEchoCancellation},
+        {"recordAudioEchoBackend", defaults.recordAudioEchoBackend},
         {"recordAudioMix", defaults.recordAudioMix},
         {"recordAudioSystemGain", defaults.recordAudioSystemGain},
         {"recordAudioMicGain", defaults.recordAudioMicGain},
@@ -248,7 +249,11 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
             return false;
         defaults.recordAudio = parseRecordAudio(value);
     }
-    if (!boolValue(obj, "recordAudioEchoCancellation", defaults.recordAudioEchoCancellation, false)) return false;
+    if (obj.contains("recordAudioEchoCancellation") && obj["recordAudioEchoCancellation"].is_boolean())
+        defaults.recordAudioEchoCancellation = obj["recordAudioEchoCancellation"].get<bool>() ? 1 : 0;
+    else if (!int64Value(obj, "recordAudioEchoCancellation", defaults.recordAudioEchoCancellation, -1, 1, false)) return false;
+    if (!stringValue(obj, "recordAudioEchoBackend", defaults.recordAudioEchoBackend, MAX_METADATA_STRING_BYTES, false) ||
+        (defaults.recordAudioEchoBackend != "cpu" && defaults.recordAudioEchoBackend != "npu")) return false;
     if (!stringValue(obj, "recordAudioMix", defaults.recordAudioMix, MAX_METADATA_STRING_BYTES, false) ||
         (defaults.recordAudioMix != "manual" && defaults.recordAudioMix != "auto-balance" && defaults.recordAudioMix != "voice-priority") ||
         !int64Value(obj, "recordAudioSystemGain", defaults.recordAudioSystemGain, -61, 24, false) ||

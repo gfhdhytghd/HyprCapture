@@ -1,5 +1,6 @@
 #include "audio/helper.hpp"
 #include "audio/echo_source.hpp"
+#include "audio/aec_policy.hpp"
 #include "shared/audio_timeline.hpp"
 #include "shared/trusted_path.hpp"
 #include <pulse/pulseaudio.h>
@@ -123,6 +124,9 @@ struct Recorder {
     QTimer meterTimer, applicationTimer, echoPoll;
     std::unique_ptr<EchoSource> echo;
     bool echoEnabled = false, echoStarting = false, echoActive = false;
+    int echoPolicy = 0, echoModel = 0;
+    QString echoBackend = "cpu";
+    uint32_t echoMicrophoneIndex = PA_INVALID_INDEX, echoOutputIndex = PA_INVALID_INDEX;
     QString originalMicrophone;
 
     QJsonArray windows;
@@ -247,7 +251,7 @@ struct Recorder {
         }
     }
     void echoStatus(const QString& state) {
-        const auto data = QJsonDocument(QJsonObject{{"aec", state}}).toJson(QJsonDocument::Compact) + '\n';
+        const auto data = QJsonDocument(QJsonObject{{"aec", state}, {"model", echoModel}, {"backend", echoBackend}}).toJson(QJsonDocument::Compact) + '\n';
         (void)!write(STDOUT_FILENO, data.constData(), data.size());
     }
     void fallbackEcho(const QString& reason) {
@@ -262,12 +266,32 @@ struct Recorder {
     }
     bool startEcho(const QString& microphone) {
         originalMicrophone = microphone;
+        const auto decision = aec::selection(echoPolicy, echoBackend);
+        echoModel = decision["model"].toInt();
+        if (!echoModel) {
+            auto status = decision; status["description"] = aec::description(decision, echoPolicy);
+            const auto bytes = QJsonDocument(status).toJson(QJsonDocument::Compact) + '\n';
+            (void)!write(STDOUT_FILENO, bytes.constData(), bytes.size());
+            if (decision["aec"] == "pending") {
+                // Quick recordings may never create an overlay. Validate for the
+                // next recording without changing this recording's raw path.
+                auto* check = new QProcess(QCoreApplication::instance());
+                QObject::connect(check, qOverload<int,QProcess::ExitStatus>(&QProcess::finished), check, &QObject::deleteLater);
+                QObject::connect(check, &QProcess::errorOccurred, check, [check](QProcess::ProcessError error) {
+                    if (error == QProcess::FailedToStart) check->deleteLater();
+                });
+                QStringList arguments{"--install"}; if (echoBackend == "npu") arguments << "--npu";
+                check->start(aec::workerPath(), arguments);
+            }
+            return false;
+        }
         QString outputName = (applicationSource || output == "auto" || output == "default") ? defaultSink : output;
         bool found = false;
-        for (const auto& sink : sinks) if (sink.name == outputName) found = true;
+        for (const auto& sink : sinks) if (sink.name == outputName) { found = true; echoOutputIndex = sink.index; }
+        for (const auto& source : sources) if (source.name == microphone) echoMicrophoneIndex = source.index;
         QString error;
         echo = std::make_unique<EchoSource>();
-        if (!found || !echo->start(microphone, outputName, error)) {
+        if (!found || !echo->start(microphone, outputName, echoModel, echoBackend, error)) {
             echo.reset(); report("Echo cancellation unavailable: " + (found ? error : "playback output not found") + "; microphone continues without AEC");
             echoStatus("unavailable"); return false;
         }
@@ -362,6 +386,13 @@ struct Recorder {
         if (!t.stream) { fail(t, "cannot create capture stream"); return; }
         pa_stream_set_state_callback(t.stream, [](pa_stream* s, void* data) {
             auto& t = *static_cast<Track*>(data);
+            if (pa_stream_get_state(s) == PA_STREAM_READY && t.role == "Microphone" && !t.owner->meterOnly) {
+                // Let the fixed AEC reservoir fill before the first video frame.
+                QTimer::singleShot(t.owner->echoActive ? 120 : 0, QCoreApplication::instance(), [] {
+                    constexpr char ready[] = "{\"audioReady\":true}\n";
+                    (void)!write(STDOUT_FILENO, ready, sizeof(ready)-1);
+                });
+            }
             if (pa_stream_get_state(s) == PA_STREAM_FAILED || pa_stream_get_state(s) == PA_STREAM_TERMINATED)
                 t.owner->fail(t, "device disconnected");
         }, &t);
@@ -387,7 +418,8 @@ struct Recorder {
                 }
                 pa_usec_t latency = 0; int negative = 0;
                 const bool timed = pa_stream_get_latency(s, &latency, &negative) == 0;
-                const auto timestamp = monotonicUs() + (timed ? (negative ? static_cast<std::int64_t>(latency) : -static_cast<std::int64_t>(latency)) : 0);
+                const auto processingDelay = t.role == "Microphone" && t.owner->echoActive ? aec::processingDelayUs : 0;
+                const auto timestamp = monotonicUs() + (timed ? (negative ? static_cast<std::int64_t>(latency) : -static_cast<std::int64_t>(latency)) : 0) - processingDelay;
                 auto position = alignedSample(sampleAt(timestamp - t.owner->origin), t.next);
                 if (t.sinkInput != PA_INVALID_INDEX) {
                     // Never add an overlapping packet twice for one playback stream.
@@ -455,11 +487,15 @@ struct Recorder {
                 pa_context_set_subscribe_callback(c, [](pa_context*, pa_subscription_event_type_t event, uint32_t index, void* data) {
                     auto& r = *static_cast<Recorder*>(data);
                     if ((event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SINK_INPUT) r.scanApplication();
+                    if ((event & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE &&
+                        (((event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SOURCE && index == r.echoMicrophoneIndex) ||
+                         ((event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SINK && index == r.echoOutputIndex)))
+                        QTimer::singleShot(0, QCoreApplication::instance(), [&r] { r.fallbackEcho("microphone or playback reference removed"); });
                     if ((event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SOURCE &&
                         (event & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE)
                         for (auto& t : r.tracks) if (!t.role.isEmpty() && t.sourceIndex == index) r.fail(t, "device removed");
                 }, &r);
-                release(pa_context_subscribe(c, static_cast<pa_subscription_mask_t>(PA_SUBSCRIPTION_MASK_SOURCE | PA_SUBSCRIPTION_MASK_SINK_INPUT), nullptr, nullptr));
+                release(pa_context_subscribe(c, static_cast<pa_subscription_mask_t>(PA_SUBSCRIPTION_MASK_SOURCE | PA_SUBSCRIPTION_MASK_SINK | PA_SUBSCRIPTION_MASK_SINK_INPUT), nullptr, nullptr));
             }
         }, this);
         if (pa_context_connect(context, nullptr, PA_CONTEXT_NOAUTOSPAWN, nullptr) < 0) serverError();
@@ -618,19 +654,23 @@ int runHelper(int argc, char** argv) {
     recorder.listOnly = args.value(1) == "--sound-list";
     recorder.meterOnly = args.value(1) == "--sound-meter";
     if (recorder.meterOnly) {
-        if (args.size() != 5 && args.size() != 6) return 2;
-        if (args.size() == 6) { if (args[5] != "0" && args[5] != "1") return 2; recorder.echoEnabled = args[5] == "1"; }
+        if (args.size() != 5 && args.size() != 6 && args.size() != 7) return 2;
+        if (args.size() >= 6) { if (args[5] != "-1" && args[5] != "0" && args[5] != "1") return 2; recorder.echoPolicy = args[5].toInt(); recorder.echoEnabled = recorder.echoPolicy != 0; }
+        if (args.size() == 7) { if (args[6] != "cpu" && args[6] != "npu") return 2; recorder.echoBackend = args[6]; }
         recorder.mode = args[2]; recorder.output = args[3]; recorder.input = args[4];
         if (recorder.mode != "system" && recorder.mode != "microphone" && recorder.mode != "mix") return 2;
     } else if (!recorder.listOnly) {
-        if ((args.size() != 6 && args.size() != 9 && args.size() != 10) || args[1] != "--sound-capture" || !privateDirectory(args[5])) return 2;
+        if ((args.size() != 6 && args.size() != 9 && args.size() != 10 && args.size() != 11) || args[1] != "--sound-capture" || !privateDirectory(args[5])) return 2;
         recorder.mode = args[2]; recorder.output = args[3]; recorder.input = args[4]; recorder.directory = args[5];
         if (recorder.mode != "system" && recorder.mode != "microphone" && recorder.mode != "mix") return 2;
         QFile metadata(recorder.directory + "/session.json");
         if (!metadata.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return 2;
         QJsonObject meta{{"originUs", static_cast<double>(recorder.origin)}, {"mode", recorder.mode}};
-        if (args.size() == 10) { if (args[9] != "0" && args[9] != "1") return 2; recorder.echoEnabled = args[9] == "1"; }
+        if (args.size() >= 10) { if (args[9] != "-1" && args[9] != "0" && args[9] != "1") return 2; recorder.echoPolicy = args[9].toInt(); recorder.echoEnabled = recorder.echoPolicy != 0; }
+        if (args.size() == 11) { if (args[10] != "cpu" && args[10] != "npu") return 2; recorder.echoBackend = args[10]; }
         meta["echoCancellationRequested"] = recorder.echoEnabled;
+        meta["echoPolicy"] = recorder.echoPolicy;
+        meta["echoBackend"] = recorder.echoBackend;
         if (args.size() >= 9) {
             bool systemOK = false, micOK = false;
             const int systemGain = args[7].toInt(&systemOK), micGain = args[8].toInt(&micOK);
@@ -657,7 +697,9 @@ int runHelper(int argc, char** argv) {
         char bytes[64];
         if (read(STDIN_FILENO, bytes, sizeof(bytes)) <= 0) {
             stop.setEnabled(false);
-            QTimer::singleShot(100, &app, &QCoreApplication::quit);
+            // Drain the fixed processing delay plus the capture transport.
+            // Final mux duration trims the look-ahead beyond the last frame.
+            QTimer::singleShot(recorder.echoActive ? 180 : 100, &app, &QCoreApplication::quit);
         }
     });
     if (recorder.listOnly) stop.setEnabled(false);

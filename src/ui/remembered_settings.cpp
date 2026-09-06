@@ -49,8 +49,8 @@ void transfer(QSettings& settings, CaptureDefaults& defaults, bool reading) {
     number("recordAudioSystemGain", defaults.recordAudioSystemGain, -61, 24);
     number("recordAudioMicGain", defaults.recordAudioMicGain, -61, 24);
     choice("recordAudioMix", defaults.recordAudioMix, {"manual", "auto-balance", "voice-priority"});
-    const auto echo = value("recordAudioEchoCancellation", defaults.recordAudioEchoCancellation ? "1" : "0");
-    if (echo == "0" || echo == "1") defaults.recordAudioEchoCancellation = echo == "1";
+    // Legacy remembered bool did not distinguish a default from user intent.
+    // AEC policy now lives separately and is never restored from that key.
     for (auto [key, target] : {std::pair{"recordAudioOutput", &defaults.recordAudioOutput},
                                std::pair{"recordAudioInput", &defaults.recordAudioInput}}) {
         const QString selected = value(key, QString::fromStdString(*target));
@@ -81,5 +81,18 @@ bool saveSettings(const CaptureDefaults& defaults) {
     transfer(settings, snapshot, false);
     settings.sync();
     return settings.status() == QSettings::NoError;
+}
+void restoreAecPreferences(CaptureDefaults& defaults) {
+    QSettings s(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)+"/hyprcapture/aec.ini",QSettings::IniFormat);
+    if(s.value("version").toInt()!=1)return;
+    const int policy=s.value("policy",-1).toInt();
+    if(defaults.recordAudioEchoCancellation==-1&&policy>=-1&&policy<=1)defaults.recordAudioEchoCancellation=policy;
+    const auto backend=s.value("backend","cpu").toString();
+    if(defaults.recordAudioEchoBackend=="cpu"&&(backend=="cpu"||backend=="npu"))defaults.recordAudioEchoBackend=backend.toStdString();
+}
+void saveAecPreferences(const CaptureDefaults& defaults) {
+    QSettings s(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)+"/hyprcapture/aec.ini",QSettings::IniFormat);
+    s.setValue("version",1);s.setValue("policy",int(defaults.recordAudioEchoCancellation));
+    s.setValue("backend",QString::fromStdString(defaults.recordAudioEchoBackend));s.sync();
 }
 }

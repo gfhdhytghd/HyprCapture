@@ -13,5 +13,12 @@ build = [
     "cmake -S . -B build-hyprpm -DCMAKE_BUILD_TYPE=Release",
     "cmake --build build-hyprpm --parallel 8",
     "ctest --test-dir build-hyprpm --output-on-failure",
-    "install -Dm755 build-hyprpm/hyprcapture-ui \"$HOME/.local/bin/hyprcapture-ui\""
+    "install -Dm755 build-hyprpm/hyprcapture-ui \"$HOME/.local/bin/hyprcapture-ui\"",
+    "install -Dm755 build-hyprpm/hyprcapture-aec \"$HOME/.local/bin/hyprcapture-aec\"",
+    "install -Dm755 build-hyprpm/libspa-aec-dtln.so \"$HOME/.local/lib/hyprcapture/libspa-aec-dtln.so\"",
+    "if test -f build-hyprpm/libhyprcapture-aec-openvino.so; then install -Dm755 build-hyprpm/libhyprcapture-aec-openvino.so \"$HOME/.local/lib/hyprcapture/libhyprcapture-aec-openvino.so\"; fi",
+    "install -Dm755 scripts/build-aec-runtime.sh \"$HOME/.local/bin/hyprcapture-build-aec-runtime\"",
+    "install -Dm755 scripts/install-aec.sh \"$HOME/.local/bin/hyprcapture-install-aec\"",
+    "install -Dm644 resources/aec/DTLN-LICENSE.txt \"$HOME/.local/share/licenses/hyprcapture/DTLN-LICENSE.txt\"",
+    "bash scripts/install-aec.sh"
 ]

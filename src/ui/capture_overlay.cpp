@@ -11,6 +11,7 @@
 #include "ui/clipboard_utils.hpp"
 #include "ui/overlay_paint.hpp"
 #include "ui/remembered_settings.hpp"
+#include "audio/aec_policy.hpp"
 #include "ui/result_thumbnail.hpp"
 #include "ui/screenshot_notification.hpp"
 #include "ui/watermark.hpp"
@@ -1458,6 +1459,7 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     QElapsedTimer parseTimer;
     parseTimer.start();
     parseSessionJson(sessionJson);
+    hyprcapture::ui::restoreAecPreferences(m_defaults);
     if (!m_quick && !m_recordActive && hyprcapture::ui::restoreSettings(m_defaults)) {
         m_mode = m_defaults.mode;
         m_recordFormatAuto = false;
@@ -1616,7 +1618,9 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
     m_recordFormatAuto = source.m_recordFormatAuto;
     m_recordCodecAuto = source.m_recordCodecAuto;
     m_defaults.recordAudioEchoCancellation = source.m_defaults.recordAudioEchoCancellation;
-    if (m_echoCancellation) m_echoCancellation->setChecked(m_defaults.recordAudioEchoCancellation);
+    m_defaults.recordAudioEchoBackend = source.m_defaults.recordAudioEchoBackend;
+    if (m_echoCancellation) m_echoCancellation->setCurrentText(QString::number(m_defaults.recordAudioEchoCancellation));
+    if (m_echoBackend) m_echoBackend->setCurrentText(qString(m_defaults.recordAudioEchoBackend));
     m_defaults.recordAudioMix = source.m_defaults.recordAudioMix;
     m_defaults.recordAudioSystemGain = source.m_defaults.recordAudioSystemGain;
     m_defaults.recordAudioMicGain = source.m_defaults.recordAudioMicGain;
@@ -2108,6 +2112,38 @@ void CaptureOverlay::buildToolbar() {
     });
     soundLayout->addWidget(m_soundPreset);
     rootLayout->addWidget(m_soundOptions);
+    m_aecOptions = new QWidget(m_toolbar);
+    m_aecOptions->setObjectName("aecOptions");
+    auto* aecLayout = new QHBoxLayout(m_aecOptions);
+    aecLayout->setContentsMargins(0,0,0,0); aecLayout->setSpacing(4);
+    m_echoCancellation = new InlineSelect(this, m_aecOptions);
+    m_echoCancellation->setObjectName("echoCancellation");
+    m_echoCancellation->setPrefix("AEC"); m_echoCancellation->setCompactWidth(110);
+    m_echoCancellation->addItems({"-1","1","0"});
+    m_echoCancellation->setLabels({{"-1","Auto"},{"1","Always on"},{"0","Always off"}});
+    m_echoCancellation->setCurrentText(QString::number(m_defaults.recordAudioEchoCancellation));
+    m_echoCancellation->setOnChanged([this] {
+        m_defaults.recordAudioEchoCancellation = m_echoCancellation->currentText().toInt();
+        hyprcapture::ui::saveAecPreferences(m_defaults); refreshAecStatus(); updateSoundMeter();
+    });
+    aecLayout->addWidget(m_echoCancellation);
+    m_echoBackend = new InlineSelect(this,m_aecOptions);
+    m_echoBackend->setObjectName("echoBackend"); m_echoBackend->setCompactWidth(75);
+    m_echoBackend->addItems({"cpu","npu"});m_echoBackend->setLabels({{"cpu","CPU"},{"npu","NPU*"}});
+    m_echoBackend->setSelectionHint("NPU is experimental and must pass correctness and speed checks. No NVIDIA GPU fallback.");
+    m_echoBackend->setCurrentText(qString(m_defaults.recordAudioEchoBackend));
+    m_echoBackend->setOnChanged([this] {
+        m_defaults.recordAudioEchoBackend=m_echoBackend->currentText().toStdString();
+        hyprcapture::ui::saveAecPreferences(m_defaults);refreshAecStatus();updateSoundMeter();
+    });
+    aecLayout->addWidget(m_echoBackend);
+    auto* retest = new QPushButton("Retest",m_aecOptions);retest->setObjectName("aecRetest");
+    retest->setToolTip("Download missing models and retest this computer without microphone capture");
+    connect(retest,&QPushButton::clicked,this,[this]{refreshAecStatus(true);});aecLayout->addWidget(retest);
+    m_aecStatus = new QLabel("AEC · checking",m_aecOptions);m_aecStatus->setObjectName("aecStatus");
+    m_aecStatus->setMinimumWidth(0);m_aecStatus->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);
+    aecLayout->addWidget(m_aecStatus,1);rootLayout->addWidget(m_aecOptions);
+    QTimer::singleShot(0,this,[this]{refreshAecStatus();});
     m_soundMixer = new QWidget(m_toolbar);
     m_soundMixer->setObjectName("soundMixer");
     auto* mixerLayout = new QHBoxLayout(m_soundMixer);
@@ -2126,15 +2162,6 @@ void CaptureOverlay::buildToolbar() {
         };
         updateGain(gain); connect(slider, &QSlider::valueChanged, this, updateGain);
         auto* title = new QHBoxLayout; title->setSpacing(4); title->addWidget(label); title->addStretch();
-        if (name == "Mic") {
-            m_echoCancellation = new QCheckBox("AEC", strip);
-            m_echoCancellation->setObjectName("echoCancellation");
-            m_echoCancellation->setAccessibleName("Microphone echo cancellation");
-            m_echoCancellation->setToolTip("Remove speaker playback from the microphone using PipeWire / WebRTC");
-            m_echoCancellation->setChecked(m_defaults.recordAudioEchoCancellation);
-            connect(m_echoCancellation, &QCheckBox::toggled, this, [this](bool enabled) { m_defaults.recordAudioEchoCancellation = enabled; });
-            title->addWidget(m_echoCancellation);
-        }
         layout->addLayout(title); layout->addWidget(slider); layout->addWidget(meter);
         mixerLayout->addWidget(strip, 1);
     };
@@ -2693,8 +2720,48 @@ void CaptureOverlay::refreshSoundDevices() {
     process->start(QCoreApplication::applicationFilePath(), {"--sound-list"});
 }
 
+void CaptureOverlay::refreshAecStatus(bool retest) {
+    if (!m_aecStatus || m_recordActive) return;
+    if (m_aecChecking) {
+        if (m_defaults.recordAudioEchoCancellation == 0)
+            for (auto* check : findChildren<QProcess*>())
+                if (check->property("aecCheck").toBool() && check->state() != QProcess::NotRunning) check->kill();
+        return;
+    }
+    m_aecChecking = true;
+    updateSoundMeter();
+    m_aecStatus->setText("AEC · checking");
+    const auto backend = qString(m_defaults.recordAudioEchoBackend);
+    auto* process = new QProcess(this);
+    process->setProperty("aecCheck", true);
+    QStringList args{"--install"};
+    if (!retest && m_defaults.recordAudioEchoCancellation == 0) args = {"--status", "0"};
+    if (retest) args << "--force";
+    if (backend == "npu") args << "--npu";
+    auto finish = [this, process, backend] {
+        process->deleteLater();
+        if (backend != qString(m_defaults.recordAudioEchoBackend)) { m_aecChecking=false; refreshAecStatus(); return; }
+        auto* status = new QProcess(this);
+        auto done = [this, status] {
+            const auto object=QJsonDocument::fromJson(status->readAllStandardOutput()).object();
+            const auto text=object["description"].toString("AEC · installation required");
+            m_aecStatus->setText(text);m_aecStatus->setToolTip(text);m_aecChecking=false;
+            m_meterKey.clear();status->deleteLater();updateSoundMeter();
+        };
+        connect(status,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[done](int,QProcess::ExitStatus){done();});
+        connect(status,&QProcess::errorOccurred,this,[done](QProcess::ProcessError e){if(e==QProcess::FailedToStart)done();});
+        QStringList statusArgs{"--status",QString::number(m_defaults.recordAudioEchoCancellation)};
+        if(qString(m_defaults.recordAudioEchoBackend)=="npu")statusArgs<<"--npu";
+        status->start(hyprcapture::audio::aec::workerPath(),statusArgs);
+    };
+    connect(process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[finish](int,QProcess::ExitStatus){finish();});
+    connect(process,&QProcess::errorOccurred,this,[finish](QProcess::ProcessError e){if(e==QProcess::FailedToStart)finish();});
+    QTimer::singleShot(180000,process,[process]{if(process->state()!=QProcess::NotRunning)process->kill();});
+    process->start(hyprcapture::audio::aec::workerPath(),args);
+}
+
 void CaptureOverlay::updateSoundMeter() {
-    const bool wanted = isVisible() && m_overlayActive && m_soundMixer && m_soundMixer->isVisible();
+    const bool wanted = !m_aecChecking && isVisible() && m_overlayActive && m_soundMixer && m_soundMixer->isVisible();
     const auto* target = selectedWindow();
     if (!target) target = hoveredWindow();
     const auto source = hyprcapture::audio::resolveOutput(m_defaults.recordAudioOutput, m_mode, target ? target->address.toStdString() : "");
@@ -2707,7 +2774,7 @@ void CaptureOverlay::updateSoundMeter() {
     }
     // Preview both channels independently of which channels will be recorded.
     const QStringList args{"--sound-meter", "mix",
-                           qString(source), qString(m_defaults.recordAudioInput), m_defaults.recordAudioEchoCancellation ? "1" : "0"};
+                           qString(source), qString(m_defaults.recordAudioInput), QString::number(m_defaults.recordAudioEchoCancellation), qString(m_defaults.recordAudioEchoBackend)};
     const QString key = args.join(QChar(0x1f));
     if (m_meterProcess && (!wanted || key != m_meterKey)) {
         m_meterProcess->disconnect(this);
@@ -2728,10 +2795,11 @@ void CaptureOverlay::updateSoundMeter() {
             const int end = buffer->indexOf('\n');
             const auto object = QJsonDocument::fromJson(buffer->left(end)).object(); buffer->remove(0, end + 1);
             if (object.contains("error")) m_systemMeter->setToolTip(object["error"].toString());
-            if (object.contains("aec") && m_echoCancellation) {
+            if (object.contains("aec") && m_aecStatus) {
                 const auto state = object["aec"].toString();
-                m_echoCancellation->setText(state == "unavailable" ? "AEC !" : "AEC");
-                m_echoCancellation->setToolTip("PipeWire / WebRTC echo cancellation: " + state);
+                const auto text = state == "unavailable" ? "AEC unavailable · raw mic" : object["description"].toString(
+                    hyprcapture::audio::aec::description(object,int(m_defaults.recordAudioEchoCancellation)));
+                m_aecStatus->setText(text); m_aecStatus->setToolTip(text);
             }
             if (!object.contains("levels")) continue;
             const auto levels = object["levels"].toObject();
@@ -2776,6 +2844,7 @@ void CaptureOverlay::updateRecordOptionsVisibility() {
     m_soundOutput->setEnabled(!imageAnimation);
     m_soundInput->setEnabled(!imageAnimation);
     m_soundOptions->setVisible(visible);
+    m_aecOptions->setVisible(visible && !imageAnimation);
     updateSelect(m_soundPreset, visible);
     m_soundPreset->setEnabled(!imageAnimation);
     const bool manual = visible && !imageAnimation && m_defaults.recordAudioMix == "manual";
@@ -3875,6 +3944,7 @@ void CaptureOverlay::relayoutToolbar() {
         m_soundMode->setCompactWidth(width() < 500 ? 75 : 155);
         m_soundPreset->setCompactWidth(width() < 500 ? 85 : 130);
         if (m_soundMixer) m_soundMixer->setFixedWidth(std::min(550, std::max(1, width() - 52)));
+        if (m_aecOptions) m_aecOptions->setFixedWidth(std::min(550, std::max(1, width() - 52)));
         m_soundOutput->setCompactWidth(deviceWidth);
         m_soundInput->setCompactWidth(deviceWidth);
         m_soundOptions->setFixedWidth(std::min(m_soundOptions->sizeHint().width(), std::max(1, width() - 52)));

@@ -242,11 +242,16 @@ class CaptureOverlay final : public QMainWindow {
     void saveRememberedSettings();
     void refreshSoundDevices();
     void updateSoundMeter();
+    void refreshAecStatus(bool retest = false);
+    QWidget* m_aecOptions = nullptr;
+    InlineSelect* m_echoCancellation = nullptr;
+    InlineSelect* m_echoBackend = nullptr;
+    QLabel* m_aecStatus = nullptr;
+    bool m_aecChecking = false;
     QWidget* m_soundMixer = nullptr;
     InlineSelect* m_soundPreset = nullptr;
     QSlider* m_systemGain = nullptr;
     QSlider* m_micGain = nullptr;
-    QCheckBox* m_echoCancellation = nullptr;
     AudioMeter* m_systemMeter = nullptr;
     AudioMeter* m_micMeter = nullptr;
     QProcess* m_meterProcess = nullptr;

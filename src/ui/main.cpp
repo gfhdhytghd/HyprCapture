@@ -824,7 +824,8 @@ int main(int argc, char** argv) {
         {"record-filename-template", "Recording filename strftime template.", "template", "Recording-%Y-%m-%d-%H%M%S.mp4"},
         {"record-format", "Recording format.", "format", "mp4"},
         {"record-transparent-format", "Transparent window recording container format.", "format", "webm"},
-        {"record-audio-echo-cancellation", "Microphone echo cancellation.", "enabled", "1"},
+        {"record-audio-echo-cancellation", "Microphone AEC: -1 auto, 0 off, 1 on.", "policy", "-1"},
+        {"record-audio-echo-backend", "AEC backend: cpu or experimental npu.", "backend", "cpu"},
         {"record-audio-mix", "Audio mixing preset.", "preset", "voice-priority"},
         {"record-audio-system-gain", "System gain in dB.", "dB", "0"},
         {"record-audio-mic-gain", "Mic gain in dB.", "dB", "0"},
@@ -917,7 +918,8 @@ int main(int argc, char** argv) {
     defaults.recordFilenameTemplate = parser.value("record-filename-template").toStdString();
     defaults.recordFormat = parser.value("record-format").toStdString();
     defaults.recordTransparentFormat = parser.value("record-transparent-format").toStdString();
-    defaults.recordAudioEchoCancellation = parser.value("record-audio-echo-cancellation") != "0";
+    defaults.recordAudioEchoCancellation = std::clamp(parser.value("record-audio-echo-cancellation").toInt(), -1, 1);
+    defaults.recordAudioEchoBackend = parser.value("record-audio-echo-backend") == "npu" ? "npu" : "cpu";
     defaults.recordAudioMix = parser.value("record-audio-mix").toStdString();
     if (defaults.recordAudioMix != "manual" && defaults.recordAudioMix != "auto-balance" && defaults.recordAudioMix != "voice-priority") defaults.recordAudioMix = "voice-priority";
     defaults.recordAudioSystemGain = std::clamp(parser.value("record-audio-system-gain").toInt(), -61, 24);

@@ -22,6 +22,7 @@ public:
     std::vector<std::string> messages();
     bool finished() const { return m_finished.load(); }
     bool succeeded() const { return m_success.load(); }
+    bool captureReady() const { return m_ready || m_captureExited.load(); }
     const std::filesystem::path& directory() const { return m_directory; }
 private:
     SupervisedProcess spawn(const std::vector<std::string>& args, int input);
@@ -33,7 +34,7 @@ private:
     std::thread m_worker;
     std::mutex m_mutex;
     std::condition_variable m_cv;
-    bool m_finalize = false, m_abandon = false, m_stopped = false, m_reportedExit = false;
+    bool m_finalize = false, m_abandon = false, m_stopped = false, m_reportedExit = false, m_ready = false;
     std::atomic_bool m_captureExited = false, m_finished = false, m_success = false;
 };
 }

@@ -1238,6 +1238,8 @@ struct FinishingAudio {
 std::unique_ptr<FinishingAudio> g_finishingAudio;
 std::vector<std::unique_ptr<AudioSession>> g_retiredAudio;
 SP<CEventLoopTimer> g_retiredAudioTimer;
+SP<CEventLoopTimer> g_preparingAudioTimer;
+std::optional<std::filesystem::path> g_audioPreparedOutput;
 
 
 LaunchResult startCompositorRecording(RecordingRequest request);
@@ -1456,6 +1458,11 @@ void showRecordingFinalizing(const CaptureDefaults& defaults, const std::filesys
 }
 
 LaunchResult stopRecordingInternal(const std::string& reason, bool drain) {
+    if (g_preparingAudioTimer) {
+        g_pEventLoopManager->removeTimer(g_preparingAudioTimer);
+        g_preparingAudioTimer.reset(); g_audioPreparedOutput.reset(); retireAudio();
+        return {.success = true};
+    }
     if (g_gsrRecording) {
         g_recordingStateServer.beginFinalizing();
         auto& recording = g_gsrRecording;
@@ -1718,10 +1725,10 @@ LaunchResult startGsrRecording(const RecordingRequest& request, bool allowCompos
         return {.success = false, .error = "invalid recording geometry"};
 
     std::string outputPathError;
-    const auto  outputPath = uniqueOutputPath(request.defaults, outputPathError);
+    const auto  outputPath = g_audioPreparedOutput ? g_audioPreparedOutput : uniqueOutputPath(request.defaults, outputPathError);
     if (!outputPath)
         return {.success = false, .error = outputPathError.empty() ? "recording output path failed" : outputPathError};
-    beginAudio(request, *outputPath);
+    if (!g_audioPreparedOutput) beginAudio(request, *outputPath);
     SupervisedProcess process;
     if (const auto result = spawnGpuScreenRecorder(request, *outputPath, process); !result.success)
         return result;
@@ -1765,11 +1772,11 @@ LaunchResult startCompositorRecording(RecordingRequest request) {
     }
 
     std::string outputPathError;
-    const auto  outputPath = uniqueOutputPath(request.defaults, outputPathError);
+    const auto  outputPath = g_audioPreparedOutput ? g_audioPreparedOutput : uniqueOutputPath(request.defaults, outputPathError);
     if (!outputPath)
         return {.success = false, .error = outputPathError.empty() ? "recording output path failed" : outputPathError};
 
-    beginAudio(request, *outputPath);
+    if (!g_audioPreparedOutput) beginAudio(request, *outputPath);
     auto firstFrameAt = Time::steadyNow();
     resetRecordingCaptureState();
     auto firstFrame = captureRecordingFrame(frameRequest);
@@ -1874,12 +1881,46 @@ bool recordingCanUseGsr(const RecordingRequest& request) {
                                                        .windowAddress = request.windowAddress});
 }
 
+LaunchResult startRecordingBackends(const RecordingRequest& request) {
+    const bool canUseGsr = recordingCanUseGsr(request);
+    const bool preferGsr = canUseGsr &&
+        (request.defaults.recordWindowBackend == RecordWindowBackend::GsrVisible ||
+         (request.defaults.recordWindowBackend == RecordWindowBackend::Auto && request.mode != CaptureMode::Window));
+
+    if (preferGsr) {
+        const auto primary = startGsrRecording(request, true);
+        if (primary.success)
+            return primary;
+        const auto fallback = startCompositorRecording(request);
+        if (fallback.success) {
+            notifyRecording("gpu-screen-recorder start failed; using compositor recording", NotificationLevel::Warning, 5000);
+            return fallback;
+        }
+        retireAudio();
+        return {.success = false, .error = "recording backends failed: gpu-screen-recorder: " + primary.error + "; compositor: " + fallback.error};
+    }
+
+    const auto primary = startCompositorRecording(request);
+    if (primary.success || !canUseGsr) {
+        if (!primary.success) retireAudio();
+        return primary;
+    }
+
+    const auto fallback = startGsrRecording(request, false);
+    if (fallback.success) {
+        notifyRecording("compositor recording start failed; using gpu-screen-recorder", NotificationLevel::Warning, 5000);
+        return fallback;
+    }
+    retireAudio();
+    return {.success = false, .error = "recording backends failed: compositor: " + primary.error + "; gpu-screen-recorder: " + fallback.error};
+}
+
 } // namespace
 
 LaunchResult startRecordingFromRequestFile(const std::string& path, const std::string& configuredHelper) {
     const bool gsrBusy = reapGsrRecordingIfExited();
     const bool rawBusy = reapFinishingRawRecordingIfActive();
-    if (g_finishingAudio || g_recording || gsrBusy || rawBusy)
+    if (g_preparingAudioTimer || g_finishingAudio || g_recording || gsrBusy || rawBusy)
         return {.success = false, .error = "recording already active"};
     if (!g_pEventLoopManager)
         return {.success = false, .error = "Hyprland event loop unavailable"};
@@ -1911,37 +1952,28 @@ LaunchResult startRecordingFromRequestFile(const std::string& path, const std::s
                 return {.success = false, .error = "Sound conflicts with record_gsr_flags " + key + "; remove this flag or turn Sound off"};
         }
     }
-    const bool canUseGsr = recordingCanUseGsr(*request);
-    const bool preferGsr = canUseGsr &&
-        (request->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible ||
-         (request->defaults.recordWindowBackend == RecordWindowBackend::Auto && request->mode != CaptureMode::Window));
-
-    if (preferGsr) {
-        const auto primary = startGsrRecording(*request, true);
-        if (primary.success)
-            return primary;
-        const auto fallback = startCompositorRecording(*request);
-        if (fallback.success) {
-            notifyRecording("gpu-screen-recorder start failed; using compositor recording", NotificationLevel::Warning, 5000);
-            return fallback;
-        }
-        retireAudio();
-        return {.success = false, .error = "recording backends failed: gpu-screen-recorder: " + primary.error + "; compositor: " + fallback.error};
+    const bool microphone = request->defaults.recordAudio == RecordAudio::Microphone || request->defaults.recordAudio == RecordAudio::Mix;
+    if (microphone && request->defaults.recordAudioEchoCancellation != 0) {
+        std::string error;
+        auto output = uniqueOutputPath(request->defaults, error);
+        if (!output) return {.success = false, .error = error};
+        beginAudio(*request, *output);
+        g_audioPreparedOutput = output;
+        const auto deadline = Time::steadyNow() + std::chrono::seconds(5);
+        g_preparingAudioTimer = makeShared<CEventLoopTimer>(std::chrono::milliseconds(20), [request = *request, deadline](SP<CEventLoopTimer> self, void*) {
+            pollAudioErrors(g_audio.get());
+            if (g_audio && !g_audio->captureReady() && Time::steadyNow() < deadline) {
+                self->updateTimeout(std::chrono::milliseconds(20)); return;
+            }
+            g_pEventLoopManager->removeTimer(g_preparingAudioTimer); g_preparingAudioTimer.reset();
+            const auto result = startRecordingBackends(request);
+            g_audioPreparedOutput.reset();
+            if (!result.success) notifyRecording(result.error, NotificationLevel::Error, 7000);
+        }, nullptr);
+        g_pEventLoopManager->addTimer(g_preparingAudioTimer);
+        return {.success = true};
     }
-
-    const auto primary = startCompositorRecording(*request);
-    if (primary.success || !canUseGsr) {
-        if (!primary.success) retireAudio();
-        return primary;
-    }
-
-    const auto fallback = startGsrRecording(*request, false);
-    if (fallback.success) {
-        notifyRecording("compositor recording start failed; using gpu-screen-recorder", NotificationLevel::Warning, 5000);
-        return fallback;
-    }
-    retireAudio();
-    return {.success = false, .error = "recording backends failed: compositor: " + primary.error + "; gpu-screen-recorder: " + fallback.error};
+    return startRecordingBackends(*request);
 }
 
 LaunchResult stopRecording(const std::string& reason) {
@@ -1949,7 +1981,7 @@ LaunchResult stopRecording(const std::string& reason) {
 }
 
 bool isRecordingActive() {
-    return static_cast<bool>(g_recording) || reapGsrRecordingIfExited() || reapFinishingRawRecordingIfActive();
+    return static_cast<bool>(g_preparingAudioTimer) || static_cast<bool>(g_recording) || reapGsrRecordingIfExited() || reapFinishingRawRecordingIfActive();
 }
 
 bool initializeRecordingStateServer(std::string* error) {
@@ -1961,7 +1993,7 @@ std::filesystem::path recordingStateSocketPath() {
 }
 
 void shutdownRecording() {
-    if (g_recording || g_gsrRecording)
+    if (g_preparingAudioTimer || g_recording || g_gsrRecording)
         stopRecordingInternal("stopped during plugin unload", false);
     if (g_gsrRecording) {
         if (g_gsrRecording->waiter.joinable()) g_gsrRecording->waiter.join();

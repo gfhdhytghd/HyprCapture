@@ -161,7 +161,8 @@ void registerConfigValues() {
     addStringConfig("record_fps_options", "Recording frame rate choices", "15 24 30 60");
     addIntConfig("record_window_fps_limit", "Compositor window recording FPS cap", 12);
     addIntConfig("record_window_real_bg_fps_limit", "Real-background window recording FPS cap", 8);
-    addIntConfig("record_audio_echo_cancellation", "PipeWire WebRTC microphone echo cancellation", 1);
+    addIntConfig("record_audio_echo_cancellation", "DTLN microphone AEC: -1 auto, 0 off, 1 on", -1);
+    addStringConfig("record_audio_echo_backend", "AEC backend: cpu or experimental npu", "cpu");
     addStringConfig("record_audio_mix", "Audio mixing: manual, auto-balance, voice-priority", "voice-priority");
     addIntConfig("record_audio_system_gain", "System gain in dB (-61=mute, max 24)", 0);
     addIntConfig("record_audio_mic_gain", "Microphone gain in dB (-61=mute, max 24)", 0);
@@ -229,7 +230,9 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.recordFilenameTemplate = configString("record_filename_template", defaults.recordFilenameTemplate);
     defaults.recordFormat = configString("record_format", defaults.recordFormat);
     defaults.recordTransparentFormat = configString("record_transparent_format", defaults.recordTransparentFormat);
-    defaults.recordAudioEchoCancellation = configInt("record_audio_echo_cancellation", 1) != 0;
+    defaults.recordAudioEchoCancellation = std::clamp<std::int64_t>(configInt("record_audio_echo_cancellation", -1), -1, 1);
+    defaults.recordAudioEchoBackend = configString("record_audio_echo_backend", "cpu");
+    if (defaults.recordAudioEchoBackend != "npu") defaults.recordAudioEchoBackend = "cpu";
     defaults.recordAudioMix = configString("record_audio_mix", "voice-priority");
     if (defaults.recordAudioMix != "manual" && defaults.recordAudioMix != "auto-balance" && defaults.recordAudioMix != "voice-priority") defaults.recordAudioMix = "voice-priority";
     defaults.recordAudioSystemGain = std::clamp<std::int64_t>(configInt("record_audio_system_gain", 0), -61, 24);

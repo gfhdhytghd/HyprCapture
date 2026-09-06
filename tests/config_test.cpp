@@ -451,6 +451,20 @@ int main() {
     require(decodedRecording->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible, "decoded recording window backend");
     require(CaptureDefaults{}.recordAudio == RecordAudio::Off, "sound defaults off");
     require(CaptureDefaults{}.recordAudioOutput == "auto", "sound source defaults auto");
+    require(CaptureDefaults{}.recordAudioEchoCancellation == -1 && CaptureDefaults{}.recordAudioEchoBackend == "cpu", "AEC defaults automatic CPU");
+    for (auto policy : {-1, 0, 1}) for (const auto* backend : {"cpu", "npu"}) {
+        recording.defaults.recordAudioEchoCancellation = policy;
+        recording.defaults.recordAudioEchoBackend = backend;
+        const auto decoded = decodeRecordingRequestJson(encodeRecordingRequestJson(recording));
+        require(decoded && decoded->defaults.recordAudioEchoCancellation == policy && decoded->defaults.recordAudioEchoBackend == backend, "AEC policy/backend roundtrip");
+    }
+    auto invalidAec = nlohmann::json::parse(encodeRecordingRequestJson(recording));
+    invalidAec["defaults"]["recordAudioEchoBackend"] = "gpu";
+    require(!decodeRecordingRequestJson(invalidAec.dump()), "AEC rejects implicit GPU backend");
+    invalidAec["defaults"]["recordAudioEchoBackend"] = "cpu";
+    invalidAec["defaults"]["recordAudioEchoCancellation"] = 2;
+    require(!decodeRecordingRequestJson(invalidAec.dump()), "AEC rejects invalid policy");
+    recording.defaults.recordAudioEchoBackend = "cpu";
     require(audio::resolveOutput("auto", CaptureMode::Fullscreen, "0x123") == "default", "fullscreen auto source");
     require(audio::resolveOutput("auto", CaptureMode::Region, "0x123") == "default", "region auto source");
     require(audio::resolveOutput("auto", CaptureMode::Window, "0x123") == "window:0x123", "window auto source");

@@ -400,7 +400,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
                              "--record-audio-output", request.defaults.recordAudioOutput,
                              "--record-audio-input", request.defaults.recordAudioInput,
                              "--record-audio-mix", request.defaults.recordAudioMix,
-                             "--record-audio-echo-cancellation", request.defaults.recordAudioEchoCancellation ? "1" : "0",
+                             "--record-audio-echo-cancellation", std::to_string(request.defaults.recordAudioEchoCancellation),
+                             "--record-audio-echo-backend", request.defaults.recordAudioEchoBackend,
                              "--record-audio-system-gain", std::to_string(request.defaults.recordAudioSystemGain),
                              "--record-audio-mic-gain", std::to_string(request.defaults.recordAudioMicGain)});
     args.push_back("--record-codec");

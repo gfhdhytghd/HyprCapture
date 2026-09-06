@@ -107,6 +107,7 @@ target_link_options(hyprcapture PRIVATE -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecsta
 add_executable(hyprcapture-ui
   src/audio/helper.cpp
   src/audio/echo_source.cpp
+  src/audio/aec_policy.cpp
   src/ui/main.cpp
   src/ui/clipboard_utils.cpp
   src/ui/capture_overlay.cpp
@@ -128,11 +129,64 @@ target_link_libraries(hyprcapture-ui PRIVATE Qt6::Network Qt6::Core Qt6::Gui Qt6
 target_link_libraries(hyprcapture-ui PRIVATE ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
 target_link_options(hyprcapture-ui PRIVATE -Wl,-z,relro -Wl,-z,now -Wl,-z,noexecstack)
 
+# Optional inference stays outside the compositor and UI. No TensorFlow headers
+# are needed here; the pinned CPU runtime is loaded through its stable C ABI.
+pkg_check_modules(FFTW REQUIRED IMPORTED_TARGET fftw3)
+pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample libavutil)
+add_library(hyprcapture-dtln STATIC src/audio/dtln.cpp src/audio/dtln_stream.cpp)
+set_target_properties(hyprcapture-dtln PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(hyprcapture-dtln PUBLIC src)
+target_link_libraries(hyprcapture-dtln PUBLIC PkgConfig::FFTW PkgConfig::SWRESAMPLE ${CMAKE_DL_LIBS})
+add_library(spa-aec-dtln SHARED src/audio/dtln_spa.cpp)
+target_link_libraries(spa-aec-dtln PRIVATE hyprcapture-dtln PkgConfig::PIPEWIRE)
+add_executable(hyprcapture-aec src/audio/aec_worker.cpp src/audio/aec_policy.cpp)
+pkg_get_variable(HYPRCAPTURE_SPA_PLUGIN_DIR libspa-0.2 plugindir)
+target_compile_definitions(hyprcapture-aec PRIVATE HYPRCAPTURE_SPA_PLUGIN_DIR="${HYPRCAPTURE_SPA_PLUGIN_DIR}")
+target_link_libraries(hyprcapture-aec PRIVATE hyprcapture-dtln Qt6::Core Qt6::Network PkgConfig::PIPEWIRE)
+qt_add_resources(hyprcapture-aec "aec-golden" PREFIX "/aec" BASE "resources/aec"
+    FILES resources/aec/golden-256.qz resources/aec/golden-512.qz)
+find_package(OpenVINO QUIET COMPONENTS Runtime)
+if(OpenVINO_FOUND)
+  add_library(hyprcapture-aec-openvino SHARED src/audio/dtln_openvino.cpp)
+  target_include_directories(hyprcapture-aec-openvino PRIVATE src)
+  target_link_libraries(hyprcapture-aec-openvino PRIVATE openvino::runtime)
+  install(TARGETS hyprcapture-aec-openvino LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/hyprcapture)
+endif()
+set(HYPRCAPTURE_AEC_MODEL_DIR "" CACHE PATH "Immutable installed DTLN model directory (e.g. Nix store)")
+set(HYPRCAPTURE_TFLITE_LIBRARY "" CACHE FILEPATH "Installed TensorFlow Lite 2.14.0 C runtime")
+foreach(aec_target hyprcapture-ui hyprcapture-aec)
+  if(HYPRCAPTURE_AEC_MODEL_DIR)
+    target_compile_definitions(${aec_target} PRIVATE HYPRCAPTURE_AEC_MODEL_DIR="${HYPRCAPTURE_AEC_MODEL_DIR}")
+  endif()
+  if(HYPRCAPTURE_TFLITE_LIBRARY)
+    target_compile_definitions(${aec_target} PRIVATE HYPRCAPTURE_TFLITE_LIBRARY="${HYPRCAPTURE_TFLITE_LIBRARY}")
+  endif()
+endforeach()
+install(TARGETS hyprcapture-aec RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+install(TARGETS spa-aec-dtln LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}/hyprcapture)
+install(PROGRAMS scripts/build-aec-runtime.sh DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME hyprcapture-build-aec-runtime)
+install(PROGRAMS scripts/install-aec.sh DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME hyprcapture-install-aec)
+install(FILES resources/aec/DTLN-LICENSE.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/hyprcapture)
+
 if(BUILD_TESTING)
+  add_library(hyprcapture-fake-tflite SHARED tests/aec_fake_tflite.cpp)
+  add_executable(hyprcapture-aec-spa-test tests/aec_spa_test.cpp)
+  target_link_libraries(hyprcapture-aec-spa-test PRIVATE PkgConfig::PIPEWIRE ${CMAKE_DL_LIBS})
+  add_test(NAME aec-overload COMMAND hyprcapture-aec-spa-test $<TARGET_FILE:spa-aec-dtln> $<TARGET_FILE:hyprcapture-fake-tflite>)
+  set_tests_properties(aec-overload PROPERTIES TIMEOUT 10)
+  add_executable(hyprcapture-aec-delay-test tests/aec_delay_test.cpp)
+  target_link_libraries(hyprcapture-aec-delay-test PRIVATE hyprcapture-dtln)
+  add_test(NAME aec-delay COMMAND hyprcapture-aec-delay-test)
+  add_executable(hyprcapture-aec-policy-test tests/aec_policy_test.cpp src/audio/aec_policy.cpp src/ui/remembered_settings.cpp src/shared/config.cpp)
+  target_include_directories(hyprcapture-aec-policy-test PRIVATE src)
+  target_link_libraries(hyprcapture-aec-policy-test PRIVATE Qt6::Core)
+  add_test(NAME aec-policy COMMAND hyprcapture-aec-policy-test)
   find_package(Qt6 REQUIRED COMPONENTS Test)
   get_target_property(HYPRCAPTURE_UI_TEST_SOURCES hyprcapture-ui SOURCES)
   list(REMOVE_ITEM HYPRCAPTURE_UI_TEST_SOURCES src/ui/main.cpp)
   add_executable(hyprcapture-sound-ui-test tests/sound_ui_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
+  # Isolate UI tests from an installed AEC worker and network/model downloads.
+  set_target_properties(hyprcapture-sound-ui-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
   target_include_directories(hyprcapture-sound-ui-test PRIVATE src ${GIO_INCLUDE_DIRS})
   target_link_libraries(hyprcapture-sound-ui-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
   add_test(NAME hyprcapture-sound-ui-test COMMAND hyprcapture-sound-ui-test)

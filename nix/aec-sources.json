@@ -1,0 +1,77 @@
+[
+  {
+    "name": "abseil-cpp",
+    "url": "https://codeload.github.com/abseil/abseil-cpp/tar.gz/b971ac5250ea8de900eae9f95e06548d14cd95fe",
+    "sha256": "8eeec9382fc0338ef5c60053f3a4b0e0708361375fe51c9e65d0ce46ccfe55a7"
+  },
+  {
+    "name": "cpuinfo",
+    "url": "https://codeload.github.com/pytorch/cpuinfo/tar.gz/3dc310302210c1891ffcfb12ae67b11a3ad3a150",
+    "sha256": "f2f4df6d2b01036f36c5e372954e536881cdd59f5c2461c67aa0a92c6d755c61"
+  },
+  {
+    "name": "eigen",
+    "url": "https://gitlab.com/libeigen/eigen/-/archive/0b51f763cbbd0ed08168f88972724329f0375498/eigen-0b51f763cbbd0ed08168f88972724329f0375498.tar.gz",
+    "sha256": "70a3b0e357fc037740002f5097a15dba1ea0dde28d37f5d9c86f76a06626f4fc"
+  },
+  {
+    "name": "farmhash",
+    "url": "https://codeload.github.com/google/farmhash/tar.gz/0d859a811870d10f53a594927d0d0b97573ad06d",
+    "sha256": "18392cf0736e1d62ecbb8d695c31496b6507859e8c75541d7ad0ba092dc52115"
+  },
+  {
+    "name": "fft2d",
+    "url": "https://storage.googleapis.com/mirror.tensorflow.org/github.com/petewarden/OouraFFT/archive/v1.0.tar.gz",
+    "sha256": "5f4dabc2ae21e1f537425d58a49cdca1c49ea11db0d6271e2a4b27e9697548eb"
+  },
+  {
+    "name": "flatbuffers",
+    "url": "https://codeload.github.com/google/flatbuffers/tar.gz/v23.5.26",
+    "sha256": "1cce06b17cddd896b6d73cc047e36a254fb8df4d7ea18a46acf16c4c0cd3f3f3"
+  },
+  {
+    "name": "gemmlowp",
+    "url": "https://codeload.github.com/google/gemmlowp/tar.gz/e844ffd17118c1e17d94e1ba4354c075a4577b88",
+    "sha256": "b776b2babfc0c49b6886e933dac041286f57f5b15e267260f2d3a3d373231ba8"
+  },
+  {
+    "name": "ml_dtypes",
+    "url": "https://codeload.github.com/jax-ml/ml_dtypes/tar.gz/5b9fc9ad978757654843f4a8d899715dbea30e88",
+    "sha256": "9662811d9ab3823a56f8fa91b5a67fd82062b6dd4f187169b41e82a44e526455"
+  },
+  {
+    "name": "neon2sse",
+    "url": "https://storage.googleapis.com/mirror.tensorflow.org/github.com/intel/ARM_NEON_2_x86_SSE/archive/a15b489e1222b2087007546b4912e21293ea86ff.tar.gz",
+    "sha256": "019fbc7ec25860070a1d90e12686fc160cfb33e22aa063c80f52b363f1361e9d"
+  },
+  {
+    "name": "ruy",
+    "url": "https://codeload.github.com/google/ruy/tar.gz/3286a34cc8de6149ac6844107dfdffac91531e72",
+    "sha256": "7c6f82bb6243befdd34472d631db8c18f22eeddf78608f082e5dd72ecb22b3a3"
+  },
+  {
+    "name": "xnnpack",
+    "url": "https://codeload.github.com/google/XNNPACK/tar.gz/b9d4073a6913891ce9cbd8965c8d506075d2a45a",
+    "sha256": "104d3ef9efa30e97bf036194b43b5d4404d8522b960634424aa98ac4116b5a7d"
+  },
+  {
+    "name": "fp16",
+    "url": "https://github.com/Maratyszcza/FP16/archive/0a92994d729ff76a58f692d3028ca1b64b145d91.zip",
+    "sha256": "e66e65515fa09927b348d3d584c68be4215cfe664100d01c9dbc7655a5716d70"
+  },
+  {
+    "name": "fxdiv",
+    "url": "https://github.com/Maratyszcza/FXdiv/archive/b408327ac2a15ec3e43352421954f5b1967701d1.zip",
+    "sha256": "ab7dfb08829bee33dca38405d647868fb214ac685e379ec7ef2bebcd234cd44d"
+  },
+  {
+    "name": "pthreadpool",
+    "url": "https://github.com/Maratyszcza/pthreadpool/archive/43edadc654d6283b4b6e45ba09a853181ae8e850.zip",
+    "sha256": "e6370550a1abf1503daf3c2c196e0a1c2b253440c39e1a57740ff49af2d8bedf"
+  },
+  {
+    "name": "psimd",
+    "url": "https://codeload.github.com/Maratyszcza/psimd/tar.gz/072586a71b55b7f8c584153d223e95687148a900",
+    "sha256": "f6c4dab91ae9a03b3019e7cab0572743afd0e1b6e75b97fcca50259c737c924e"
+  }
+]

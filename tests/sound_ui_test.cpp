@@ -7,7 +7,7 @@
 #include <unistd.h>
 #include "ui/audio_meter.hpp"
 #include <QSlider>
-#include <QCheckBox>
+
 #include "ui/capture_overlay.hpp"
 #include "audio/helper.hpp"
 #include <QApplication>
@@ -64,6 +64,8 @@ int main(int argc, char** argv) {
     QTemporaryDir configDir;
     require(configDir.isValid(), "temporary settings directory");
     qputenv("XDG_CONFIG_HOME", configDir.path().toUtf8());
+    qputenv("XDG_CACHE_HOME", (configDir.path()+"/cache").toUtf8());
+    qputenv("XDG_DATA_HOME", (configDir.path()+"/data").toUtf8());
     QApplication app(argc, argv);
     QString expectedOutput = "test-output", expectedLabel = "Test speakers";
     if (qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
@@ -126,13 +128,13 @@ int main(int argc, char** argv) {
     if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND"))
         for (const char* name : {"soundMeter", "micMeter"})
             require(std::abs(overlay.findChild<QWidget*>(name)->property("postGainPeak").toDouble() - .1) < .0001, "Off preview receives live levels");
-    auto* aec = overlay.findChild<QCheckBox*>("echoCancellation");
-    require(aec && aec->isChecked() && preview->arguments().last() == "1", "AEC defaults on in preview");
-    aec->setChecked(false); QTest::qWait(150);
+    auto* aec = overlay.findChild<QWidget*>("echoCancellation");
+    require(aec && button(overlay, "echoCancellation")->text().contains("Auto") && preview->arguments().value(4) == "-1" && preview->arguments().last() == "cpu", "AEC defaults to automatic CPU in preview");
+    choose(overlay, "echoCancellation", "0"); QTest::qWait(1200);
     preview = nullptr;
     for (auto* process : overlay.findChildren<QProcess*>())
         if (process->arguments().value(0) == "--sound-meter" && process->state() == QProcess::Running) preview = process;
-    require(preview && preview->arguments().last() == "0", "AEC switch reaches helper");
+    require(preview && preview->arguments().value(4) == "0", "AEC switch reaches helper");
     require(button(overlay, "soundInput")->isVisible() && button(overlay, "soundOutput")->isVisible(), "off keeps all sound options visible");
     choose(overlay, "soundMode", "microphone");
     QTest::qWait(150);
@@ -160,6 +162,9 @@ int main(int argc, char** argv) {
     gain->setValue(6);
     choose(overlay, "soundPreset", "auto-balance");
     require(!overlay.findChild<QWidget*>("soundMixer")->isVisible(), "automatic hides fourth row");
+    require(aec->isVisible(), "AEC remains accessible in auto balance");
+    choose(overlay, "soundPreset", "voice-priority");
+    require(aec->isVisible(), "AEC remains accessible in voice priority");
     choose(overlay, "soundPreset", "manual");
     CaptureOverlay second(overlay, QRect(0, 0, 360, 640), true);
     second.show();
@@ -175,7 +180,7 @@ int main(int argc, char** argv) {
         require(second.rect().contains(geometry), "sound controls within narrow overlay");
     }
     require(second.findChild<QSlider*>("micGain")->value() == 6, "gain survives monitor switch");
-    require(!second.findChild<QCheckBox*>("echoCancellation")->isChecked(), "AEC setting survives monitor switch");
+    require(button(second, "echoCancellation")->toolTip().contains("Always off"), "AEC setting survives monitor switch");
     for (const char* name : {"soundMixer", "micGain", "soundGain", "micMeter", "soundMeter", "echoCancellation"}) {
         auto* widget = second.findChild<QWidget*>(name);
         require(widget && widget->isVisible(), "manual narrow mixer visible");

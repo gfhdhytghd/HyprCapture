@@ -39,7 +39,7 @@ bool AudioSession::start(const CaptureDefaults& defaults, const std::filesystem:
     fcntl(m_reader, F_SETFL, fcntl(m_reader, F_GETFL) | O_NONBLOCK);
     auto process = spawn({m_helper, "--sound-capture", toString(defaults.recordAudio), defaults.recordAudioOutput,
                           defaults.recordAudioInput, m_directory.string(), defaults.recordAudioMix,
-                          std::to_string(defaults.recordAudioSystemGain), std::to_string(defaults.recordAudioMicGain), defaults.recordAudioEchoCancellation ? "1" : "0"}, control[0]);
+                          std::to_string(defaults.recordAudioSystemGain), std::to_string(defaults.recordAudioMicGain), std::to_string(defaults.recordAudioEchoCancellation), defaults.recordAudioEchoBackend}, control[0]);
     close(control[0]);
     if (process.spawnError) { error = strerror(process.spawnError); return false; }
     m_worker = std::thread([this, process]() mutable {
@@ -82,6 +82,7 @@ std::vector<std::string> AudioSession::messages() {
     }
     for (auto end = m_buffer.find('\n'); end != std::string::npos; end = m_buffer.find('\n')) {
         auto event = nlohmann::json::parse(m_buffer.substr(0, end), nullptr, false);
+        if (event.is_object() && event.value("audioReady", false)) m_ready = true;
         if (event.is_object() && event.contains("error") && event["error"].is_string()) result.push_back(event["error"].get<std::string>());
         m_buffer.erase(0, end + 1);
     }
