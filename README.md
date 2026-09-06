@@ -331,7 +331,7 @@ hl.config({
             record_window_fps_limit = 12,
             record_window_real_bg_fps_limit = 8,
             record_audio = "off",
-            record_audio_output = "default",
+            record_audio_output = "auto",
             record_audio_input = "default",
             record_codec = "auto",
             record_transparent_codec = "auto",
@@ -417,7 +417,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `record_audio_mix` | string | `voice-priority` | `manual`, `auto-balance`, or `voice-priority`. |
 | `record_audio_system_gain` | int | `0` | System gain in dB, −60 to +24; −61 mutes. |
 | `record_audio_mic_gain` | int | `0` | Microphone gain in dB, −60 to +24; −61 mutes. |
-| `record_audio_output` | string | `default` | Output device whose monitor is recorded for system sound. Use a stable PulseAudio sink name or `default`. |
+| `record_audio_output` | string | `auto` | Auto follows the recording target: system default for fullscreen/region, target application for window recording. Also accepts `default`, a stable output name, or `window:<address>`. |
 | `record_audio_input` | string | `default` | Microphone source name or `default`. Monitor sources are excluded from the microphone picker. |
 | `record_codec` | string | `auto` | Default recording codec shown in the overlay for normal video formats. The UI exposes codec families only: `auto`, `h264`, `h265`, `av1`, `vp9`, and `ffv1`. HyprCapture automatically probes NVENC and VAAPI at the selected resolution, then falls back to the corresponding software encoder. Legacy implementation-specific values remain accepted and are folded into their codec family. GIF, APNG, and WebP use fixed FFmpeg image-animation encoders. |
 | `record_transparent_codec` | string | `auto` | Default recording codec shown when `window_background = "transparent"`. `auto` probes a tiny FFmpeg encode/decode sample and uses a hardware alpha encoder only when it actually preserves alpha; otherwise it falls back to CPU VP9/FFV1 and shows a warning. |
@@ -433,13 +433,13 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 
 ### Recording sound
 
-The recording toolbar has a third **Sound** row. Choose **Off**, **System**, **Microphone**, or **Mix**, then select the output device and/or microphone. Device menus refresh when opened and include **System default**. Defaults are resolved when recording starts and remain fixed for that recording. GIF, APNG, and WebP do not carry audio; their Sound controls are disabled without forgetting your video settings.
+The recording toolbar has a third **Sound** row. Choose **Off**, **System**, **Microphone**, or **Mix**, then select the sound source and/or microphone. The **Source** menu includes **Auto** (default), **System default**, output devices, and current windows. Auto captures the system default output for fullscreen/region recording and the target window application for window recording. Device menus refresh when opened and include **System default**. Defaults are resolved when recording starts and remain fixed for that recording. GIF, APNG, and WebP do not carry audio; their Sound controls are disabled without forgetting your video settings.
 
 Both recording backends use a separate headless helper process for sound. Mix outputs a single stereo track. Choose **Manual**, **Auto balance**, or **Voice priority** (default) in the Sound row. Auto balance applies a microphone high-pass filter, gentle noise gate and bounded speech normalization, plus system-sound compression and attenuation. Voice priority also ducks system sound when the processed microphone level rises; this is level-based ducking, not speech recognition.
 
 Manual shows a fourth row with separate **Sound** and **Mic** gain sliders (−60 to +24 dB, plus Mute), post-gain sample-peak/RMS meters in dBFS, a 1.2-second peak hold and clipping indication. The preview samples the selected devices without playback or PCM storage and stops when the manual panel closes. Gain changes affect the recording, not desktop playback volume. Each meter represents its channel before summing and the final limiter; the sum can exceed 0 dBFS even when the individual channels do not. Both channels feed a final limiter. Settings are chosen before recording; the panel is not a live recording mixer. Gain settings also apply after processing in automatic presets.
 
-If a device is missing or disconnects, HyprCapture reports the error and keeps recording video; the failed source becomes silent while another source continues. Devices are not automatically switched or reconnected during a recording.
+If a device is missing or disconnects, HyprCapture reports the error and keeps recording video; the failed source becomes silent while another source continues. Output devices and microphones are not automatically switched or reconnected during a recording. Window sources follow playback streams from the selected application process and its children, including streams created after recording starts; unrelated applications on the same output are excluded. Window capture waits silently when that application is not playing audio and never falls back to desktop audio. Applications that share one process/audio service across multiple windows (for example, browsers) cannot always be isolated per window. Matching uses process identity, not window title or application name. The source menu refreshes when opened; a closed window selection remains marked unavailable.
 
 Stopping displays **Merging sound** while FFmpeg copies the video stream and adds AAC (MP4/MOV) or Opus (WebM/MKV). The video is not reencoded. Temporary float PCM files are stored with private permissions in a `.hyprcapture-sound-*` directory next to the video (about 23 MB per minute per source). Successful merging removes these files. A failed merge preserves the original video and recoverable audio, and the error gives the recovery directory. Do not remove it until you have recovered any sound you need.
 
@@ -490,3 +490,5 @@ Temporary compositor artifacts and thumbnail/clipboard scratch files are written
 - `window_background = "real"` uses compositor-captured real background data when available and falls back to reconstructing from the frozen desktop snapshot.
 - Recording applies window decoration cropping and solid/follow-system backgrounds in the compositor-side path. Since plugin-side recording cannot query the helper's Qt palette, `window_background = "follow-system"` uses the same light fallback color as the screenshot helper. `record_solid_alpha = true` lets follow-system/white/black window recordings keep transparent pixels outside the window content when the selected format/codec supports alpha. `window_background = "real"` uses live compositor background data for window recordings and is treated as opaque for recording-format validation. Transparent output requires an alpha-capable format such as `webm`/VP9 or `mkv`/FFV1; MP4/MOV H.264/H.265 output is intentionally rejected for transparent recordings.
 - Do not run `hyprpm update` or reload the plugin while an active screenshot overlay is being used.
+
+To verify application audio isolation against a running PipeWire server, run `python3 tests/audio_application_live_test.py build-codex/hyprcapture-ui`. This creates private test outputs without changing the default output, and checks multiple streams, subprocess matching, late playback and live metering.

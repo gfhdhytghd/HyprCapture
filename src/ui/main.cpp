@@ -727,7 +727,7 @@ int main(int argc, char** argv) {
         {"record-audio-system-gain", "System gain in dB.", "dB", "0"},
         {"record-audio-mic-gain", "Mic gain in dB.", "dB", "0"},
         {"record-audio", "Recording sound: off, system, microphone, mix.", "mode", "off"},
-        {"record-audio-output", "System sound output device.", "device", "default"},
+        {"record-audio-output", "Sound source: auto, default, output device, or window:<address>.", "source", "auto"},
         {"record-audio-input", "Microphone source.", "device", "default"},
         {"record-codec", "Recording codec.", "codec", "auto"},
         {"record-transparent-codec", "Transparent window recording codec.", "codec", "auto"},

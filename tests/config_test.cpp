@@ -1,4 +1,5 @@
 #include "shared/config.hpp"
+#include "shared/audio_source.hpp"
 #include "shared/protocol.hpp"
 
 #include <cstdlib>
@@ -449,6 +450,13 @@ int main() {
     require(decodedRecording->defaults.recordCountdownSeconds == 3, "decoded recording countdown seconds");
     require(decodedRecording->defaults.recordWindowBackend == RecordWindowBackend::GsrVisible, "decoded recording window backend");
     require(CaptureDefaults{}.recordAudio == RecordAudio::Off, "sound defaults off");
+    require(CaptureDefaults{}.recordAudioOutput == "auto", "sound source defaults auto");
+    require(audio::resolveOutput("auto", CaptureMode::Fullscreen, "0x123") == "default", "fullscreen auto source");
+    require(audio::resolveOutput("auto", CaptureMode::Region, "0x123") == "default", "region auto source");
+    require(audio::resolveOutput("auto", CaptureMode::Window, "0x123") == "window:0x123", "window auto source");
+    require(audio::resolveOutput("auto", CaptureMode::Window, "") == "window:", "unselected window never captures desktop");
+    require(audio::resolveOutput("window:0x456", CaptureMode::Region, "0x123") == "window:0x456", "explicit window overrides auto target");
+    require(audio::resolveOutput("default", CaptureMode::Window, "0x123") == "default", "explicit default overrides window auto");
     for (auto mode : {RecordAudio::Off, RecordAudio::System, RecordAudio::Microphone, RecordAudio::Mix}) {
         recording.defaults.recordAudio = mode;
         recording.defaults.recordAudioMix = "manual";

@@ -164,7 +164,7 @@ void registerConfigValues() {
     addIntConfig("record_audio_system_gain", "System gain in dB (-61=mute, max 24)", 0);
     addIntConfig("record_audio_mic_gain", "Microphone gain in dB (-61=mute, max 24)", 0);
     addStringConfig("record_audio", "Recording sound: off, system, microphone, mix", "off");
-    addStringConfig("record_audio_output", "System sound output device or default", "default");
+    addStringConfig("record_audio_output", "Sound source: auto, default, output device, or window:<address>", "auto");
     addStringConfig("record_audio_input", "Microphone source or default", "default");
     addStringConfig("record_codec", "Default recording codec", "auto");
     addStringConfig("record_transparent_codec", "Default transparent recording codec", "auto");
@@ -231,7 +231,7 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.recordAudioSystemGain = std::clamp<std::int64_t>(configInt("record_audio_system_gain", 0), -61, 24);
     defaults.recordAudioMicGain = std::clamp<std::int64_t>(configInt("record_audio_mic_gain", 0), -61, 24);
     defaults.recordAudio = hyprcapture::parseRecordAudio(configString("record_audio", "off"));
-    defaults.recordAudioOutput = configString("record_audio_output", "default");
+    defaults.recordAudioOutput = configString("record_audio_output", "auto");
     defaults.recordAudioInput = configString("record_audio_input", "default");
     defaults.recordCodec = configString("record_codec", defaults.recordCodec);
     defaults.recordTransparentCodec = configString("record_transparent_codec", defaults.recordTransparentCodec);

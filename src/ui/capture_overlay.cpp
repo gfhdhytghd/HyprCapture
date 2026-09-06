@@ -13,6 +13,7 @@
 #include "ui/screenshot_notification.hpp"
 #include "ui/watermark.hpp"
 #include "shared/protocol.hpp"
+#include "shared/audio_source.hpp"
 
 #include <LayerShellQt/Window>
 
@@ -77,6 +78,7 @@ class InlineSelect final : public QWidget {
     void setOnOpening(std::function<void()> callback) { m_onOpening = std::move(callback); }
     void setCompactWidth(int width) { if (m_compactWidth == width) return; m_compactWidth = width; addItems(m_items); setCurrentText(m_current); }
 
+    void setSelectionHint(const QString& hint) { if (m_hint == hint) return; m_hint = hint; setCurrentText(m_current); }
     void setOnChanged(std::function<void()> onChanged);
     void setCurrentText(const QString& text);
     QString currentText() const;
@@ -99,6 +101,7 @@ class InlineSelect final : public QWidget {
     QStringList  m_items;
     QString      m_current;
     QString      m_prefix;
+    QString      m_hint;
     std::map<QString, QString> m_labels;
     std::function<void()> m_onOpening;
     int m_compactWidth = 0;
@@ -1356,7 +1359,7 @@ void InlineSelect::setOnChanged(std::function<void()> onChanged) {
 void InlineSelect::setCurrentText(const QString& text) {
     m_current = text;
     const auto fullText = buttonText(text);
-    m_button->setToolTip(fullText);
+    m_button->setToolTip(fullText + (m_hint.isEmpty() ? QString{} : "\n" + m_hint));
     m_button->setText(m_compactWidth > 0 ? m_button->fontMetrics().elidedText(fullText, Qt::ElideRight, std::max(30, m_compactWidth - 42)) : fullText);
     for (auto* button : m_panel->findChildren<QPushButton*>())
         button->setChecked(button->property("value").toString() == text);
@@ -2038,7 +2041,7 @@ void CaptureOverlay::buildToolbar() {
     m_soundOutput->setObjectName("soundOutput");
     m_soundInput = new InlineSelect(this, m_soundOptions);
     m_soundInput->setObjectName("soundInput");
-    m_soundOutput->setPrefix("Output");
+    m_soundOutput->setPrefix("Source");
     m_soundInput->setPrefix("Mic");
     for (auto* select : {m_soundOutput, m_soundInput}) {
         select->setCompactWidth(210);
@@ -2047,6 +2050,8 @@ void CaptureOverlay::buildToolbar() {
         select->setOnOpening([this] { refreshSoundDevices(); });
         soundLayout->addWidget(select);
     }
+    m_soundOutput->addItems({"auto", "default"});
+    m_soundOutput->setLabels({{"auto", "Auto"}, {"default", "System default"}});
     m_soundOutput->setCurrentText(qString(m_defaults.recordAudioOutput));
     m_soundInput->setCurrentText(qString(m_defaults.recordAudioInput));
     m_soundOutput->setOnChanged([this, onRecordOptionChanged] {
@@ -2609,10 +2614,11 @@ void CaptureOverlay::refreshSoundDevices() {
         m_soundDevicesLoading = false;
         const auto object = QJsonDocument::fromJson(process->readAllStandardOutput()).object();
         if (code == 0 && status == QProcess::NormalExit) {
-            const auto fill = [](InlineSelect* select, const QJsonArray& devices) {
+            const auto fill = [](InlineSelect* select, const QJsonArray& devices, bool output) {
                 const auto current = select->currentText();
                 QStringList names{"default"};
                 std::map<QString, QString> labels{{"default", "System default"}};
+                if (output) { names.prepend("auto"); labels["auto"] = "Auto"; }
                 for (const auto& value : devices) {
                     const auto device = value.toObject();
                     const auto name = device.value("name").toString();
@@ -2624,8 +2630,10 @@ void CaptureOverlay::refreshSoundDevices() {
                 if (!names.contains(current)) { names << current; labels[current] = current + " (unavailable)"; }
                 select->setLabels(labels); select->addItems(names); select->setCurrentText(current);
             };
-            fill(m_soundOutput, object.value("outputs").toArray());
-            fill(m_soundInput, object.value("inputs").toArray());
+            auto outputs = object.value("outputs").toArray();
+            for (const auto& window : object.value("windows").toArray()) outputs.append(window);
+            fill(m_soundOutput, outputs, true);
+            fill(m_soundInput, object.value("inputs").toArray(), false);
             m_soundOptions->setToolTip({});
         } else m_soundOptions->setToolTip("Audio devices unavailable; video recording remains available");
         process->deleteLater();
@@ -2639,8 +2647,18 @@ void CaptureOverlay::refreshSoundDevices() {
 
 void CaptureOverlay::updateSoundMeter() {
     const bool wanted = isVisible() && m_overlayActive && m_soundMixer && m_soundMixer->isVisible();
+    const auto* target = selectedWindow();
+    if (!target) target = hoveredWindow();
+    const auto source = hyprcapture::audio::resolveOutput(m_defaults.recordAudioOutput, m_mode, target ? target->address.toStdString() : "");
+    if (m_soundOutput) {
+        const bool windowSource = source.starts_with("window:");
+        QString hint;
+        if (m_defaults.recordAudioOutput == "auto") hint = windowSource ? (target ? "Auto: " + target->title : "Auto: choose a window") : "Auto: system default output";
+        if (windowSource) hint += (hint.isEmpty() ? "" : "\n") + QString("Captures the window application's audio; windows sharing a process may share audio.");
+        m_soundOutput->setSelectionHint(hint);
+    }
     const QStringList args{"--sound-meter", qString(hyprcapture::toString(m_defaults.recordAudio)),
-                           qString(m_defaults.recordAudioOutput), qString(m_defaults.recordAudioInput)};
+                           qString(source), qString(m_defaults.recordAudioInput)};
     const QString key = args.join(QChar(0x1f));
     if (m_meterProcess && (!wanted || key != m_meterKey)) {
         m_meterProcess->disconnect(this);
@@ -2660,6 +2678,7 @@ void CaptureOverlay::updateSoundMeter() {
         while (buffer->contains('\n')) {
             const int end = buffer->indexOf('\n');
             const auto object = QJsonDocument::fromJson(buffer->left(end)).object(); buffer->remove(0, end + 1);
+            if (object.contains("error")) m_systemMeter->setToolTip(object["error"].toString());
             if (!object.contains("levels")) continue;
             const auto levels = object["levels"].toObject();
             auto apply = [&levels](AudioMeter* meter, const char* role) {
@@ -3797,7 +3816,7 @@ void CaptureOverlay::relayoutToolbar() {
         const int count = (m_soundOutput->isVisible() ? 1 : 0) + (m_soundInput->isVisible() ? 1 : 0);
         const int deviceWidth = std::clamp((width() - 64 - 220) / std::max(1, count), 45, 210);
         m_soundMode->setPrefix(width() < 500 ? "" : "Sound");
-        m_soundOutput->setPrefix(width() < 500 ? "" : "Output");
+        m_soundOutput->setPrefix(width() < 500 ? "" : "Source");
         m_soundInput->setPrefix(width() < 500 ? "" : "Mic");
         m_soundMode->setCompactWidth(width() < 500 ? 75 : 155);
         m_soundPreset->setCompactWidth(width() < 500 ? 85 : 130);

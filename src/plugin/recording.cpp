@@ -1,6 +1,7 @@
 #include "plugin/recording.hpp"
 #include "plugin/audio_session.hpp"
 #include "shared/audio_timeline.hpp"
+#include "shared/audio_source.hpp"
 
 #include "plugin/artifact_capture.hpp"
 #include "plugin/notification.hpp"
@@ -1251,7 +1252,9 @@ void beginAudio(const RecordingRequest& request, const std::filesystem::path& ou
     auto shell = trustedProgramPath("sh");
     std::string error = "trusted audio helper unavailable";
     auto session = std::make_unique<AudioSession>();
-    if (!helper || !shell || !session->start(request.defaults, output, *helper, *shell, childEnvironment(), error)) {
+    auto audioDefaults = request.defaults;
+    audioDefaults.recordAudioOutput = audio::resolveOutput(audioDefaults.recordAudioOutput, request.mode, request.windowAddress);
+    if (!helper || !shell || !session->start(audioDefaults, output, *helper, *shell, childEnvironment(), error)) {
         notifyRecording("Sound: " + error + "; video recording continues", NotificationLevel::Error, 7000);
         return;
     }

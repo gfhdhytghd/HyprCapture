@@ -19,6 +19,9 @@
 #include <cstdio>
 #include <fcntl.h>
 #include <memory>
+#include <map>
+#include <set>
+#include <QRegularExpression>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -46,6 +49,52 @@ QString program(const char* name) {
     }
     return {};
 }
+QJsonArray windowSources() {
+    const auto hyprctl = program("hyprctl");
+    if (hyprctl.isEmpty()) return {};
+    QProcess query;
+    query.start(hyprctl, {"-j", "clients"});
+    if (!query.waitForFinished(2000) || query.exitCode() != 0 || query.exitStatus() != QProcess::NormalExit) {
+        query.kill(); query.waitForFinished(1000); return {};
+    }
+    const auto bytes = query.readAllStandardOutput();
+    if (bytes.size() > 8 * 1024 * 1024) return {};
+    QJsonArray result;
+    for (const auto& value : QJsonDocument::fromJson(bytes).array()) {
+        const auto window = value.toObject();
+        const auto address = window["address"].toString();
+        const auto pid = window["pid"].toInt();
+        if (!QRegularExpression("^0x[0-9a-fA-F]+$").match(address).hasMatch() || pid <= 0) continue;
+        auto title = window["title"].toString().left(256);
+        const auto app = window["class"].toString().left(128);
+        if (title.isEmpty()) title = app;
+        result.append(QJsonObject{{"name", "window:" + address}, {"description", "Window · " + title + " — " + app}, {"pid", pid}});
+        if (result.size() >= 512) break;
+    }
+    return result;
+}
+struct ProcessIdentity { int parent = 0; QByteArray start; };
+ProcessIdentity processIdentity(int pid) {
+    if (pid <= 1) return {};
+    const auto path = QString("/proc/%1/stat").arg(pid);
+    if (QFileInfo(path).ownerId() != getuid()) return {};
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return {};
+    const auto bytes = file.read(8192);
+    const auto fields = bytes.mid(bytes.lastIndexOf(')') + 2).simplified().split(' ');
+    return {fields.value(1).toInt(), fields.value(19)};
+}
+bool processBelongsTo(int pid, int target) {
+    // Audio often runs in a browser/application subprocess. Do not match by a
+    // human-readable application name: unrelated applications can share names.
+    for (int depth = 0; pid > 1 && depth < 64; ++depth) {
+        if (pid == target) return true;
+        const auto identity = processIdentity(pid);
+        if (identity.parent == pid) break;
+        pid = identity.parent;
+    }
+    return false;
+}
 struct Device {
     QString name, description, monitor;
     uint32_t index = PA_INVALID_INDEX;
@@ -56,7 +105,7 @@ struct Track {
     pa_stream* stream = nullptr;
     QString device, role;
     int fd = -1;
-    uint32_t sourceIndex = PA_INVALID_INDEX;
+    uint32_t sourceIndex = PA_INVALID_INDEX, sinkInput = PA_INVALID_INDEX, sinkIndex = PA_INVALID_INDEX;
     std::int64_t next = -1, lastTrace = 0;
     double peak = 0, energy = 0;
     size_t samples = 0;
@@ -70,7 +119,18 @@ struct Recorder {
     std::array<Track, 2> tracks;
     std::int64_t origin = monotonicUs();
     bool meterOnly = false;
-    QTimer meterTimer;
+    QTimer meterTimer, applicationTimer;
+    QJsonArray windows;
+    int applicationPid = 0;
+    QByteArray applicationStart;
+    bool applicationSource = false, scanning = false, scanAgain = false;
+    std::map<uint32_t, std::unique_ptr<Track>> applicationTracks;
+    std::set<uint32_t> scannedInputs;
+    // One second of timestamped stereo audio for the summed live meter.
+    struct MeterFrame { std::int64_t position = -1; float left = 0, right = 0; };
+    std::vector<MeterFrame> meterFrames = std::vector<MeterFrame>(48000);
+    std::int64_t meterNext = 0;
+
     bool listOnly = false, initialized = false, serverFailed = false;
     int pending = 3;
     QTimer pump;
@@ -78,12 +138,108 @@ struct Recorder {
     ~Recorder() {
         pump.stop();
         if (context) pa_context_set_state_callback(context, nullptr, nullptr);
-        for (auto& t : tracks) {
-            if (t.stream) { pa_stream_set_state_callback(t.stream, nullptr, nullptr); pa_stream_disconnect(t.stream); pa_stream_unref(t.stream); }
-            if (t.fd >= 0) close(t.fd);
-        }
+        for (auto& [_, t] : applicationTracks) closeTrack(*t);
+        for (auto& t : tracks) closeTrack(t);
         if (context) { pa_context_disconnect(context); pa_context_unref(context); }
         if (loop) pa_mainloop_free(loop);
+    }
+    void closeTrack(Track& t) {
+        if (t.stream) {
+            pa_stream_set_state_callback(t.stream, nullptr, nullptr);
+            pa_stream_set_read_callback(t.stream, nullptr, nullptr);
+            pa_stream_set_moved_callback(t.stream, nullptr, nullptr);
+            pa_stream_disconnect(t.stream); pa_stream_unref(t.stream); t.stream = nullptr;
+        }
+        if (t.fd >= 0) { close(t.fd); t.fd = -1; }
+    }
+    void scanApplication() {
+        if (!initialized || !applicationSource || applicationPid <= 1 || serverFailed || tracks[0].failed) return;
+        if (scanning) { scanAgain = true; return; }
+        if (processIdentity(applicationPid).start != applicationStart) {
+            for (auto& [_, t] : applicationTracks) closeTrack(*t);
+            applicationTracks.clear(); fail(tracks[0], "window application exited"); return;
+        }
+        scanning = true; scannedInputs.clear();
+        auto* op = pa_context_get_sink_input_info_list(context, [](pa_context*, const pa_sink_input_info* info, int eol, void* data) {
+            auto& r = *static_cast<Recorder*>(data);
+            if (eol) {
+                if (eol > 0) {
+                    for (auto it = r.applicationTracks.begin(); it != r.applicationTracks.end();) {
+                        if (!r.scannedInputs.contains(it->first)) { r.closeTrack(*it->second); it = r.applicationTracks.erase(it); }
+                        else ++it;
+                    }
+                }
+                r.scanning = false;
+                if (r.scanAgain) { r.scanAgain = false; r.scanApplication(); }
+                return;
+            }
+            if (!info) return;
+            const auto* property = pa_proplist_gets(info->proplist, PA_PROP_APPLICATION_PROCESS_ID);
+            const int pid = property ? QByteArray(property).toInt() : 0;
+            if (!processBelongsTo(pid, r.applicationPid)) return;
+            r.scannedInputs.insert(info->index);
+            auto found = r.applicationTracks.find(info->index);
+            if (found != r.applicationTracks.end()) {
+                if (found->second->sinkIndex == info->sink) return;
+                r.closeTrack(*found->second); r.applicationTracks.erase(found);
+            }
+            if (r.applicationTracks.size() >= 64) return;
+            auto track = std::make_unique<Track>();
+            track->owner = &r; track->role = "System"; track->sinkInput = info->index; track->sinkIndex = info->sink;
+            r.applicationTracks[info->index] = std::move(track);
+            // Resolve the actual sink monitor; never substitute the default sink.
+            auto* sinkOp = pa_context_get_sink_info_by_index(r.context, info->sink, [](pa_context*, const pa_sink_info* sink, int, void* data) {
+                auto& r = *static_cast<Recorder*>(data);
+                if (!sink) return;
+                for (auto& [_, t] : r.applicationTracks) {
+                    if (t->sinkIndex == sink->index && !t->stream && !t->failed) {
+                        r.openTrack(*t, "System", QString::fromUtf8(sink->monitor_source_name));
+                        t->sourceIndex = sink->monitor_source;
+                    }
+                }
+            }, &r);
+            if (sinkOp) pa_operation_unref(sinkOp);
+        }, this);
+        if (op) pa_operation_unref(op); else scanning = false;
+    }
+    void addApplicationSamples(Track& t, const float* values, size_t count, std::int64_t position) {
+        if (meterOnly) {
+            for (size_t i = 0; i + 1 < count; i += 2) {
+                const auto frame = position + i / 2;
+                if (frame < meterNext || frame >= meterNext + static_cast<std::int64_t>(meterFrames.size())) continue;
+                auto& slot = meterFrames[frame % meterFrames.size()];
+                if (slot.position != frame) slot = {frame, 0, 0};
+                slot.left += std::isfinite(values[i]) ? values[i] : 0;
+                slot.right += std::isfinite(values[i+1]) ? values[i+1] : 0;
+            }
+            return;
+        }
+        // Callbacks run serially on this helper's main loop. Add streams into one
+        // private sparse PCM file without moving or muting the real playback.
+        std::array<float, 2048> mixed;
+        size_t consumed = 0;
+        while (consumed < count) {
+            const auto n = std::min(mixed.size(), count - consumed);
+            std::fill(mixed.begin(), mixed.end(), 0);
+            const auto offset = position * frameBytes + consumed * sizeof(float);
+            size_t readBytes = 0;
+            while (readBytes < n * sizeof(float)) {
+                const auto got = pread(t.fd, reinterpret_cast<char*>(mixed.data()) + readBytes, n * sizeof(float) - readBytes, offset + readBytes);
+                if (got < 0 && errno == EINTR) continue;
+                if (got < 0) { fail(t, "audio mix read failed"); return; }
+                if (got == 0) break;
+                readBytes += got;
+            }
+            for (size_t i = 0; i < n; ++i) mixed[i] += std::isfinite(values[consumed+i]) ? values[consumed+i] : 0;
+            size_t written = 0;
+            while (written < n * sizeof(float)) {
+                const auto put = pwrite(t.fd, reinterpret_cast<char*>(mixed.data()) + written, n * sizeof(float) - written, offset + written);
+                if (put < 0 && errno == EINTR) continue;
+                if (put <= 0) { fail(t, "audio mix write failed"); return; }
+                written += put;
+            }
+            consumed += n;
+        }
     }
     void fail(Track& t, const QString& reason) {
         if (t.failed) return;
@@ -104,16 +260,31 @@ struct Recorder {
             QJsonArray outputs, inputs;
             for (const auto& d : sinks) outputs.append(QJsonObject{{"name", d.name}, {"description", d.description}});
             for (const auto& d : sources) if (d.monitor.isEmpty()) inputs.append(QJsonObject{{"name", d.name}, {"description", d.description}});
-            auto bytes = QJsonDocument(QJsonObject{{"outputs", outputs}, {"inputs", inputs}}).toJson(QJsonDocument::Compact) + '\n';
+            auto bytes = QJsonDocument(QJsonObject{{"outputs", outputs}, {"inputs", inputs}, {"windows", windows}}).toJson(QJsonDocument::Compact) + '\n';
             (void)!write(STDOUT_FILENO, bytes.constData(), bytes.size());
             QCoreApplication::quit();
             return;
         }
         if (mode == "system" || mode == "mix") {
-            auto name = output == "default" ? defaultSink : output;
+            if (applicationSource) {
+                tracks[0].role = "System";
+                if (applicationPid <= 1 || applicationStart.isEmpty()) fail(tracks[0], "window unavailable; no desktop audio fallback");
+                else {
+                    if (!meterOnly) {
+                        const auto path = QFile::encodeName(directory + "/system.f32");
+                        tracks[0].fd = open(path.constData(), O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+                        if (tracks[0].fd < 0) fail(tracks[0], "cannot create window audio recovery file");
+                    }
+                    scanApplication();
+                    QObject::connect(&applicationTimer, &QTimer::timeout, [&] { scanApplication(); });
+                    applicationTimer.start(1000);
+                }
+            } else {
+            auto name = (output == "default" || output == "auto") ? defaultSink : output;
             QString source;
             for (const auto& d : sinks) if (d.name == name) source = d.monitor;
             openTrack(tracks[0], "System", source);
+            }
         }
         if (mode == "microphone" || mode == "mix") {
             auto name = input == "default" ? defaultSource : input;
@@ -127,8 +298,11 @@ struct Recorder {
         if (source.isEmpty()) { fail(t, "selected device unavailable"); return; }
         for (const auto& d : sources) if (d.name == source) t.sourceIndex = d.index;
         if (!meterOnly) {
+        if (t.sinkInput != PA_INVALID_INDEX) t.fd = fcntl(tracks[0].fd, F_DUPFD_CLOEXEC, 3);
+        else {
         const auto path = QFile::encodeName(directory + (role == "System" ? "/system.f32" : "/microphone.f32"));
         t.fd = open(path.constData(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
+        }
         if (t.fd < 0) { fail(t, "cannot create audio recovery file"); return; }
         }
         pa_sample_spec spec{PA_SAMPLE_FLOAT32LE, 48000, 2};
@@ -151,7 +325,7 @@ struct Recorder {
             if (pa_stream_peek(s, &samples, &bytes) < 0) { t.owner->fail(t, "capture read failed"); return; }
             if (!bytes) return;
             if (!t.failed && samples) {
-                if (t.owner->meterOnly) {
+                if (t.owner->meterOnly && t.sinkInput == PA_INVALID_INDEX) {
                     const auto* values = static_cast<const float*>(samples);
                     for (size_t i = 0; i < bytes / sizeof(float); ++i) {
                         const double v = std::isfinite(values[i]) ? values[i] : 0;
@@ -164,6 +338,13 @@ struct Recorder {
                 const bool timed = pa_stream_get_latency(s, &latency, &negative) == 0;
                 const auto timestamp = monotonicUs() + (timed ? (negative ? static_cast<std::int64_t>(latency) : -static_cast<std::int64_t>(latency)) : 0);
                 auto position = alignedSample(sampleAt(timestamp - t.owner->origin), t.next);
+                if (t.sinkInput != PA_INVALID_INDEX) {
+                    // Never add an overlapping packet twice for one playback stream.
+                    if (t.next >= 0) position = std::max(position, t.next);
+                    t.owner->addApplicationSamples(t, static_cast<const float*>(samples), bytes / sizeof(float), position);
+                    t.next = position + bytes / frameBytes;
+                    pa_stream_drop(s); continue;
+                }
                 if (qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING") && monotonicUs() - t.lastTrace > 500000) {
                     std::fprintf(stderr, "sound %s elapsed=%lld latency=%llu negative=%d timed=%d next=%lld position=%lld bytes=%zu\n",
                                  qPrintable(t.role), static_cast<long long>(monotonicUs() - t.owner->origin),
@@ -190,6 +371,9 @@ struct Recorder {
         }, &t);
         pa_buffer_attr attr{static_cast<uint32_t>(-1), static_cast<uint32_t>(-1), static_cast<uint32_t>(-1), static_cast<uint32_t>(-1), 480 * 8};
         const auto flags = static_cast<pa_stream_flags_t>(PA_STREAM_ADJUST_LATENCY | PA_STREAM_AUTO_TIMING_UPDATE | PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_DONT_MOVE);
+        if (t.sinkInput != PA_INVALID_INDEX && pa_stream_set_monitor_stream(t.stream, t.sinkInput) < 0) {
+            fail(t, "audio server does not support application capture"); return;
+        }
         if (pa_stream_connect_record(t.stream, source.toUtf8().constData(), &attr, flags) < 0) fail(t, "cannot open selected device");
     }
     void start() {
@@ -219,11 +403,12 @@ struct Recorder {
             if (!r.listOnly) {
                 pa_context_set_subscribe_callback(c, [](pa_context*, pa_subscription_event_type_t event, uint32_t index, void* data) {
                     auto& r = *static_cast<Recorder*>(data);
+                    if ((event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SINK_INPUT) r.scanApplication();
                     if ((event & PA_SUBSCRIPTION_EVENT_FACILITY_MASK) == PA_SUBSCRIPTION_EVENT_SOURCE &&
                         (event & PA_SUBSCRIPTION_EVENT_TYPE_MASK) == PA_SUBSCRIPTION_EVENT_REMOVE)
                         for (auto& t : r.tracks) if (!t.role.isEmpty() && t.sourceIndex == index) r.fail(t, "device removed");
                 }, &r);
-                release(pa_context_subscribe(c, PA_SUBSCRIPTION_MASK_SOURCE, nullptr, nullptr));
+                release(pa_context_subscribe(c, static_cast<pa_subscription_mask_t>(PA_SUBSCRIPTION_MASK_SOURCE | PA_SUBSCRIPTION_MASK_SINK_INPUT), nullptr, nullptr));
             }
         }, this);
         if (pa_context_connect(context, nullptr, PA_CONTEXT_NOAUTOSPAWN, nullptr) < 0) serverError();
@@ -242,9 +427,25 @@ struct Recorder {
             fcntl(STDOUT_FILENO, F_SETFL, flags | O_NONBLOCK);
             QObject::connect(&meterTimer, &QTimer::timeout, [&] {
                 QJsonObject levels;
+                if (applicationSource) {
+                    const auto end = std::max<std::int64_t>(0, sampleAt(monotonicUs() - origin) - 4800);
+                    meterNext = std::max(meterNext, end - static_cast<std::int64_t>(meterFrames.size()));
+                    auto& t = tracks[0];
+                    for (; meterNext < end; ++meterNext) {
+                        const auto& frame = meterFrames[meterNext % meterFrames.size()];
+                        if (frame.position == meterNext) {
+                            t.peak = std::max({t.peak, std::abs(static_cast<double>(frame.left)), std::abs(static_cast<double>(frame.right))});
+                            t.energy += frame.left * frame.left + frame.right * frame.right;
+                        }
+                        t.samples += 2;
+                    }
+                }
                 for (auto& t : tracks) {
+                    bool available = !t.failed && t.stream && pa_stream_get_state(t.stream) == PA_STREAM_READY;
+                    if (applicationSource && t.role == "System" && !t.failed && !serverFailed)
+                        for (const auto& [_, stream] : applicationTracks) available |= !stream->failed && stream->stream && pa_stream_get_state(stream->stream) == PA_STREAM_READY;
                     levels[t.role] = QJsonObject{{"peak", t.peak}, {"rms", t.samples ? std::sqrt(t.energy / t.samples) : 0},
-                                                {"available", !t.failed && t.stream && pa_stream_get_state(t.stream) == PA_STREAM_READY}};
+                                                {"available", available}};
                     t.peak = t.energy = 0; t.samples = 0;
                 }
                 const auto bytes = QJsonDocument(QJsonObject{{"levels", levels}}).toJson(QJsonDocument::Compact) + '\n';
@@ -382,6 +583,16 @@ int runHelper(int argc, char** argv) {
         const auto bytes = QJsonDocument(meta).toJson();
         if (metadata.write(bytes) != bytes.size()) return 2;
         metadata.close();
+    }
+    if (recorder.listOnly || recorder.output.startsWith("window:")) recorder.windows = windowSources();
+    recorder.applicationSource = recorder.output.startsWith("window:") || recorder.output.startsWith("pid:");
+    if (recorder.applicationSource) {
+        if (recorder.output.startsWith("pid:")) recorder.applicationPid = recorder.output.mid(4).toInt();
+        else for (const auto& value : recorder.windows) {
+            const auto window = value.toObject();
+            if (window["name"].toString() == recorder.output) { recorder.applicationPid = window["pid"].toInt(); break; }
+        }
+        recorder.applicationStart = processIdentity(recorder.applicationPid).start;
     }
     QSocketNotifier stop(STDIN_FILENO, QSocketNotifier::Read);
     QObject::connect(&stop, &QSocketNotifier::activated, [&] {

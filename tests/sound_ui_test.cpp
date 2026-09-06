@@ -41,7 +41,7 @@ void choose(CaptureOverlay& overlay, const char* name, const QString& value) {
 int main(int argc, char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--sound-list" && !qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
         QThread::msleep(200);
-        std::cout << R"({"outputs":[{"name":"test-output","description":"Test speakers"},{"name":"test-hdmi","description":"Test HDMI"}],"inputs":[{"name":"test-input","description":"Test microphone"}]})" << '\n';
+        std::cout << R"({"outputs":[{"name":"test-output","description":"Test speakers"},{"name":"test-hdmi","description":"Test HDMI"}],"inputs":[{"name":"test-input","description":"Test microphone"}],"windows":[{"name":"window:0x123","description":"Window · Test player — Player","pid":123}]})" << '\n';
         return 0;
     }
     if (argc > 1 && std::string_view(argv[1]) == "--sound-meter" && !qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
@@ -93,6 +93,16 @@ int main(int argc, char** argv) {
     require(viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size())), "reopening must not collapse popup to default row");
     QTest::mouseClick(discovered, Qt::LeftButton);
 
+    choose(overlay, "soundOutput", "auto");
+    require(button(overlay, "soundOutput")->toolTip().contains("Auto"), "auto source selectable");
+    if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
+        choose(overlay, "soundOutput", "window:0x123");
+        require(button(overlay, "soundOutput")->toolTip().contains("Test player"), "window source selectable");
+        QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton); QTest::qWait(300);
+        require(button(overlay, "soundOutput")->toolTip().contains("Test player"), "window source survives refresh");
+        QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton);
+        choose(overlay, "soundOutput", "auto");
+    }
     auto* sound = overlay.findChild<QWidget*>("soundOptions");
     require(sound && sound->isVisible(), "third row visible for video");
     require(button(overlay, "soundMode")->text().contains("Mix"), "initial mix selection");
