@@ -26,6 +26,7 @@ try:
  suffix=str(os.getpid()); out='hc_sound_'+suffix; mic='hc_mic_'+suffix; source='hc_input_'+suffix
  output_module=cmd('pactl','load-module','module-null-sink','sink_name='+out,'sink_properties=device.description=HyprCapture_Test_Output')
  time.sleep(.5)
+ cmd('pactl','load-module','module-remap-source','master='+out+'.monitor','source_name='+source)
  import select
  for freq in (440,660,880,1000):
   sp.run(['ffmpeg','-v','error','-f','lavfi','-i',f'sine=frequency={freq}:duration='+('8' if freq==1000 else '2'),'-ar','48000','-ac','2',str(root/(str(freq)+'.wav'))],check=True)
@@ -41,6 +42,10 @@ time.sleep(2)
  controller=sp.Popen(['python3','-c',controller_code,str(root),out],env=env);children.append(controller)
  folder=root/'application';folder.mkdir(mode=0o700)
  capture=sp.Popen([helper,'--sound-capture','system','pid:'+str(controller.pid),'default',str(folder),'manual','0','0'],env=env,stdin=sp.PIPE,stdout=open(root/'capture.events','w'));children.append(capture)
+ # A selected window can remain in the settings when only the microphone is
+ # recorded. Playback changes must not create unrequested application tracks.
+ microphone_folder=root/'microphone-only';microphone_folder.mkdir(mode=0o700)
+ microphone=sp.Popen([helper,'--sound-capture','microphone','pid:'+str(controller.pid),source,str(microphone_folder),'manual','0','0'],env=env,stdin=sp.PIPE,stdout=open(root/'microphone.events','w'));children.append(microphone)
  meter=sp.Popen([helper,'--sound-meter','system','pid:'+str(controller.pid),'default'],env=env,stdin=sp.PIPE,stdout=sp.PIPE,text=True,bufsize=1);children.append(meter)
  noise=sp.Popen(['paplay','--device='+out,str(root/'1000.wav')],env=env);children.append(noise)
  levels=[];start=time.monotonic()
@@ -49,6 +54,11 @@ time.sleep(2)
    obj=json.loads(meter.stdout.readline())
    if 'levels' in obj: levels.append((time.monotonic()-start,obj['levels'].get('System',{})))
  capture.stdin.close();capture.wait(timeout=4);meter.stdin.close();meter.wait(timeout=4)
+ microphone.stdin.close();microphone.wait(timeout=4)
+ microphone_events=(root/'microphone.events').read_text()
+ assert '"error"' not in microphone_events,microphone_events
+ assert not (microphone_folder/'system.f32').exists(),'microphone-only recording must not create system audio'
+ assert (microphone_folder/'microphone.f32').stat().st_size>48000*8,'microphone capture must continue across playback changes'
  print('events',(root/'capture.events').read_text(),flush=True)
  data=array.array('f');data.frombytes((folder/'system.f32').read_bytes());mono=data[::2]
  def amplitude(freq,a,b):
