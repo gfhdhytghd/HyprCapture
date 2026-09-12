@@ -33,7 +33,6 @@ void transfer(QSettings& settings, CaptureDefaults& defaults, bool reading) {
     const auto enumeration = [&](const char* key, auto& target, auto parse) {
         target = parse(value(key, QString::fromStdString(toString(target))).toStdString(), target);
     };
-    enumeration("mode", defaults.mode, parseCaptureMode);
     enumeration("fullscreenScope", defaults.fullscreenScope, parseFullscreenScope);
     enumeration("windowBackground", defaults.windowBackground, parseWindowBackground);
     enumeration("recordWindowBackend", defaults.recordWindowBackend, parseRecordWindowBackend);
@@ -46,8 +45,6 @@ void transfer(QSettings& settings, CaptureDefaults& defaults, bool reading) {
     choice("recordTransparentCodec", defaults.recordTransparentCodec, codecs);
     number("recordFps", defaults.recordFps, 1, 240);
     number("recordMaxSeconds", defaults.recordMaxSeconds, 0, 86400);
-    number("recordAudioSystemGain", defaults.recordAudioSystemGain, -61, 24);
-    number("recordAudioMicGain", defaults.recordAudioMicGain, -61, 24);
     choice("recordAudioMix", defaults.recordAudioMix, {"manual", "auto-balance", "voice-priority"});
     // Legacy remembered bool did not distinguish a default from user intent.
     // AEC policy now lives separately and is never restored from that key.
@@ -74,6 +71,10 @@ bool saveSettings(const CaptureDefaults& defaults) {
     QDir directory(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation));
     if (!directory.mkpath("hyprcapture")) return false;
     QSettings settings(settingsPath(), QSettings::IniFormat);
+    // Only dropdown choices persist; discard keys written by older versions.
+    settings.remove("mode");
+    settings.remove("recordAudioSystemGain");
+    settings.remove("recordAudioMicGain");
     settings.setValue("version", 1);
     auto snapshot = defaults;
     // Never write transient window addresses to disk either.
