@@ -52,7 +52,7 @@ void rejectsInvalidOrUnsealedMetadataHeader() {
     auto bad = metadata(1);
     bad.payloadBytes--;
     assert(!validWindowStreamFrameMetadata(bad));
-    assert(encodeWindowStreamFrameHeader(bad) == std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES>{});
+    assert((encodeWindowStreamFrameHeader(bad) == std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES>{}));
 }
 
 void latestSlotDropsReplacedFrameAndPreservesItsOwnTimestamp() {
