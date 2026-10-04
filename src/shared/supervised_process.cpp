@@ -27,7 +27,12 @@ SupervisedProcess spawnSupervisedProcess(const std::string& shell, const std::ve
 
     // Only this fixed script is shell code. Every program argument stays an
     // argv element, including paths containing quotes or shell substitutions.
-    std::vector<std::string> command{shell, "-c", "\"$@\" 3>&-; result=$?; printf '%s\\n' \"$result\" >&3; exit \"$result\"",
+    // Group stop signals target both the recorder and this shell. Catch them
+    // here so the shell can report the recorder's result even when it dies by
+    // signal. Do not ignore them: ignored dispositions survive exec in the child.
+    const std::string script = std::string(ownProcessGroup ? "trap ':' INT TERM; " : "") +
+        "\"$@\" 3>&-; result=$?; printf '%s\\n' \"$result\" >&3; exit \"$result\"";
+    std::vector<std::string> command{shell, "-c", script,
                                      "hyprcapture-supervisor"};
     command.insert(command.end(), args.begin(), args.end());
     std::vector<char*> argv;
