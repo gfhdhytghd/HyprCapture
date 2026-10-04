@@ -2163,7 +2163,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             else
                 g_pHyprOpenGL->renderTexture(options.backgroundTexture, renderCropBox, {.a = 1.0F});
         }
-        g_pHyprRenderer->renderWindow(window, monitor, frozenTime, decorate, RENDER_PASS_ALL, false, false);
+        g_pHyprRenderer->renderWindow(window, monitor, dynamicPointerCast<Workspace::CWorkspacePresentable>(window->m_workspace), frozenTime, decorate, RENDER_PASS_ALL, false, false);
         g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
 
         g_pHyprRenderer->m_renderData.blockScreenShader = true;
@@ -2199,7 +2199,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
             g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
             g_pHyprRenderer->startRenderPass();
-            g_pHyprRenderer->renderWindow(window, monitor, frozenTime, decorate, RENDER_PASS_ALL, false, false);
+            g_pHyprRenderer->renderWindow(window, monitor, dynamicPointerCast<Workspace::CWorkspacePresentable>(window->m_workspace), frozenTime, decorate, RENDER_PASS_ALL, false, false);
             g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
 
             g_pHyprRenderer->m_renderData.blockScreenShader = true;
