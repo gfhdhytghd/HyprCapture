@@ -6,6 +6,11 @@
 #include <QColorDialog>
 #include <QEvent>
 #include <QFrame>
+#include <QFontDatabase>
+#include <QListWidget>
+#include <QLineEdit>
+#include <QTextDocument>
+#include <QAbstractTextDocumentLayout>
 #include <QHideEvent>
 #include <QLinearGradient>
 #include <QMenu>
@@ -46,6 +51,8 @@ struct Annotation {
     qreal width = 4.0;
     QVector<QPointF> points;
     QString text;
+    QFont textFont;
+    QSizeF textBox;
     int number = 1;
     mutable QImage mosaicCache;
     mutable QRect mosaicBounds;
@@ -84,7 +91,8 @@ QFont annotationFont(qreal width) {
 QRectF textBounds(const Annotation& annotation) {
     if (annotation.points.isEmpty())
         return {};
-    const QFontMetricsF metrics(annotationFont(annotation.width));
+    if (annotation.textBox.isValid()) return {annotation.points.front(), annotation.textBox};
+    const QFontMetricsF metrics(annotation.textFont.pixelSize() > 0 ? annotation.textFont : annotationFont(annotation.width));
     const auto lines = annotation.text.split('\n');
     qreal width = 1.0;
     for (const auto& line : lines)
@@ -214,12 +222,29 @@ void drawAnnotation(QPainter& painter, const QImage& source, const Annotation& a
             break;
         }
         case Tool::Text: {
-            painter.setFont(annotationFont(annotation.width));
-            const QFontMetricsF metrics(painter.font());
-            qreal y = annotation.points.front().y() + metrics.ascent();
-            for (const auto& line : annotation.text.split('\n')) {
-                painter.drawText(QPointF(annotation.points.front().x(), y), line);
-                y += metrics.lineSpacing();
+            const QFont font = annotation.textFont.pixelSize() > 0 ? annotation.textFont : annotationFont(annotation.width);
+            if (annotation.textBox.isValid()) {
+                QTextDocument document;
+                document.setDocumentMargin(0);
+                document.setDefaultFont(font);
+                QTextOption option;
+                option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+                document.setDefaultTextOption(option);
+                document.setPlainText(annotation.text);
+                document.setTextWidth(annotation.textBox.width());
+                painter.translate(annotation.points.front());
+                painter.setClipRect(QRectF(QPointF(), annotation.textBox), Qt::IntersectClip);
+                QAbstractTextDocumentLayout::PaintContext context;
+                context.palette.setColor(QPalette::Text, annotation.color);
+                document.documentLayout()->draw(&painter, context);
+            } else {
+                painter.setFont(font);
+                const QFontMetricsF metrics(font);
+                qreal y = annotation.points.front().y() + metrics.ascent();
+                for (const auto& line : annotation.text.split('\n')) {
+                    painter.drawText(QPointF(annotation.points.front().x(), y), line);
+                    y += metrics.lineSpacing();
+                }
             }
             break;
         }
@@ -290,6 +315,90 @@ class AnnotationTextInput final : public QPlainTextEdit {
     }
 };
 
+class TextBoxFrame final : public QFrame {
+  public:
+    using QFrame::QFrame;
+    std::function<void(bool)> finished;
+    void setDragHandle(QWidget* handle) {
+        m_handle = handle;
+        handle->setCursor(Qt::SizeAllCursor);
+        handle->installEventFilter(this);
+    }
+  protected:
+    bool eventFilter(QObject* watched, QEvent* event) override {
+        if (event->type() == QEvent::ShortcutOverride || event->type() == QEvent::KeyPress) {
+            auto* key = static_cast<QKeyEvent*>(event);
+            const bool cancel = key->key() == Qt::Key_Escape;
+            const bool accept = (key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter) && key->modifiers().testFlag(Qt::ControlModifier);
+            if (cancel || accept) {
+                if (event->type() == QEvent::KeyPress && finished) finished(accept);
+                event->accept(); return true;
+            }
+        }
+        if (watched != m_handle) return QFrame::eventFilter(watched, event);
+        if (event->type() == QEvent::MouseButtonPress) {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            if (mouse->button() == Qt::LeftButton) { begin(mouse, 0); return true; }
+        }
+        if (event->type() == QEvent::MouseMove && m_active) { change(static_cast<QMouseEvent*>(event)); return true; }
+        if (event->type() == QEvent::MouseButtonRelease && m_active) { m_active = false; return true; }
+        return false;
+    }
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton && edgesAt(event->position())) begin(event, edgesAt(event->position()));
+        else QFrame::mousePressEvent(event);
+    }
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (m_active) { change(event); return; }
+        const int edges = edgesAt(event->position());
+        setCursor(edges == 5 || edges == 10 ? Qt::SizeFDiagCursor :
+                  edges == 6 || edges == 9 ? Qt::SizeBDiagCursor :
+                  edges & 3 ? Qt::SizeHorCursor : edges ? Qt::SizeVerCursor : Qt::ArrowCursor);
+    }
+    void mouseReleaseEvent(QMouseEvent* event) override {
+        if (m_active) { change(event); m_active = false; event->accept(); }
+        else QFrame::mouseReleaseEvent(event);
+    }
+    void paintEvent(QPaintEvent* event) override {
+        QFrame::paintEvent(event);
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing);
+        painter.setPen(QPen(QColor("#69bfff"), 1));
+        painter.setBrush(Qt::white);
+        for (QPointF point : {QPointF(3, 3), QPointF(width()-4, 3), QPointF(3, height()-4), QPointF(width()-4, height()-4)})
+            painter.drawRoundedRect(QRectF(point - QPointF(2, 2), QSizeF(4, 4)), 1, 1);
+    }
+  private:
+    int edgesAt(QPointF p) const {
+        return (p.x() <= 6 ? 1 : p.x() >= width()-7 ? 2 : 0) |
+               (p.y() <= 6 ? 4 : p.y() >= height()-7 ? 8 : 0);
+    }
+    void begin(QMouseEvent* event, int edges) {
+        m_active = true; m_edges = edges; m_start = geometry(); m_pointer = event->globalPosition(); event->accept();
+    }
+    void change(QMouseEvent* event) {
+        const QPoint delta = (event->globalPosition() - m_pointer).toPoint();
+        const QRect bounds = parentWidget()->rect().adjusted(8, 8, -8, -8);
+        QRect target = m_start;
+        if (!m_edges) {
+            target.moveTopLeft(m_start.topLeft() + delta);
+            target.moveLeft(std::clamp(target.left(), bounds.left(), std::max(bounds.left(), bounds.right()-target.width()+1)));
+            target.moveTop(std::clamp(target.top(), bounds.top(), std::max(bounds.top(), bounds.bottom()-target.height()+1)));
+        } else {
+            if (m_edges & 1) target.setLeft(std::clamp(m_start.left()+delta.x(), bounds.left(), m_start.right()-minimumWidth()+1));
+            if (m_edges & 2) target.setRight(std::clamp(m_start.right()+delta.x(), m_start.left()+minimumWidth()-1, bounds.right()));
+            if (m_edges & 4) target.setTop(std::clamp(m_start.top()+delta.y(), bounds.top(), m_start.bottom()-minimumHeight()+1));
+            if (m_edges & 8) target.setBottom(std::clamp(m_start.bottom()+delta.y(), m_start.top()+minimumHeight()-1, bounds.bottom()));
+        }
+        setGeometry(target); event->accept();
+    }
+    QWidget* m_handle = nullptr;
+    bool m_active = false;
+    int m_edges = 0;
+    QRect m_start;
+    QPointF m_pointer;
+};
+
 class AnnotationCanvas final : public QWidget {
   public:
     explicit AnnotationCanvas(QWidget* parent) : QWidget(parent) {
@@ -322,6 +431,8 @@ class AnnotationCanvas final : public QWidget {
         const auto remap = [&](Annotation& item) {
             for (auto& p : item.points) p = QPointF(p.x() * ax, p.y() * ay) + offset;
             item.width *= std::sqrt(ax * ay);
+            if (item.textBox.isValid()) item.textBox = QSizeF(item.textBox.width() * ax, item.textBox.height() * ay);
+            if (item.textFont.pixelSize() > 0) item.textFont.setPixelSize(std::max(1, qRound(item.textFont.pixelSize() * ay)));
             item.mosaicCache = {};
             item.mosaicSource = 0;
         };
@@ -343,7 +454,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     std::function<void()> pressed;
-    std::function<void(const QString&, const QPoint&, std::function<void(std::optional<QString>)>)> requestText;
+    std::function<void(const Annotation&, const QTransform&, std::function<void(std::optional<Annotation>)>)> requestText;
     std::function<void()> copy;
     std::function<void()> save;
     std::function<void()> pin;
@@ -467,11 +578,11 @@ class AnnotationCanvas final : public QWidget {
         painter.setTransform(transform);
         painter.setRenderHint(QPainter::SmoothPixmapTransform);
         painter.drawImage(QPoint(0, 0), base);
-        for (const auto& annotation : m_annotations)
-            drawAnnotation(painter, base, annotation);
+        for (int i = 0; i < static_cast<int>(m_annotations.size()); ++i)
+            if (i != m_editingTextIndex) drawAnnotation(painter, base, m_annotations[i]);
         if (m_draft)
             drawAnnotation(painter, base, *m_draft);
-        if (m_selected >= 0 && m_selected < static_cast<int>(m_annotations.size())) {
+        if (m_selected >= 0 && m_selected != m_editingTextIndex && m_selected < static_cast<int>(m_annotations.size())) {
             const QRectF selectedBounds = annotationPath(m_annotations[m_selected]).boundingRect();
             painter.setPen(QPen(QColor("#69bfff"), 1.5 / transform.m11(), Qt::DashLine));
             painter.setBrush(Qt::NoBrush);
@@ -536,10 +647,9 @@ class AnnotationCanvas final : public QWidget {
         annotation.width = strokeWidth;
         annotation.points.push_back(point);
         if (tool == Tool::Text) {
-            if (requestText) requestText({}, event->position().toPoint(), [this, annotation](std::optional<QString> text) mutable {
-                if (!text || text->trimmed().isEmpty()) return;
-                annotation.text = *text;
-                add(annotation);
+            annotation.textFont = annotationFont(strokeWidth);
+            if (requestText) requestText(annotation, imageTransform(), [this](std::optional<Annotation> text) {
+                if (text && !text->text.trimmed().isEmpty()) add(*text);
             });
             event->accept();
             return;
@@ -642,11 +752,13 @@ class AnnotationCanvas final : public QWidget {
             if (index >= 0 && m_annotations[index].tool == Tool::Text && requestText) {
                 const Annotation before = m_annotations[index];
                 m_dragBefore.reset();
-                requestText(before.text, event->position().toPoint(), [this, before, index](std::optional<QString> text) {
-                    if (text && !text->trimmed().isEmpty() && *text != before.text && index < static_cast<int>(m_annotations.size())) {
-                        Annotation after = before;
-                        after.text = *text;
-                        commit({Edit::Kind::Replace, index, before, after});
+                m_editingTextIndex = index;
+                update();
+                requestText(before, imageTransform(), [this, before, index](std::optional<Annotation> text) {
+                    m_editingTextIndex = -1;
+                    update();
+                    if (text && !text->text.trimmed().isEmpty() && index < static_cast<int>(m_annotations.size())) {
+                        commit({Edit::Kind::Replace, index, before, *text});
                         notify();
                     }
                 });
@@ -750,6 +862,7 @@ class AnnotationCanvas final : public QWidget {
     std::vector<Edit> m_history;
     int m_historyPosition = 0;
     int m_selected = -1;
+    int m_editingTextIndex = -1;
     std::optional<Annotation> m_draft;
     std::optional<Annotation> m_dragBefore;
     QPointF m_pointerOrigin;
@@ -1477,51 +1590,132 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     ui.canvas->viewChanged = [this] { m_impl->positionToolbar(); };
     ui.canvas->captureRectChanged = [this](const QRect& rect) { emit captureRectChangeRequested(rect); };
     ui.canvas->pressed = [this] { m_impl->closePanels(); };
-    ui.canvas->requestText = [this](const QString& existing, const QPoint& anchor, std::function<void(std::optional<QString>)> completed) {
+    ui.canvas->requestText = [this](const Annotation& existing, const QTransform& transform, std::function<void(std::optional<Annotation>)> completed) {
         m_impl->closePanels();
-        auto* panel = new QFrame(this);
+        auto* panel = new TextBoxFrame(this);
         panel->setObjectName("annotationTextPanel");
         panel->setAttribute(Qt::WA_StyledBackground);
+        panel->setMouseTracking(true);
+        panel->setMinimumSize(std::min(240, std::max(1, width()-16)), std::min(200, std::max(1, height()-16)));
         const bool dark = m_impl->dark;
-        panel->setStyleSheet(QString("QFrame#annotationTextPanel { background:%1; border:1px solid %2; border-radius:6px; } QPlainTextEdit { background:%1; color:%3; border:0; }")
-            .arg(dark ? "#222b36" : "#ffffff", dark ? "#526171" : "#cbd4de", dark ? "#e9f0f6" : "#26313d"));
+        panel->setStyleSheet(QString("QFrame#annotationTextPanel { background:rgba(80,120,160,18); border:1px solid #69bfff; border-radius:5px; } QWidget#annotationTextControls, QLabel#annotationTextDragHandle { background:%1; color:%2; border-radius:3px; } QPlainTextEdit { background:transparent; border:0; } QLineEdit, QSpinBox, QListWidget { background:%1; color:%2; } ")
+            .arg(dark ? "#222b36" : "#ffffff", dark ? "#e9f0f6" : "#26313d"));
         auto* layout = new QVBoxLayout(panel);
         layout->setContentsMargins(8, 8, 8, 8);
+        layout->setSpacing(5);
+        auto* handle = new QLabel(tr("Text annotation"), panel);
+        handle->setObjectName("annotationTextDragHandle");
+        handle->setToolTip(tr("Drag to move · Resize from edges"));
+        handle->setFixedHeight(22);
+        panel->setDragHandle(handle);
+        layout->addWidget(handle);
+        auto* controls = new QWidget(panel);
+        controls->setObjectName("annotationTextControls");
+        auto* rows = new QVBoxLayout(controls);
+        rows->setContentsMargins(5, 4, 5, 4); rows->setSpacing(3);
+        auto* styleRow = new QHBoxLayout;
+        auto* fontButton = new QPushButton(controls);
+        fontButton->setObjectName("annotationTextFont");
+        fontButton->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+        fontButton->setMinimumWidth(0);
+        fontButton->setAccessibleName(tr("Font")); fontButton->setToolTip(tr("Font"));
+        auto* size = new QSpinBox(controls);
+        size->setObjectName("annotationTextSize");
+        size->setRange(6, 192); size->setSuffix(" px");
+        size->setAccessibleName(tr("Font size")); size->setToolTip(tr("Font size"));
+        QFont font = existing.textFont.pixelSize() > 0 ? existing.textFont : annotationFont(existing.width);
+        font.setPixelSize(std::clamp(qRound(font.pixelSize() * transform.m11()), 6, 192));
+        size->setValue(font.pixelSize());
+        fontButton->setText(font.family());
+        auto* color = new QLineEdit(existing.color.name(), controls);
+        color->setObjectName("annotationTextColor"); color->setMaxLength(7); color->setFixedWidth(78);
+        color->setAccessibleName(tr("Color")); color->setToolTip(tr("Color") + " (#RRGGBB)");
+        styleRow->addWidget(fontButton, 1); styleRow->addWidget(size); styleRow->addWidget(color);
+        rows->addLayout(styleRow);
+        auto* colors = new QHBoxLayout;
+        colors->setSpacing(5);
+        for (const QString hex : {"#ff4b55", "#ffd84d", "#5bd686", "#4d94ff", "#a77bff", "#ffffff", "#202020"}) {
+            auto* swatch = new QToolButton(controls);
+            swatch->setFixedSize(17, 17); swatch->setToolTip(hex); swatch->setAccessibleName(hex);
+            swatch->setStyleSheet(QString("background:%1; border:1px solid #79889b; border-radius:4px").arg(hex));
+            colors->addWidget(swatch);
+            connect(swatch, &QToolButton::clicked, color, [color, hex] { color->setText(hex); });
+        }
+        colors->addStretch(); rows->addLayout(colors);
+        layout->addWidget(controls);
         auto* input = new AnnotationTextInput(panel);
         input->setObjectName("annotationTextInput");
         input->setAccessibleName(tr("Text annotation"));
         input->setPlaceholderText(tr("Enter text (multiple lines supported):"));
-        input->setPlainText(existing);
-        layout->addWidget(input);
+        input->setFrameShape(QFrame::NoFrame);
+        input->document()->setDocumentMargin(0);
+        input->setFont(font);
+        input->setPlainText(existing.text);
+        input->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+        input->setWordWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        input->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        input->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        auto textColor = std::make_shared<QColor>(existing.color);
+        const auto applyColor = [input, textColor] { auto palette = input->palette(); palette.setColor(QPalette::Text, *textColor); input->setPalette(palette); };
+        applyColor();
+        connect(color, &QLineEdit::textChanged, input, [textColor, applyColor](const QString& value) { const QColor selected(value); if (selected.isValid()) { *textColor = selected; applyColor(); } });
+        connect(size, &QSpinBox::valueChanged, input, [input](int pixels) { auto font = input->font(); font.setPixelSize(pixels); input->setFont(font); });
+        layout->addWidget(input, 1);
         auto* actions = new QHBoxLayout;
         actions->addStretch();
         auto* cancelText = new QPushButton(panel);
         auto* acceptText = new QPushButton(panel);
-        cancelText->setObjectName("annotationTextCancel");
-        acceptText->setObjectName("annotationTextAccept");
-        cancelText->setIcon(actionIcon("cancel", dark, {}));
-        acceptText->setIcon(actionIcon("confirm", dark, {}));
-        cancelText->setToolTip(tr("Cancel") + " (Esc)");
-        acceptText->setToolTip(tr("Text annotation") + " (Ctrl+Enter)");
-        cancelText->setAccessibleName(tr("Cancel"));
-        acceptText->setAccessibleName(tr("Text annotation"));
-        actions->addWidget(cancelText); actions->addWidget(acceptText);
-        layout->addLayout(actions);
-        const QSize size(std::min(340, std::max(1, width() - 16)), std::min(180, std::max(1, height() - 16)));
-        panel->setGeometry(std::clamp(anchor.x(), 8, std::max(8, width() - size.width() - 8)),
-                           std::clamp(anchor.y(), 8, std::max(8, height() - size.height() - 8)), size.width(), size.height());
+        cancelText->setObjectName("annotationTextCancel"); acceptText->setObjectName("annotationTextAccept");
+        cancelText->setIcon(actionIcon("cancel", dark, {})); acceptText->setIcon(actionIcon("confirm", dark, {}));
+        cancelText->setToolTip(tr("Cancel") + " (Esc)"); acceptText->setToolTip(tr("Text annotation") + " (Ctrl+Enter)");
+        cancelText->setAccessibleName(tr("Cancel")); acceptText->setAccessibleName(tr("Text annotation"));
+        actions->addWidget(cancelText); actions->addWidget(acceptText); layout->addLayout(actions);
+        // A font list embedded in this same surface avoids native popup/focus issues.
+        auto* fonts = new QListWidget(panel);
+        fonts->setObjectName("annotationTextFontList");
+        for (const QString& family : QFontDatabase::families())
+            if (QFontDatabase::isSmoothlyScalable(family)) fonts->addItem(family);
+        fonts->hide();
+        connect(fontButton, &QPushButton::clicked, panel, [panel, fonts, controls] {
+            if (fonts->isVisible()) { fonts->hide(); return; }
+            const int top = controls->geometry().bottom()+3;
+            fonts->setGeometry(8, top, panel->width()-16, std::max(30, panel->height()-top-8));
+            fonts->show(); fonts->raise(); fonts->setFocus();
+        });
+        const auto selectFont = [input, fontButton, fonts](QListWidgetItem* item) {
+            if (!item) return;
+            auto font = input->font(); font.setFamily(item->text()); input->setFont(font);
+            fontButton->setText(item->text()); fonts->hide(); input->setFocus();
+        };
+        connect(fonts, &QListWidget::itemClicked, panel, selectFont);
+        connect(fonts, &QListWidget::itemActivated, panel, selectFont);
+        panel->resize(std::min(400, width()-16), std::min(280, height()-16));
+        panel->show();
+        layout->activate();
+        if (existing.textBox.isValid()) {
+            const QSize decoration = panel->size() - input->viewport()->size();
+            const QSize desired(qRound(existing.textBox.width()*transform.m11()) + decoration.width(), qRound(existing.textBox.height()*transform.m22()) + decoration.height());
+            panel->resize(desired.expandedTo(panel->minimumSize()).boundedTo(QSize(width()-16, height()-16)));
+            layout->activate();
+        }
+        const QPoint anchor = transform.map(existing.points.front()).toPoint() - input->viewport()->mapTo(panel, QPoint());
+        panel->move(std::clamp(anchor.x(), 8, std::max(8, width()-panel->width()-8)), std::clamp(anchor.y(), 8, std::max(8, height()-panel->height()-8)));
         m_impl->textPanel = panel;
         m_impl->canvas->setEnabled(false);
-        m_impl->finishText = [this, panel, input, completed = std::move(completed)](bool accept) {
-            const QString text = input->toPlainText();
-            panel->hide();
-            panel->deleteLater();
-            m_impl->textPanel = nullptr;
-            m_impl->canvas->setEnabled(true);
-            m_impl->canvas->setFocus();
-            completed(accept ? std::optional<QString>(text) : std::nullopt);
+        m_impl->finishText = [this, panel, input, textColor, existing, transform, completed = std::move(completed)](bool accept) {
+            Annotation result = existing;
+            result.text = input->toPlainText(); result.color = *textColor;
+            result.textFont = input->font(); result.textFont.setPixelSize(std::max(1, qRound(input->font().pixelSize()/transform.m11())));
+            const QRectF box(input->viewport()->mapTo(this, QPoint()), input->viewport()->size());
+            const QRectF native = transform.inverted().mapRect(box);
+            result.points = {native.topLeft()}; result.textBox = native.size();
+            panel->hide(); panel->deleteLater(); m_impl->textPanel = nullptr;
+            m_impl->canvas->setEnabled(true); m_impl->canvas->setFocus();
+            completed(accept ? std::optional<Annotation>(result) : std::nullopt);
         };
-        input->finished = [this](bool accept) { m_impl->finishTextEditing(accept); };
+        panel->finished = [this](bool accept) { m_impl->finishTextEditing(accept); };
+        input->finished = panel->finished;
+        for (auto* child : panel->findChildren<QWidget*>()) child->installEventFilter(panel);
         connect(cancelText, &QPushButton::clicked, this, [this] { m_impl->finishTextEditing(false); });
         connect(acceptText, &QPushButton::clicked, this, [this] { m_impl->finishTextEditing(true); });
         panel->show(); panel->raise(); input->setFocus();
@@ -1550,9 +1744,9 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     const auto shortcut = [this](const QKeySequence& sequence, std::function<void()> callback) {
         auto* key = new QShortcut(sequence, this);
         key->setContext(Qt::WidgetWithChildrenShortcut);
-        connect(key, &QShortcut::activated, this, [callback = std::move(callback)] {
+        connect(key, &QShortcut::activated, this, [this, callback = std::move(callback)] {
             // Color width and text dialogs must retain normal text entry.
-            if (QApplication::activeModalWidget() || qobject_cast<QSpinBox*>(QApplication::focusWidget()) || qobject_cast<QPlainTextEdit*>(QApplication::focusWidget()))
+            if ((m_impl->textPanel && m_impl->textPanel->isVisible()) || QApplication::activeModalWidget() || qobject_cast<QSpinBox*>(QApplication::focusWidget()) || qobject_cast<QPlainTextEdit*>(QApplication::focusWidget()))
                 return;
             callback();
         });

@@ -6,6 +6,10 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QImage>
+#include <QListWidget>
+#include <QLineEdit>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
@@ -275,7 +279,12 @@ class AnnotationEditorTest final : public QObject {
         QTest::keyClicks(input, "second line");
         QCOMPARE(input->toPlainText(), QString("TRED\nsecond line"));
         const auto screenshot = qEnvironmentVariable("HYPRCAPTURE_TEST_TEXT_SCREENSHOT");
-        if (!screenshot.isEmpty()) { QTest::qWait(30); QVERIFY(editor.grab().save(screenshot)); }
+        if (!screenshot.isEmpty()) {
+            editor.update();
+            for (auto* widget : editor.findChildren<QWidget*>()) widget->update();
+            QTest::qWait(30);
+            QVERIFY(editor.grab().save(screenshot));
+        }
         QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
         QVERIFY(!input->isVisible());
         QVERIFY(canvas->isEnabled());
@@ -283,6 +292,78 @@ class AnnotationEditorTest final : public QObject {
         QVERIFY(editor.findChild<QToolButton*>("annotationTool7")->isChecked());
         editor.undo();
         QCOMPARE(editor.resultImage(), source);
+    }
+
+    void textBoxMovesResizesAndRetainsFormatting() {
+        AnnotationEditor editor;
+        const QImage source = image();
+        initialize(editor, source);
+        selectTool(editor, 7);
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(20, 30)));
+        auto* panel = editor.findChild<QWidget*>("annotationTextPanel");
+        auto* input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        auto* handle = editor.findChild<QWidget*>("annotationTextDragHandle");
+        auto* size = editor.findChild<QSpinBox*>("annotationTextSize");
+        auto* color = editor.findChild<QLineEdit*>("annotationTextColor");
+        auto* font = editor.findChild<QPushButton*>("annotationTextFont");
+        auto* fonts = editor.findChild<QListWidget*>("annotationTextFontList");
+        QVERIFY(panel && input && handle && size && color && font && fonts);
+        const QRect before = panel->geometry();
+        QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, QPoint(25, 10));
+        QTest::mouseMove(handle, QPoint(55, 30));
+        QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, QPoint(55, 30));
+        QCOMPARE(panel->pos(), before.topLeft() + QPoint(30, 20));
+        const QSize previous = panel->size();
+        const QPoint corner(panel->width()-2, panel->height()-2);
+        QTest::mousePress(panel, Qt::LeftButton, Qt::NoModifier, corner);
+        QTest::mouseMove(panel, corner + QPoint(60, 35));
+        QTest::mouseRelease(panel, Qt::LeftButton, Qt::NoModifier, corner + QPoint(60, 35));
+        QCOMPARE(panel->size(), previous + QSize(60, 35));
+        size->setValue(30);
+        color->setText("#0055ff");
+        QTest::mouseClick(font, Qt::LeftButton);
+        QVERIFY(fonts->isVisible());
+        QVERIFY(!QApplication::activeModalWidget());
+        const QString family = fonts->item(0)->text();
+        QTest::mouseClick(fonts->viewport(), Qt::LeftButton, Qt::NoModifier, fonts->visualItemRect(fonts->item(0)).center());
+        QCOMPARE(input->font().family(), family);
+        QCOMPARE(input->font().pixelSize(), 30);
+        QCOMPARE(input->palette().color(QPalette::Text), QColor("#0055ff"));
+        QTest::keyClicks(input, "Visible text wraps inside the resized frame and keeps its chosen font.");
+        QApplication::processEvents();
+        QVERIFY(input->document()->firstBlock().layout()->lineCount() > 1);
+        const QRect box(input->viewport()->mapTo(&editor, QPoint()), input->viewport()->size());
+        const QString screenshot = qEnvironmentVariable("HYPRCAPTURE_TEST_STYLED_TEXT_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            editor.update();
+            for (auto* widget : editor.findChildren<QWidget*>()) widget->update();
+            QTest::qWait(30);
+            QVERIFY(editor.grab().save(screenshot));
+        }
+        QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
+        const QImage edited = editor.resultImage();
+        QVERIFY(edited != source);
+        bool blueText = false;
+        for (int y = 0; y < edited.height(); ++y)
+            for (int x = 0; x < edited.width(); ++x) {
+                const QColor pixel = edited.pixelColor(x,y);
+                if (pixel.alpha() > 128 && pixel.blue() > 240 && pixel.red() < 10) blueText = true;
+            }
+        QVERIFY(blueText);
+        editor.undo(); QCOMPARE(editor.resultImage(), source);
+        editor.redo(); QCOMPARE(editor.resultImage(), edited);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        selectTool(editor, 0);
+        QTest::mouseDClick(canvas, Qt::LeftButton, Qt::NoModifier, box.topLeft() + QPoint(8, 8));
+        auto* reopened = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(reopened && reopened->isVisible());
+        QCOMPARE(editor.findChild<QSpinBox*>("annotationTextSize")->value(), 30);
+        QCOMPARE(editor.findChild<QLineEdit*>("annotationTextColor")->text(), QString("#0055ff"));
+        QCOMPARE(reopened->font().family(), family);
+        QCOMPARE(QRect(reopened->viewport()->mapTo(&editor, QPoint()), reopened->viewport()->size()), box);
+        QTest::keyClick(reopened, Qt::Key_Escape);
+        QCOMPARE(editor.resultImage(), edited);
     }
 
     void textEscapeAndCancelRemainResponsive() {
