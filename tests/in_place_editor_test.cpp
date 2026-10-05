@@ -133,6 +133,8 @@ QRect editorToolbarCluster(CaptureOverlay& overlay, AnnotationEditor& editor) {
 void verifyEditorToolbarCluster(CaptureOverlay& overlay, AnnotationEditor& editor) {
     const QRect cluster = editorToolbarCluster(overlay, editor);
     const QRect image = editor.canvasGeometry();
+    if (auto* capture = overlay.findChild<QWidget*>(QStringLiteral("toolbar")))
+        QVERIFY(editor.toolbarGeometry().bottom() < capture->y());
     QVERIFY(overlay.rect().contains(cluster));
     QVERIFY(!cluster.intersects(image));
     const int gap = cluster.top() > image.bottom() ? cluster.top() - image.bottom() : image.top() - cluster.bottom();
@@ -261,6 +263,119 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(finishing.count(), 0);
         QVERIFY(QDir(output.path()).entryList(QDir::Files).isEmpty());
         QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clipboard-before-editor"));
+    }
+
+    void regionEditorResizesEveryEdgeAndCorner_data() {
+        QTest::addColumn<QPoint>("handle");
+        QTest::addColumn<QPoint>("delta");
+        QTest::addColumn<QRect>("expected");
+        QTest::newRow("left") << QPoint(200, 220) << QPoint(-30, 0) << QRect(170, 180, 180, 100);
+        QTest::newRow("right") << QPoint(349, 220) << QPoint(30, 0) << QRect(200, 180, 180, 100);
+        QTest::newRow("top") << QPoint(270, 180) << QPoint(0, -30) << QRect(200, 150, 150, 130);
+        QTest::newRow("bottom") << QPoint(270, 279) << QPoint(0, 30) << QRect(200, 180, 150, 130);
+        QTest::newRow("top-left") << QPoint(200, 180) << QPoint(-30, -30) << QRect(170, 150, 180, 130);
+        QTest::newRow("top-right") << QPoint(349, 180) << QPoint(30, -30) << QRect(200, 150, 180, 130);
+        QTest::newRow("bottom-left") << QPoint(200, 279) << QPoint(-30, 30) << QRect(170, 180, 180, 130);
+        QTest::newRow("bottom-right") << QPoint(349, 279) << QPoint(30, 30) << QRect(200, 180, 180, 130);
+    }
+
+    void regionEditorResizesEveryEdgeAndCorner() {
+        QFETCH(QPoint, handle); QFETCH(QPoint, delta); QFETCH(QRect, expected);
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        defaults.inPlaceEditToolbar = true;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.show(); QTest::qWait(30);
+        selectRegion(overlay, QPoint(200, 180), QPoint(349, 279));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor && editor->isVisible());
+        auto* canvas = editor->findChild<QWidget*>("annotationCanvas");
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, handle);
+        QTest::mouseMove(canvas, handle + delta);
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, handle + delta);
+        QCOMPARE(editor->canvasGeometry(), expected);
+        QCOMPARE(editor->resultImage().size(), expected.size() * 2);
+        verifyEditorToolbarCluster(overlay, *editor);
+    }
+
+    void regionResizePreservesAnnotationsAndUndo() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        defaults.inPlaceEditToolbar = true;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.show(); QTest::qWait(30);
+        selectRegion(overlay, QPoint(200, 180), QPoint(349, 279));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor);
+        auto* canvas = editor->findChild<QWidget*>("annotationCanvas");
+        auto* pen = editor->findChild<QToolButton*>("annotationTool5");
+        QVERIFY(pen); QTest::mouseClick(pen, Qt::LeftButton);
+        const auto original = editor->resultImage();
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(230, 215));
+        QTest::mouseMove(canvas, QPoint(285, 235));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(285, 235));
+        const auto annotated = editor->resultImage();
+        QVERIFY(annotated != original);
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(200, 180));
+        QTest::mouseMove(canvas, QPoint(170, 150));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(170, 150));
+        QCOMPARE(editor->resultImage().copy(QRect(QPoint(60, 60), annotated.size())), annotated);
+        editor->undo();
+        QCOMPARE(editor->resultImage().copy(QRect(QPoint(60, 60), original.size())), original);
+        editor->redo();
+        QCOMPARE(editor->resultImage().copy(QRect(QPoint(60, 60), annotated.size())), annotated);
+    }
+
+    void regionResizeClampsAndWorksAfterZoom() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        defaults.inPlaceEditToolbar = true;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.show(); QTest::qWait(30);
+        selectRegion(overlay, QPoint(200, 180), QPoint(349, 279));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor);
+        auto* canvas = editor->findChild<QWidget*>("annotationCanvas");
+        const QPoint center = editor->canvasGeometry().center();
+        QWheelEvent wheel(center, canvas->mapToGlobal(center), {}, QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(canvas, &wheel);
+        const QRect zoomed = editor->canvasGeometry();
+        QVERIFY(zoomed.width() > 150);
+        const QPoint handle(zoomed.right(), zoomed.center().y());
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, handle);
+        QTest::mouseMove(canvas, handle + QPoint(30, 0));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, handle + QPoint(30, 0));
+        QCOMPARE(editor->canvasGeometry().topLeft(), zoomed.topLeft());
+        QVERIFY(std::abs(editor->canvasGeometry().right() - zoomed.right() - 30) <= 2);
+        QVERIFY(editor->resultImage().width() > 300);
+        // Left edge cannot cross the active capture bounds.
+        const QPoint left(editor->canvasGeometry().left(), editor->canvasGeometry().center().y());
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, left);
+        QTest::mouseMove(canvas, QPoint(-1000, left.y()));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(-1000, left.y()));
+        QVERIFY(editor->resultImage().width() <= 1600);
+        QVERIFY(editor->resultImage().width() > 600);
+    }
+
+    void windowEditorRetainsOffscreenPosition_data() {
+        QTest::addColumn<QRect>("window");
+        QTest::newRow("left") << QRect(-40, 100, 300, 220);
+        QTest::newRow("right-bottom") << QRect(600, 450, 300, 220);
+    }
+    void windowEditorRetainsOffscreenPosition() {
+        QFETCH(QRect, window);
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.inPlaceEditToolbar = true;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults, true, QSize(800, 600), window));
+        overlay.show(); QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, window.intersected(overlay.rect()).center());
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor && editor->isVisible());
+        QCOMPARE(editor->canvasGeometry(), window);
+        QCOMPARE(editor->resultImage().size(), window.size() * 2);
+        QVERIFY(chooseBackground(overlay, QStringLiteral("white")));
+        QCOMPARE(editor->canvasGeometry(), window);
     }
 
     void modeChangeAndReselectReturnToSelection() {

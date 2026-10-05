@@ -9,6 +9,7 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSettings>
+#include <QSignalSpy>
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QTemporaryDir>
@@ -258,27 +259,49 @@ class AnnotationEditorTest final : public QObject {
         QCOMPARE(editor.resultImage(), source);
     }
 
-    void textIsMultilineAndDialogTypingDoesNotChangeTools() {
+    void textIsMultilineAndNeverOpensAModalWindow() {
         AnnotationEditor editor;
         const QImage source = image();
         initialize(editor, source);
         selectTool(editor, 7);
-        QTimer::singleShot(0, &editor, [&] {
-            auto* dialog = qobject_cast<QDialog*>(QApplication::activeModalWidget());
-            QVERIFY(dialog);
-            auto* input = dialog->findChild<QPlainTextEdit*>();
-            QVERIFY(input);
-            QTest::keyClicks(input, "TRED");
-            QTest::keyClick(input, Qt::Key_Return);
-            QTest::keyClicks(input, "second line");
-            QCOMPARE(input->toPlainText(), QString("TRED\nsecond line"));
-            dialog->accept();
-        });
-        QTest::mouseClick(editor.findChild<QWidget*>("annotationCanvas"), Qt::LeftButton, Qt::NoModifier, displayed(QPoint(20, 30)));
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(20, 30)));
+        QVERIFY(!QApplication::activeModalWidget());
+        auto* input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(input && input->isVisible());
+        QVERIFY(!input->window()->isModal());
+        QTest::keyClicks(input, "TRED");
+        QTest::keyClick(input, Qt::Key_Return);
+        QTest::keyClicks(input, "second line");
+        QCOMPARE(input->toPlainText(), QString("TRED\nsecond line"));
+        const auto screenshot = qEnvironmentVariable("HYPRCAPTURE_TEST_TEXT_SCREENSHOT");
+        if (!screenshot.isEmpty()) { QTest::qWait(30); QVERIFY(editor.grab().save(screenshot)); }
+        QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
+        QVERIFY(!input->isVisible());
+        QVERIFY(canvas->isEnabled());
         QVERIFY(editor.resultImage() != source);
         QVERIFY(editor.findChild<QToolButton*>("annotationTool7")->isChecked());
         editor.undo();
         QCOMPARE(editor.resultImage(), source);
+    }
+
+    void textEscapeAndCancelRemainResponsive() {
+        AnnotationEditor editor;
+        const QImage source = image();
+        initialize(editor, source);
+        selectTool(editor, 7);
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(20, 30)));
+        auto* input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(input);
+        QTest::keyClicks(input, "discard this");
+        QTest::keyClick(input, Qt::Key_Escape);
+        QVERIFY(!input->isVisible());
+        QVERIFY(canvas->isEnabled());
+        QCOMPARE(editor.resultImage(), source);
+        QSignalSpy cancelled(&editor, &AnnotationEditor::cancelRequested);
+        QTest::keyClick(canvas, Qt::Key_Escape);
+        QCOMPARE(cancelled.count(), 1);
     }
 
     void fitBringsOffscreenImageIntoViewport() {

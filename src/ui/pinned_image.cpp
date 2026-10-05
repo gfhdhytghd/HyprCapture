@@ -13,6 +13,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QPaintEvent>
 #include <QPointer>
 #include <QRegion>
 #include <QScreen>
@@ -73,7 +74,7 @@ class PinSurface final : public QWidget {
         setAttribute(Qt::WA_ShowWithoutActivating);
         setFocusPolicy(Qt::StrongFocus);
         setMouseTracking(true);
-        setToolTip(pinText("Drag to move · Scroll to zoom · Esc to close"));
+        setAccessibleDescription(pinText("Drag to move · Scroll to zoom · Esc to close"));
         setTargetScreen(screen);
     }
 
@@ -88,8 +89,12 @@ class PinSurface final : public QWidget {
         const QRegion input = QRegion(visibleImage) | QRegion(visibleClose);
         // Set QWindow's input region directly. A QWidget mask also clips the
         // backing-store repaint, preventing us from clearing the old position.
-        windowHandle()->setMask(input.isEmpty() ? QRegion(QRect(-2, -2, 1, 1)) : input);
-        update();
+        const QRegion mask = input.isEmpty() ? QRegion(QRect(-2, -2, 1, 1)) : input;
+        if (windowHandle()->mask() != mask) windowHandle()->setMask(mask);
+        const QRect painted = input.isEmpty() ? QRect() : visibleImage.united(visibleClose).adjusted(-2, -2, 2, 2).intersected(rect());
+        const QRegion damage = QRegion(m_paintedBounds) | QRegion(painted);
+        m_paintedBounds = painted;
+        if (!damage.isEmpty()) update(damage);
     }
 
     QScreen* targetScreen() const { return m_screen.data(); }
@@ -105,10 +110,11 @@ class PinSurface final : public QWidget {
     }
 
   protected:
-    void paintEvent(QPaintEvent*) override {
+    void paintEvent(QPaintEvent* event) override {
         if (!m_screen)
             return;
         QPainter painter(this);
+        painter.setClipRegion(event->region());
         painter.setCompositionMode(QPainter::CompositionMode_Source);
         painter.fillRect(rect(), Qt::transparent);
         painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -131,6 +137,11 @@ class PinSurface final : public QWidget {
             QWidget::mousePressEvent(event);
             return;
         }
+        // Hover must not steal focus from the desktop behind the pin.
+        // Explicit clicks opt in so Esc remains available after interaction.
+        if (auto* layer = LayerShellQt::Window::get(windowHandle()))
+            layer->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityOnDemand);
+        windowHandle()->requestActivate();
         setFocus(Qt::MouseFocusReason);
         m_pressClose = m_state->closeRect().contains(desktopPosition(event->position()));
         m_dragging = !m_pressClose;
@@ -146,12 +157,23 @@ class PinSurface final : public QWidget {
             m_state->origin = position - m_dragOffset;
             m_state->refresh();
         } else {
-            m_hoverClose = m_state->closeRect().contains(position);
-            setCursor(m_hoverClose ? Qt::ArrowCursor : Qt::OpenHandCursor);
-            setToolTip(m_hoverClose ? pinText("Close") : pinText("Drag to move · Scroll to zoom · Esc to close"));
-            update();
+            const bool hoverClose = m_state->closeRect().contains(position);
+            setCursor(hoverClose ? Qt::ArrowCursor : Qt::OpenHandCursor);
+            if (hoverClose != m_hoverClose) {
+                m_hoverClose = hoverClose;
+                update(closeDamage());
+            }
         }
         event->accept();
+    }
+
+    void leaveEvent(QEvent* event) override {
+        if (m_hoverClose) { m_hoverClose = false; update(closeDamage()); }
+        if (!m_dragging) {
+            if (auto* layer = LayerShellQt::Window::get(windowHandle()))
+                layer->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityNone);
+        }
+        QWidget::leaveEvent(event);
     }
 
     void mouseReleaseEvent(QMouseEvent* event) override {
@@ -201,6 +223,10 @@ class PinSurface final : public QWidget {
     }
 
   private:
+    QRect closeDamage() const {
+        if (!m_screen) return {};
+        return m_state->closeRect().translated(-m_screen->geometry().topLeft()).toAlignedRect().adjusted(-2, -2, 2, 2).intersected(rect());
+    }
     QPointF desktopPosition(const QPointF& local) const {
         return local + (m_screen ? m_screen->geometry().topLeft() : QPoint());
     }
@@ -220,7 +246,7 @@ class PinSurface final : public QWidget {
             layer->setExclusiveZone(-1);
             layer->setMargins(QMargins());
             layer->setDesiredSize(QSize(0, 0));
-            layer->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityOnDemand);
+            layer->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityNone);
             layer->setActivateOnShow(false);
             layer->setCloseOnDismissed(false);
         }
@@ -230,6 +256,7 @@ class PinSurface final : public QWidget {
     QPointer<QScreen> m_screen;
     QMetaObject::Connection m_geometryConnection;
     QPointF m_dragOffset;
+    QRect m_paintedBounds;
     bool m_dragging = false;
     bool m_pressClose = false;
     bool m_hoverClose = false;

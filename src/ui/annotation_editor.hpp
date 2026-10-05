@@ -17,6 +17,9 @@ class AnnotationEditor final : public QWidget {
     // Existing edits and history survive background changes of the same size.
     void setImage(const QImage& image, bool preserveAnnotations = false);
     QImage resultImage() const;
+    void setRegionResizeBounds(const QRect& bounds);
+    void replaceCaptureImage(const QImage& image, const QRect& displayRect);
+
     QRect canvasGeometry() const;
     QWidget* toolbarWidget() const;
     QRect toolbarGeometry() const;
@@ -37,6 +40,7 @@ class AnnotationEditor final : public QWidget {
     void pinRequested();
     void reselectRequested();
     void annotationsChanged();
+    void captureRectChangeRequested(const QRect& rect);
     void toolbarGeometryChanged(const QRect& geometry);
 
   protected:

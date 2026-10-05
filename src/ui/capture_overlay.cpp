@@ -4398,13 +4398,28 @@ void CaptureOverlay::beginInPlaceEdit() {
                                                    ? window->visibleGeometry : window->fullGeometry);
         }
     }
-    // Keep on-screen captures in place. A full desktop or partly off-screen
-    // window must remain wholly editable from the active output.
-    if (!rect().contains(m_editImageRect))
+    // Window captures stay at their original desktop position, including
+    // windows crossing output edges. Only a full-desktop capture auto-fits.
+    if (m_mode != hyprcapture::CaptureMode::Window && !rect().contains(m_editImageRect))
         m_editImageRect = {};
     if (!m_editor) {
         m_editor = new AnnotationEditor(this);
         m_editor->setObjectName("inPlaceEditor");
+        connect(m_editor, &AnnotationEditor::captureRectChangeRequested, this, [this](const QRect& requested) {
+            if (!m_editing || m_finishing || m_mode != hyprcapture::CaptureMode::Region) return;
+            const QRect target = requested.intersected(regionCaptureBounds());
+            if (!regionSelectionValid(target)) return;
+            const QPoint previousStart = m_dragStart, previousEnd = m_dragEnd;
+            m_dragStart = target.topLeft();
+            m_dragEnd = target.bottomRight();
+            auto image = renderResultImage();
+            if (image.isNull()) { m_dragStart = previousStart; m_dragEnd = previousEnd; return; }
+            hyprcapture::ui::applyWatermark(image, m_defaults);
+            m_editImageRect = target;
+            m_editor->replaceCaptureImage(image, target);
+            updateStatus();
+            update();
+        });
         connect(m_editor, &AnnotationEditor::confirmRequested, this,
                 [this] { exportInPlaceImage(); });
         connect(m_editor, &AnnotationEditor::cancelRequested, this, &CaptureOverlay::cancelCapture);
@@ -4422,6 +4437,7 @@ void CaptureOverlay::beginInPlaceEdit() {
     m_dragging = false;
     m_recordError.clear();
     m_editor->setGeometry(rect());
+    m_editor->setRegionResizeBounds(m_mode == hyprcapture::CaptureMode::Region ? regionCaptureBounds() : QRect());
     m_editor->setImage(image, false);
     m_editor->setImageDisplayRect(m_editImageRect);
     m_editor->show();
