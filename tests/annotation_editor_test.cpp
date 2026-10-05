@@ -364,10 +364,20 @@ class AnnotationEditorTest final : public QObject {
         drag(panel, QPoint(panel->width()/2, panel->height()-2), QPoint(0, 35));
         QCOMPARE(panel->size(), previous + QSize(60, 35));
         QVERIFY(!controls->geometry().intersects(panel->geometry()));
-        const QRect beforeCorner = panel->geometry();
-        drag(panel, QPoint(2, 2), QPoint(10, 10));
-        QCOMPARE(panel->size(), beforeCorner.size());
-        QCOMPARE(panel->pos(), beforeCorner.topLeft() + QPoint(10, 10));
+        for (int corner = 0; corner < 4; ++corner) {
+            const QRect original = panel->geometry();
+            const bool right = corner & 1, bottom = corner & 2;
+            const QPoint start(right ? panel->width()-2 : 2, bottom ? panel->height()-2 : 2);
+            const QPoint delta(right ? 10 : -10, bottom ? 10 : -10);
+            drag(panel, start, delta);
+            QCOMPARE(panel->size(), original.size() + QSize(10, 10));
+            QCOMPARE(panel->pos(), original.topLeft() + QPoint(right ? 0 : -10, bottom ? 0 : -10));
+            panel->setGeometry(original);
+        }
+        const QRect beforeBorder = panel->geometry();
+        drag(panel, QPoint(35, 2), QPoint(10, 10));
+        QCOMPARE(panel->size(), beforeBorder.size());
+        QCOMPARE(panel->pos(), beforeBorder.topLeft() + QPoint(10, 10));
         // The floating bar follows the frame when it switches from below to above.
         panel->move(100, 280);
         QVERIFY(controls->geometry().bottom() < panel->geometry().top());

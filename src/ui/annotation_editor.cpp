@@ -394,6 +394,10 @@ class TextBoxFrame final : public QFrame {
         painter.setPen(QPen(QColor("#69bfff"), 1));
         painter.setBrush(Qt::white);
         painter.setPen(QPen(QColor("#69bfff"), 3, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(QColor("#69bfff"), 1));
+        for (const QPointF point : {QPointF(3, 3), QPointF(width()-4, 3), QPointF(3, height()-4), QPointF(width()-4, height()-4)})
+            painter.drawRoundedRect(QRectF(point - QPointF(2, 2), QSizeF(4, 4)), 1, 1);
+        painter.setPen(QPen(QColor("#69bfff"), 3, Qt::SolidLine, Qt::RoundCap));
         const qreal cx = (width()-1)/2.0, cy = (height()-1)/2.0;
         painter.drawLine(QPointF(cx-18, 3), QPointF(cx+18, 3));
         painter.drawLine(QPointF(cx-18, height()-4), QPointF(cx+18, height()-4));
@@ -402,6 +406,9 @@ class TextBoxFrame final : public QFrame {
     }
   private:
     int edgesAt(QPointF p) const {
+        const int horizontal = p.x() <= 6 ? 1 : p.x() >= width()-7 ? 2 : 0;
+        const int vertical = p.y() <= 6 ? 4 : p.y() >= height()-7 ? 8 : 0;
+        if (horizontal && vertical) return horizontal | vertical;
         const bool middleX = std::abs(p.x()-(width()-1)/2.0) <= 20;
         const bool middleY = std::abs(p.y()-(height()-1)/2.0) <= 20;
         return (middleY ? (p.x() <= 6 ? 1 : p.x() >= width()-7 ? 2 : 0) : 0) |
