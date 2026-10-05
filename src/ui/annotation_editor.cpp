@@ -1658,10 +1658,13 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         auto* controls = new QFrame(this);
         controls->setObjectName("annotationTextControls");
         controls->setAttribute(Qt::WA_StyledBackground);
-        controls->setStyleSheet(QString("QFrame#annotationTextControls { background:%1; border:1px solid %3; border-radius:6px; } QLineEdit, QSpinBox, QPushButton { color:%2; background:%1; border:1px solid %3; border-radius:4px; padding:3px; }")
+        QFont controlsFont = controls->font();
+        controlsFont.setPixelSize(12);
+        controls->setFont(controlsFont);
+        controls->setStyleSheet(QString("QFrame#annotationTextControls { background:%1; border:1px solid %3; border-radius:6px; } QLineEdit, QSpinBox, QPushButton { color:%2; background:%1; border:1px solid %3; border-radius:4px; padding:1px 4px; }")
             .arg(dark ? "#222b36" : "#ffffff", dark ? "#e9f0f6" : "#26313d", dark ? "#536171" : "#cbd5e1"));
         auto* rows = new QVBoxLayout(controls);
-        rows->setContentsMargins(8, 8, 8, 8); rows->setSpacing(6);
+        rows->setContentsMargins(5, 5, 5, 5); rows->setSpacing(4);
         auto* styleRow = new QHBoxLayout;
         auto* fontButton = new QPushButton(controls);
         fontButton->setObjectName("annotationTextFont");
@@ -1681,7 +1684,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         auto* color = new QLineEdit(existing.color.name(), controls);
         color->setObjectName("annotationTextColor"); color->setMaxLength(7); color->setFixedWidth(78);
         color->setAccessibleName(tr("Color")); color->setToolTip(tr("Color") + " (#RRGGBB)");
-        const int fieldHeight = std::max({fontButton->sizeHint().height(), size->sizeHint().height(), color->sizeHint().height(), 28});
+        const int fieldHeight = 24;
         for (QWidget* field : {static_cast<QWidget*>(fontButton), static_cast<QWidget*>(size), static_cast<QWidget*>(color)})
             field->setFixedHeight(fieldHeight);
         styleRow->addWidget(fontButton, 1);
@@ -1706,11 +1709,11 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         styleRow->addLayout(sizeGroup);
         rows->addLayout(styleRow);
         auto* colors = new QHBoxLayout;
-        colors->setSpacing(5);
+        colors->setSpacing(4);
         auto* paletteButton = new QToolButton(controls);
         paletteButton->setObjectName("annotationTextPaletteButton");
         paletteButton->setIcon(actionIcon("color", dark, existing.color));
-        paletteButton->setFixedSize(28, 26);
+        paletteButton->setFixedSize(24, fieldHeight);
         paletteButton->setAccessibleName(tr("Color")); paletteButton->setToolTip(tr("Color"));
         colors->addWidget(paletteButton);
         colors->addWidget(color);
@@ -1737,17 +1740,15 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
             paletteButton->setIcon(actionIcon("color", dark, selected));
         });
         textPalette->hide();
-        auto* presetColors = new QHBoxLayout;
-        presetColors->setSpacing(5);
         for (const QString hex : {"#ff4b55", "#ffd84d", "#5bd686", "#4d94ff", "#a77bff", "#ffffff", "#202020"}) {
-            auto* swatch = new QToolButton(textPalette);
-            swatch->setFixedSize(17, 17); swatch->setToolTip(hex); swatch->setAccessibleName(hex);
+            auto* swatch = new QToolButton(controls);
+            swatch->setObjectName("annotationTextPreset" + hex.mid(1));
+            swatch->setFixedSize(16, 16); swatch->setToolTip(hex); swatch->setAccessibleName(hex);
             swatch->setStyleSheet(QString("background:%1; border:1px solid #79889b; border-radius:4px").arg(hex));
-            presetColors->addWidget(swatch);
+            colors->addWidget(swatch);
             connect(swatch, &QToolButton::clicked, color, [color, hex] { color->setText(hex); });
         }
         colors->addStretch(); rows->addLayout(colors);
-        presetColors->addStretch(); paletteRows->addLayout(presetColors);
 
         auto* input = new AnnotationTextInput(panel);
         input->setObjectName("annotationTextInput");
@@ -1773,7 +1774,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         cancelText->setIcon(actionIcon("cancel", dark, {})); acceptText->setIcon(actionIcon("confirm", dark, {}));
         cancelText->setToolTip(tr("Cancel") + " (Esc)"); acceptText->setToolTip(tr("Text annotation") + " (Ctrl+Enter)");
         cancelText->setAccessibleName(tr("Cancel")); acceptText->setAccessibleName(tr("Text annotation"));
-        cancelText->setFixedSize(28, 26); acceptText->setFixedSize(28, 26);
+        cancelText->setFixedSize(24, fieldHeight); acceptText->setFixedSize(24, fieldHeight);
         colors->addWidget(cancelText); colors->addWidget(acceptText);
         // A font list embedded in this same surface avoids native popup/focus issues.
         auto* fonts = new QListWidget(this);

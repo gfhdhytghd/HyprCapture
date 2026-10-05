@@ -401,6 +401,18 @@ class AnnotationEditorTest final : public QObject {
         QVERIFY(increase->y() < decrease->y());
         QVERIFY(color->y() > size->y());
         QVERIFY(color->x() > paletteButton->x());
+        QCOMPARE(font->height(), 24);
+        QCOMPARE(size->height(), 24);
+        QCOMPARE(color->height(), 24);
+        QVERIFY(controls->height() <= 64);
+        auto* preset = editor.findChild<QToolButton*>("annotationTextPreset4d94ff");
+        QVERIFY(preset && preset->isVisible());
+        QCOMPARE(preset->parentWidget(), controls);
+        QVERIFY(preset->x() > color->geometry().right());
+        QCOMPARE(preset->geometry().center().y(), color->geometry().center().y());
+        QTest::mouseClick(preset, Qt::LeftButton);
+        QCOMPARE(color->text(), QString("#4d94ff"));
+        QCOMPARE(input->palette().color(QPalette::Text), QColor("#4d94ff"));
         color->setText("#0055ff");
         QTest::mouseClick(font, Qt::LeftButton);
         QVERIFY(fonts->isVisible());
