@@ -294,6 +294,33 @@ class AnnotationEditorTest final : public QObject {
         QCOMPARE(editor.resultImage(), source);
     }
 
+    void paletteWidthControlsAndRendering() {
+        AnnotationEditor editor;
+        initialize(editor, image());
+        openPanel(editor, "annotationColorTrigger", "annotationColorPanel");
+        auto* panel = editor.findChild<QWidget*>("annotationColorPanel");
+        auto* spin = editor.findChild<QSpinBox*>("annotationWidth");
+        auto* minus = editor.findChild<QToolButton*>("annotationWidthDecrease");
+        auto* plus = editor.findChild<QToolButton*>("annotationWidthIncrease");
+        QVERIFY(spin && minus && plus);
+        QCOMPARE(spin->buttonSymbols(), QAbstractSpinBox::NoButtons);
+        spin->setValue(4);
+        QTest::mouseClick(plus, Qt::LeftButton); QCOMPARE(spin->value(), 5);
+        QTest::mouseClick(minus, Qt::LeftButton); QCOMPARE(spin->value(), 4);
+        for (auto* child : {static_cast<QWidget*>(spin), static_cast<QWidget*>(minus), static_cast<QWidget*>(plus)})
+            QVERIFY(panel->rect().contains(QRect(child->mapTo(panel, QPoint()), child->size())));
+        const auto screenshot = qEnvironmentVariable("HYPRCAPTURE_TEST_PALETTE_SCREENSHOT");
+        if (!screenshot.isEmpty()) {
+            for (bool dark : {false, true}) {
+                QTest::mouseClick(editor.findChild<QToolButton*>(dark ? "annotationThemeDark" : "annotationThemeLight"), Qt::LeftButton);
+                panel->update();
+                for (auto* child : panel->findChildren<QWidget*>()) child->update();
+                QTest::qWait(20);
+                QVERIFY(panel->grab().save(screenshot + (dark ? "-dark.png" : "-light.png")));
+            }
+        }
+    }
+
     void textBoxMovesResizesAndRetainsFormatting() {
         AnnotationEditor editor;
         const QImage source = image();
@@ -309,21 +336,54 @@ class AnnotationEditorTest final : public QObject {
         auto* font = editor.findChild<QPushButton*>("annotationTextFont");
         auto* fonts = editor.findChild<QListWidget*>("annotationTextFontList");
         QVERIFY(panel && input && handle && size && color && font && fonts);
+        auto* controls = editor.findChild<QWidget*>("annotationTextControls");
+        QVERIFY(controls && controls->isVisible());
+        QCOMPARE(controls->parentWidget(), &editor);
+        QVERIFY(!controls->geometry().intersects(panel->geometry()));
+        QVERIFY(editor.rect().contains(controls->geometry()));
+        const QPoint controlsBefore = controls->pos();
         const QRect before = panel->geometry();
         QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, QPoint(25, 10));
         QTest::mouseMove(handle, QPoint(55, 30));
         QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, QPoint(55, 30));
         QCOMPARE(panel->pos(), before.topLeft() + QPoint(30, 20));
+        QCOMPARE(controls->pos(), controlsBefore + QPoint(30, 20));
+        QVERIFY(!controls->geometry().intersects(panel->geometry()));
         const QSize previous = panel->size();
         const QPoint corner(panel->width()-2, panel->height()-2);
         QTest::mousePress(panel, Qt::LeftButton, Qt::NoModifier, corner);
         QTest::mouseMove(panel, corner + QPoint(60, 35));
         QTest::mouseRelease(panel, Qt::LeftButton, Qt::NoModifier, corner + QPoint(60, 35));
         QCOMPARE(panel->size(), previous + QSize(60, 35));
+        QVERIFY(!controls->geometry().intersects(panel->geometry()));
+        // The floating bar follows the frame when it switches from below to above.
+        panel->move(100, 280);
+        QVERIFY(controls->geometry().bottom() < panel->geometry().top());
+        QVERIFY(editor.rect().contains(controls->geometry()));
+        auto* paletteButton = editor.findChild<QToolButton*>("annotationTextPaletteButton");
+        auto* textPalette = editor.findChild<QWidget*>("annotationTextPalette");
+        auto* saturation = editor.findChild<QWidget*>("annotationTextSaturationValue");
+        auto* hue = editor.findChild<QWidget*>("annotationTextHue");
+        QVERIFY(paletteButton && textPalette && saturation && hue);
+        QTest::mouseClick(paletteButton, Qt::LeftButton);
+        QVERIFY(textPalette->isVisible());
+        QVERIFY(editor.rect().contains(textPalette->geometry()));
+        const auto paletteScreenshot = qEnvironmentVariable("HYPRCAPTURE_TEST_TEXT_PALETTE_SCREENSHOT");
+        if (!paletteScreenshot.isEmpty()) {
+            editor.update();
+            for (auto* child : editor.findChildren<QWidget*>()) child->update();
+            QTest::qWait(20);
+            QVERIFY(editor.grab().save(paletteScreenshot));
+        }
+        QTest::mouseClick(hue, Qt::LeftButton, Qt::NoModifier, QPoint(10, 90));
+        QTest::mouseClick(saturation, Qt::LeftButton, Qt::NoModifier, QPoint(120, 60));
+        QVERIFY(QColor(color->text()).isValid());
+        QCOMPARE(input->palette().color(QPalette::Text), QColor(color->text()));
         size->setValue(30);
         color->setText("#0055ff");
         QTest::mouseClick(font, Qt::LeftButton);
         QVERIFY(fonts->isVisible());
+        QVERIFY(!textPalette->isVisible());
         QVERIFY(!QApplication::activeModalWidget());
         const QString family = fonts->item(0)->text();
         QTest::mouseClick(fonts->viewport(), Qt::LeftButton, Qt::NoModifier, fonts->visualItemRect(fonts->item(0)).center());
