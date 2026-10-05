@@ -30,6 +30,7 @@ struct CaptureDefaults {
     bool             save = true;
     bool             clipboard = true;
     bool             showThumbnail = true;
+    bool             inPlaceEditToolbar = false;
     bool             screenshotNotification = true;
     bool             includeCursor = false;
     bool             rememberSettings = false;
@@ -41,6 +42,7 @@ struct CaptureDefaults {
     bool             windowWheelScroll = true;
     WindowWheelScope windowWheelScope = WindowWheelScope::Workspace;
     std::string      fullscreenPreviewRounding = "auto";
+    std::string      language = "auto";
     std::string      saveDir = "$XDG_PICTURES_DIR/Screenshots";
     std::string      filenameTemplate = "Screenshot-%Y-%m-%d-%H%M%S.png";
     std::string      notificationTitleTemplate = "Screenshot captured";

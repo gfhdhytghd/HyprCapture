@@ -70,6 +70,8 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"save", defaults.save},
         {"clipboard", defaults.clipboard},
         {"showThumbnail", defaults.showThumbnail},
+        {"inPlaceEditToolbar", defaults.inPlaceEditToolbar},
+        {"language", boundedString(defaults.language, MAX_METADATA_STRING_BYTES)},
         {"screenshotNotification", defaults.screenshotNotification},
         {"includeCursor", defaults.includeCursor},
         {"allowQuick", defaults.allowQuick},
@@ -282,6 +284,8 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
 
     return boolValue(obj, "save", defaults.save, false) && boolValue(obj, "clipboard", defaults.clipboard, false) &&
         boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
+        boolValue(obj, "inPlaceEditToolbar", defaults.inPlaceEditToolbar, false) &&
+        stringValue(obj, "language", defaults.language, MAX_METADATA_STRING_BYTES, false) &&
         boolValue(obj, "allowQuick", defaults.allowQuick, false) && boolValue(obj, "confirmBeforeCapture", defaults.confirmBeforeCapture, false) &&
         boolValue(obj, "rememberSettings", defaults.rememberSettings, false) &&
         boolValue(obj, "fushionMode", defaults.fushionMode, false) &&

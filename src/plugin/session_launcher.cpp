@@ -360,6 +360,10 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(boolArg(request.defaults.clipboard));
     args.push_back("--thumbnail");
     args.push_back(boolArg(request.defaults.showThumbnail));
+    args.push_back("--in-place-edit-toolbar");
+    args.push_back(boolArg(request.defaults.inPlaceEditToolbar));
+    args.push_back("--language");
+    args.push_back(request.defaults.language);
     args.push_back("--screenshot-notification");
     args.push_back(boolArg(request.defaults.screenshotNotification));
     args.push_back("--include-cursor");
@@ -535,6 +539,8 @@ LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const 
     args.push_back(boolArg(defaults.clipboard));
     args.push_back("--thumbnail");
     args.push_back(boolArg(defaults.showThumbnail));
+    args.push_back("--language");
+    args.push_back(defaults.language);
     args.push_back("--record-save-dir");
     args.push_back(defaults.recordSaveDir);
     args.push_back("--thumbnail-timeout-ms");
@@ -621,6 +627,8 @@ LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
     args.push_back(boolArg(defaults.clipboard));
     args.push_back("--thumbnail");
     args.push_back(boolArg(defaults.showThumbnail));
+    args.push_back("--language");
+    args.push_back(defaults.language);
     args.push_back("--record-save-dir");
     args.push_back(defaults.recordSaveDir);
     args.push_back("--thumbnail-timeout-ms");

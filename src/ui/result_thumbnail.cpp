@@ -1,6 +1,7 @@
 #include "ui/result_thumbnail.hpp"
 
 #include "ui/clipboard_utils.hpp"
+#include "ui/i18n.hpp"
 
 #include <LayerShellQt/Window>
 
@@ -215,7 +216,7 @@ class TranscodeProgressOverlay final : public QWidget {
         font.setPointSize(std::clamp(side / 5, 12, 28));
         painter.setFont(font);
         painter.setPen(QColor(255, 255, 255, 245));
-        const QString text = m_failed ? QStringLiteral("Failed") : (m_progress < 0.0 ? QStringLiteral("…") : QStringLiteral("%1%").arg(static_cast<int>(std::round(m_progress * 100.0))));
+        const QString text = m_failed ? hyprcapture::ui::uiText("Failed") : (m_progress < 0.0 ? QStringLiteral("…") : QStringLiteral("%1%").arg(static_cast<int>(std::round(m_progress * 100.0))));
         painter.drawText(ring, Qt::AlignCenter, text);
     }
 
@@ -396,29 +397,29 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
         });
         menuLayout->addWidget(buttonWidget);
     };
-    addAction("Open", [this] {
+    addAction(hyprcapture::ui::uiText("Open"), [this] {
         if (!m_path.isEmpty() && openPath(m_path))
             close();
     });
-    addAction("Open with", [this] {
+    addAction(hyprcapture::ui::uiText("Open with"), [this] {
         if (m_openWithPanel)
             m_openWithPanel->setVisible(!m_openWithPanel->isVisible());
         applyLayerSize();
     }, false);
-    addAction(m_copyFile ? "Copy file" : "Copy image", [this] {
+    addAction(hyprcapture::ui::uiText(m_copyFile ? "Copy file" : "Copy image"), [this] {
         const auto currentPixmap = m_imageLabel->pixmap();
         if (m_copyFile && !m_path.isEmpty())
             hyprcapture::ui::copyFileUrlToClipboard(m_path);
         else if (!currentPixmap.isNull())
             hyprcapture::ui::copyPixmapToClipboard(currentPixmap);
     });
-    addAction("Show in folder", [this] {
+    addAction(hyprcapture::ui::uiText("Show in folder"), [this] {
         if (!m_path.isEmpty())
             openPath(QFileInfo(m_path).absolutePath());
     });
     if (canDeleteThumbnailPath(m_path, m_deleteRoot))
-        addAction("Delete", [this] { deleteAndClose(); });
-    addAction("Close", [this] { close(); });
+        addAction(hyprcapture::ui::uiText("Delete"), [this] { deleteAndClose(); });
+    addAction(hyprcapture::ui::uiText("Close"), [this] { close(); });
     m_menuPanel->setFixedSize(m_menuPanel->sizeHint());
 
     m_openWithPanel = new QWidget(m_menuShell);
@@ -438,7 +439,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
         });
         openWithLayout->addWidget(appButton);
     }
-    auto* otherButton = new QPushButton("Other applications...", m_openWithPanel);
+    auto* otherButton = new QPushButton(hyprcapture::ui::uiText("Other applications..."), m_openWithPanel);
     connect(otherButton, &QPushButton::clicked, this, [this] {
         setMenuVisible(false);
         if (!m_path.isEmpty() && openWithPortal(m_path))

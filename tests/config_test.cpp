@@ -49,6 +49,8 @@ int main() {
     require(parseCaptureMode("window") == CaptureMode::Window, "window mode parse");
     require(parseCaptureMode("bad", CaptureMode::Window) == CaptureMode::Window, "mode fallback");
     require(!CaptureDefaults{}.confirmBeforeCapture, "confirm before capture default");
+    require(!CaptureDefaults{}.inPlaceEditToolbar, "in place editing defaults off");
+    require(CaptureDefaults{}.language == "auto", "UI language defaults automatic");
     require(CaptureDefaults{}.dynamicWindowMetadata, "dynamic window metadata default");
     require(CaptureDefaults{}.windowWheelScroll, "window wheel scroll default");
     require(CaptureDefaults{}.windowWheelScope == WindowWheelScope::Workspace, "window wheel scope default");
@@ -173,6 +175,8 @@ int main() {
     session.defaults.overlayScope = OverlayScope::All;
     session.defaults.allowQuick = true;
     session.defaults.confirmBeforeCapture = true;
+    session.defaults.inPlaceEditToolbar = true;
+    session.defaults.language = "zh_CN";
     session.defaults.fushionMode = true;
     session.defaults.captureFullscreenClientsAsMonitor = true;
     session.defaults.dynamicWindowMetadata = false;
@@ -230,6 +234,8 @@ int main() {
     require(json.find("\"overlayScope\":\"all\"") != std::string::npos, "overlay scope json");
     require(json.find("\"allowQuick\":true") != std::string::npos, "allow quick json");
     require(json.find("\"confirmBeforeCapture\":true") != std::string::npos, "confirm before capture json");
+    require(json.find("\"inPlaceEditToolbar\":true") != std::string::npos, "in place editing json");
+    require(json.find("\"language\":\"zh_CN\"") != std::string::npos, "UI language json");
     require(json.find("\"captureFullscreenClientsAsMonitor\":true") != std::string::npos, "fullscreen client behavior json");
     require(json.find("\"dynamicWindowMetadata\":false") != std::string::npos, "dynamic window metadata json");
     require(json.find("\"windowWheelScroll\":false") != std::string::npos, "window wheel scroll json");
@@ -276,6 +282,8 @@ int main() {
     require(decoded->defaults.overlayScope == OverlayScope::All, "decoded overlay scope");
     require(decoded->defaults.allowQuick, "decoded allow quick");
     require(decoded->defaults.confirmBeforeCapture, "decoded confirm before capture");
+    require(decoded->defaults.inPlaceEditToolbar, "decoded in place editing");
+    require(decoded->defaults.language == "zh_CN", "decoded UI language");
     require(decoded->defaults.captureFullscreenClientsAsMonitor, "decoded fullscreen client behavior");
     require(!decoded->defaults.dynamicWindowMetadata, "decoded dynamic window metadata");
     require(!decoded->defaults.windowWheelScroll, "decoded window wheel scroll");
@@ -308,6 +316,23 @@ int main() {
     require(decoded->windows.front().selectionGeometry->x == 30 && decoded->windows.front().selectionGeometry->width == 120, "decoded selection geometry values");
     require(decoded->windows.front().selectionClipGeometry->x == 0 && decoded->windows.front().selectionClipGeometry->width == 100,
             "decoded selection clip geometry values");
+
+    auto legacyEditorJson = json;
+    eraseDefaultsJsonField(legacyEditorJson, "inPlaceEditToolbar");
+    eraseDefaultsJsonField(legacyEditorJson, "language");
+    const auto legacyEditorDecoded = decodeSessionJson(legacyEditorJson);
+    require(legacyEditorDecoded.has_value(), "session without editor and language options decodes");
+    require(!legacyEditorDecoded->defaults.inPlaceEditToolbar, "missing in place editing keeps disabled default");
+    require(legacyEditorDecoded->defaults.language == "auto", "missing language keeps automatic default");
+
+    auto invalidEditorJson = nlohmann::ordered_json::parse(json);
+    invalidEditorJson["defaults"]["inPlaceEditToolbar"] = "true";
+    require(!decodeSessionJson(invalidEditorJson.dump()), "in place editing rejects non boolean values");
+    invalidEditorJson["defaults"]["inPlaceEditToolbar"] = true;
+    invalidEditorJson["defaults"]["language"] = 1;
+    require(!decodeSessionJson(invalidEditorJson.dump()), "UI language rejects non string values");
+    invalidEditorJson["defaults"]["language"] = std::string(4097, 'x');
+    require(!decodeSessionJson(invalidEditorJson.dump()), "UI language rejects oversized values");
 
     auto legacyOverlayJson = json;
     const auto overlayScopeField = legacyOverlayJson.find("\"overlayScope\":\"all\",");

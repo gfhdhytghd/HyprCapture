@@ -29,6 +29,7 @@ class InlineSelect;
 class AudioMeter;
 class QSlider;
 class QProcess;
+class AnnotationEditor;
 
 namespace hyprcapture::ui {
 struct ClipboardSnapshotData;
@@ -46,12 +47,14 @@ class CaptureOverlay final : public QMainWindow {
     QScreen* overlayScreen() const;
     hyprcapture::OverlayScope overlayScope() const;
     bool isOverlayActive() const;
+    bool isEditing() const { return m_editing; }
     void setOverlayActive(bool active);
     void adoptInteractionState(const CaptureOverlay& source);
 
   signals:
     void activationRequested();
     void finishingStarted();
+    void editingChanged(bool editing);
 
   protected:
     void enterEvent(QEnterEvent* event) override;
@@ -120,6 +123,11 @@ class CaptureOverlay final : public QMainWindow {
     void updateConfirmCursor(const QPoint& point);
     QRect regionSelectionForDrag(const QPoint& point) const;
     void finishCapture();
+    void beginInPlaceEdit();
+    void refreshInPlaceImage();
+    void leaveInPlaceEdit();
+    void exportInPlaceImage(bool save, bool clipboard);
+    void pinInPlaceImage();
     void cancelCapture();
     QString prepareRecordingRequest();
     void launchRecordingCountdown(const QString& requestPath);
@@ -220,6 +228,10 @@ class CaptureOverlay final : public QMainWindow {
     ConfirmDragMode           m_confirmDragMode = ConfirmDragMode::None;
     bool                      m_dragging = false;
     bool                      m_finishing = false;
+    bool                      m_editing = false;
+    AnnotationEditor*         m_editor = nullptr;
+    QImage                    m_editedOutput;
+    QRect                     m_editImageRect;
     bool                      m_fadeOutStarted = false;
     bool                      m_overlayActive = true;
     double                    m_overlayOpacity = 0.0;

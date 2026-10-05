@@ -111,6 +111,9 @@ add_executable(hyprcapture-ui
   src/ui/main.cpp
   src/ui/clipboard_utils.cpp
   src/ui/capture_overlay.cpp
+  src/ui/annotation_editor.cpp
+  src/ui/pinned_image.cpp
+  src/ui/i18n.cpp
   src/ui/remembered_settings.cpp
   src/ui/overlay_paint.cpp
   src/ui/result_thumbnail.cpp
@@ -182,20 +185,44 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-aec-policy-test PRIVATE Qt6::Core)
   add_test(NAME aec-policy COMMAND hyprcapture-aec-policy-test)
   find_package(Qt6 REQUIRED COMPONENTS Test)
+  add_executable(hyprcapture-annotation-editor-test tests/annotation_editor_test.cpp src/ui/annotation_editor.cpp)
+  target_include_directories(hyprcapture-annotation-editor-test PRIVATE src)
+  target_link_libraries(hyprcapture-annotation-editor-test PRIVATE Qt6::Widgets Qt6::Test)
+  add_test(NAME annotation-editor COMMAND hyprcapture-annotation-editor-test)
+  set_tests_properties(annotation-editor PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+  add_executable(hyprcapture-i18n-test tests/i18n_test.cpp src/ui/i18n.cpp)
+  target_include_directories(hyprcapture-i18n-test PRIVATE src)
+  target_link_libraries(hyprcapture-i18n-test PRIVATE Qt6::Core)
+  add_test(NAME i18n COMMAND hyprcapture-i18n-test)
+  add_executable(hyprcapture-pinned-image-test tests/pinned_image_test.cpp src/ui/pinned_image.cpp src/ui/clipboard_utils.cpp src/shared/process_environment.cpp src/shared/trusted_path.cpp)
+  target_include_directories(hyprcapture-pinned-image-test PRIVATE src)
+  target_link_libraries(hyprcapture-pinned-image-test PRIVATE Qt6::Widgets LayerShellQt::Interface)
+  add_test(NAME pinned-image COMMAND hyprcapture-pinned-image-test)
+  set_tests_properties(pinned-image PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
   get_target_property(HYPRCAPTURE_UI_TEST_SOURCES hyprcapture-ui SOURCES)
   list(REMOVE_ITEM HYPRCAPTURE_UI_TEST_SOURCES src/ui/main.cpp)
   add_executable(hyprcapture-sound-ui-test tests/sound_ui_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
   # Isolate UI tests from an installed AEC worker and network/model downloads.
   set_target_properties(hyprcapture-sound-ui-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
   target_include_directories(hyprcapture-sound-ui-test PRIVATE src ${GIO_INCLUDE_DIRS})
-  target_link_libraries(hyprcapture-sound-ui-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
+  target_link_libraries(hyprcapture-sound-ui-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
   add_test(NAME hyprcapture-sound-ui-test COMMAND hyprcapture-sound-ui-test)
   set_tests_properties(hyprcapture-sound-ui-test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+  add_executable(hyprcapture-in-place-editor-test tests/in_place_editor_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
+  set_target_properties(hyprcapture-in-place-editor-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
+  target_include_directories(hyprcapture-in-place-editor-test PRIVATE src ${GIO_INCLUDE_DIRS})
+  target_link_libraries(hyprcapture-in-place-editor-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
+  add_test(NAME in-place-editor COMMAND hyprcapture-in-place-editor-test)
+  set_tests_properties(in-place-editor PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
   add_executable(hyprcapture-audio-timeline-test tests/audio_timeline_test.cpp)
   target_include_directories(hyprcapture-audio-timeline-test PRIVATE src)
   target_compile_options(hyprcapture-audio-timeline-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-audio-timeline-test COMMAND hyprcapture-audio-timeline-test)
   find_package(Python3 COMPONENTS Interpreter)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME pin-launch COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/pin_launch_test.py $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(pin-launch PROPERTIES TIMEOUT 20)
+  endif()
   if(Python3_Interpreter_FOUND)
     add_test(NAME hyprcapture-audio-finalize-test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/audio_finalize_test.py $<TARGET_FILE:hyprcapture-ui>)
     set_tests_properties(hyprcapture-audio-finalize-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)

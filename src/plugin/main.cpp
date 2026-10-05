@@ -140,6 +140,8 @@ void registerConfigValues() {
     addBoolConfig("save", "Save captures to disk", true);
     addBoolConfig("clipboard", "Copy captures to the clipboard", true);
     addBoolConfig("show_thumbnail", "Show a result thumbnail after capture", true);
+    addBoolConfig("in_place_edit_toolbar", "Keep the screenshot overlay open for editing after capture", false);
+    addStringConfig("language", "UI language (auto or a supported locale code)", "auto");
     addBoolConfig("include_cursor", "Include the cursor in captures", false);
     addBoolConfig("remember_settings", "Restore the previous interactive capture settings", false);
     addBoolConfig("allow_quick", "Enable no-confirmation quick capture calls", false);
@@ -208,6 +210,8 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.save = configBool("save", defaults.save);
     defaults.clipboard = configBool("clipboard", defaults.clipboard);
     defaults.showThumbnail = configBool("show_thumbnail", defaults.showThumbnail);
+    defaults.inPlaceEditToolbar = configBool("in_place_edit_toolbar", defaults.inPlaceEditToolbar);
+    defaults.language = configString("language", defaults.language);
     defaults.screenshotNotification = configBool("screenshot_notification", defaults.screenshotNotification);
     defaults.includeCursor = configBool("include_cursor", defaults.includeCursor);
     defaults.rememberSettings = configBool("remember_settings", defaults.rememberSettings);
