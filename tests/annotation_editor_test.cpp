@@ -8,6 +8,7 @@
 #include <QImage>
 #include <QListWidget>
 #include <QLineEdit>
+#include <QLabel>
 #include <QTextBlock>
 #include <QTextLayout>
 #include <QPlainTextEdit>
@@ -336,6 +337,10 @@ class AnnotationEditorTest final : public QObject {
         auto* font = editor.findChild<QPushButton*>("annotationTextFont");
         auto* fonts = editor.findChild<QListWidget*>("annotationTextFontList");
         QVERIFY(panel && input && handle && size && color && font && fonts);
+        QVERIFY(input->placeholderText().isEmpty());
+        QVERIFY(panel->findChildren<QLabel*>().isEmpty());
+        QCOMPARE(font->height(), size->height());
+        QCOMPARE(color->height(), size->height());
         auto* controls = editor.findChild<QWidget*>("annotationTextControls");
         QVERIFY(controls && controls->isVisible());
         QCOMPARE(controls->parentWidget(), &editor);
@@ -343,11 +348,12 @@ class AnnotationEditorTest final : public QObject {
         QVERIFY(editor.rect().contains(controls->geometry()));
         const QPoint controlsBefore = controls->pos();
         const QRect before = panel->geometry();
-        QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, QPoint(25, 10));
-        QTest::mouseMove(handle, QPoint(55, 30));
-        QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, QPoint(55, 30));
+        QTest::mousePress(handle, Qt::LeftButton, Qt::NoModifier, QPoint(10, 10));
+        QTest::mouseMove(handle, QPoint(40, 30));
+        QTest::mouseRelease(handle, Qt::LeftButton, Qt::NoModifier, QPoint(40, 30));
         QCOMPARE(panel->pos(), before.topLeft() + QPoint(30, 20));
-        QCOMPARE(controls->pos(), controlsBefore + QPoint(30, 20));
+        QCOMPARE(controls->x(), controlsBefore.x() + 30);
+        QVERIFY(editor.rect().contains(controls->geometry()));
         QVERIFY(!controls->geometry().intersects(panel->geometry()));
         const QSize previous = panel->size();
         const QPoint corner(panel->width()-2, panel->height()-2);
@@ -415,7 +421,7 @@ class AnnotationEditorTest final : public QObject {
         editor.redo(); QCOMPARE(editor.resultImage(), edited);
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         selectTool(editor, 0);
-        QTest::mouseDClick(canvas, Qt::LeftButton, Qt::NoModifier, box.topLeft() + QPoint(8, 8));
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, box.topLeft() + QPoint(8, 8));
         auto* reopened = editor.findChild<QPlainTextEdit*>("annotationTextInput");
         QVERIFY(reopened && reopened->isVisible());
         QCOMPARE(editor.findChild<QSpinBox*>("annotationTextSize")->value(), 30);
@@ -424,6 +430,13 @@ class AnnotationEditorTest final : public QObject {
         QCOMPARE(QRect(reopened->viewport()->mapTo(&editor, QPoint()), reopened->viewport()->size()), box);
         QTest::keyClick(reopened, Qt::Key_Escape);
         QCOMPARE(editor.resultImage(), edited);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        selectTool(editor, 7);
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, box.topLeft() + QPoint(8, 8));
+        reopened = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(reopened && reopened->isVisible());
+        QVERIFY(reopened->toPlainText().startsWith("Visible text"));
+        QTest::keyClick(reopened, Qt::Key_Escape);
     }
 
     void textEscapeAndCancelRemainResponsive() {

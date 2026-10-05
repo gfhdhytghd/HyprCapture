@@ -633,6 +633,10 @@ class AnnotationCanvas final : public QWidget {
         }
         setFocus(Qt::MouseFocusReason);
         const QPointF point = imagePoint(event->position());
+        if ((tool == Tool::Select || tool == Tool::Text) && editTextAt(point)) {
+            event->accept();
+            return;
+        }
         if (tool == Tool::Select) {
             m_selected = annotationAt(point);
             if (m_selected >= 0) {
@@ -749,27 +753,28 @@ class AnnotationCanvas final : public QWidget {
         event->ignore();
     }
 
-    void mouseDoubleClickEvent(QMouseEvent* event) override {
-        if (tool == Tool::Select && event->button() == Qt::LeftButton) {
-            const int index = annotationAt(imagePoint(event->position()));
-            if (index >= 0 && m_annotations[index].tool == Tool::Text && requestText) {
-                const Annotation before = m_annotations[index];
-                m_dragBefore.reset();
-                m_editingTextIndex = index;
-                update();
-                requestText(before, imageTransform(), [this, before, index](std::optional<Annotation> text) {
-                    m_editingTextIndex = -1;
-                    update();
-                    if (text && !text->text.trimmed().isEmpty() && index < static_cast<int>(m_annotations.size())) {
-                        commit({Edit::Kind::Replace, index, before, *text});
-                        notify();
-                    }
-                });
-                event->accept();
-                return;
+    bool editTextAt(const QPointF& point) {
+        const int index = annotationAt(point);
+        if (index < 0 || m_annotations[index].tool != Tool::Text || !requestText) return false;
+        const Annotation before = m_annotations[index];
+        m_dragBefore.reset();
+        m_editingTextIndex = index;
+        update();
+        requestText(before, imageTransform(), [this, before, index](std::optional<Annotation> text) {
+            m_editingTextIndex = -1;
+            update();
+            if (text && !text->text.trimmed().isEmpty() && index < static_cast<int>(m_annotations.size())) {
+                commit({Edit::Kind::Replace, index, before, *text});
+                notify();
             }
-        }
-        event->ignore();
+        });
+        return true;
+    }
+
+    void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if ((tool == Tool::Select || tool == Tool::Text) && event->button() == Qt::LeftButton &&
+            editTextAt(imagePoint(event->position()))) event->accept();
+        else event->ignore();
     }
 
     void wheelEvent(QWheelEvent* event) override {
@@ -1619,12 +1624,6 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         auto* layout = new QVBoxLayout(panel);
         layout->setContentsMargins(8, 8, 8, 8);
         layout->setSpacing(5);
-        auto* handle = new QLabel(tr("Text annotation"), panel);
-        handle->setObjectName("annotationTextDragHandle");
-        handle->setToolTip(tr("Drag to move · Resize from edges"));
-        handle->setFixedHeight(22);
-        panel->setDragHandle(handle);
-        layout->addWidget(handle);
         auto* controls = new QFrame(this);
         controls->setObjectName("annotationTextControls");
         controls->setAttribute(Qt::WA_StyledBackground);
@@ -1651,10 +1650,22 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         auto* color = new QLineEdit(existing.color.name(), controls);
         color->setObjectName("annotationTextColor"); color->setMaxLength(7); color->setFixedWidth(78);
         color->setAccessibleName(tr("Color")); color->setToolTip(tr("Color") + " (#RRGGBB)");
+        const int fieldHeight = std::max({fontButton->sizeHint().height(), size->sizeHint().height(), color->sizeHint().height(), 28});
+        for (QWidget* field : {static_cast<QWidget*>(fontButton), static_cast<QWidget*>(size), static_cast<QWidget*>(color)})
+            field->setFixedHeight(fieldHeight);
         styleRow->addWidget(fontButton, 1); styleRow->addWidget(size); styleRow->addWidget(color);
         rows->addLayout(styleRow);
         auto* colors = new QHBoxLayout;
         colors->setSpacing(5);
+        auto* handle = new QLabel(QStringLiteral("⠿"), controls);
+        handle->setObjectName("annotationTextDragHandle");
+        handle->setAlignment(Qt::AlignCenter);
+        handle->setFixedSize(22, 26);
+        handle->setToolTip(tr("Drag to move · Resize from edges"));
+        handle->setAccessibleName(tr("Drag to move · Resize from edges"));
+        handle->setStyleSheet(QString("color:%1;").arg(dark ? "#e9f0f6" : "#26313d"));
+        panel->setDragHandle(handle);
+        colors->addWidget(handle);
         auto* paletteButton = new QToolButton(controls);
         paletteButton->setObjectName("annotationTextPaletteButton");
         paletteButton->setIcon(actionIcon("color", dark, existing.color));
@@ -1693,7 +1704,6 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         auto* input = new AnnotationTextInput(panel);
         input->setObjectName("annotationTextInput");
         input->setAccessibleName(tr("Text annotation"));
-        input->setPlaceholderText(tr("Enter text (multiple lines supported):"));
         input->setFrameShape(QFrame::NoFrame);
         input->document()->setDocumentMargin(0);
         input->setFont(font);
