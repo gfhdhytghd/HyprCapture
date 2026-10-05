@@ -19,6 +19,11 @@ class AnnotationEditor final : public QWidget {
     QImage resultImage() const;
     QRect canvasGeometry() const;
     QWidget* toolbarWidget() const;
+    QRect toolbarGeometry() const;
+    // The capture controls remain parented by the overlay; reserve and return
+    // their position as part of the same floating toolbar cluster.
+    void setCaptureToolbarSize(const QSize& size);
+    QRect captureToolbarGeometry() const;
     void undo();
     void redo();
     void clearAnnotations();
@@ -27,15 +32,17 @@ class AnnotationEditor final : public QWidget {
     void setImageDisplayRect(const QRect& rect);
 
   signals:
-    void copyRequested();
-    void saveRequested();
+    void confirmRequested();
+    void cancelRequested();
     void pinRequested();
     void reselectRequested();
     void annotationsChanged();
+    void toolbarGeometryChanged(const QRect& geometry);
 
   protected:
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
 
   private:
     struct Impl;

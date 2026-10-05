@@ -3,11 +3,13 @@
 #include <QApplication>
 #include <QButtonGroup>
 #include <QColorDialog>
-#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QEvent>
 #include <QFrame>
+#include <QHideEvent>
+#include <QLinearGradient>
+#include <QMenu>
 #include <QHBoxLayout>
 #include <QKeyEvent>
 #include <QLabel>
@@ -29,6 +31,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <optional>
 #include <vector>
 
@@ -280,6 +283,8 @@ class AnnotationCanvas final : public QWidget {
     QColor color = QColor("#ff5252");
     qreal strokeWidth = 4.0;
     std::function<void()> changed;
+    std::function<void()> viewChanged;
+    std::function<void()> pressed;
     std::function<QString(const QString&)> requestText;
     std::function<void()> copy;
     std::function<void()> save;
@@ -322,8 +327,18 @@ class AnnotationCanvas final : public QWidget {
         m_fitToViewport = false;
         fit();
     }
-    void fit() { m_zoom = 1.0; m_pan = {}; update(); }
+    void fit() { m_zoom = 1.0; m_pan = {}; update(); if (viewChanged) viewChanged(); }
     void fitViewport() { m_fitToViewport = true; fit(); }
+    void setViewportBottomInset(int inset) {
+        if (m_fitBottomInset == inset)
+            return;
+        m_fitBottomInset = inset;
+        if (m_fitToViewport || m_displayRect.isEmpty()) {
+            update();
+            if (viewChanged) viewChanged();
+        }
+    }
+    void finishEditing() { finishDraft(); }
     bool canUndo() const { return m_historyPosition > 0; }
     bool canRedo() const { return m_historyPosition < static_cast<int>(m_history.size()); }
     bool hasAnnotations() const { return !m_annotations.empty(); }
@@ -408,6 +423,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void mousePressEvent(QMouseEvent* event) override {
+        if (pressed) pressed();
         if (base.isNull() || !displayRect().contains(event->position().toPoint())) {
             event->ignore();
             return;
@@ -468,6 +484,7 @@ class AnnotationCanvas final : public QWidget {
         if (m_panning) {
             m_pan = m_panBefore + event->position() - m_pointerOrigin;
             update();
+            if (viewChanged) viewChanged();
             event->accept();
             return;
         }
@@ -553,6 +570,7 @@ class AnnotationCanvas final : public QWidget {
         const QPointF mapped = imageTransform().map(anchor);
         m_pan += event->position() - mapped;
         update();
+        if (viewChanged) viewChanged();
         event->accept();
     }
 
@@ -611,6 +629,7 @@ class AnnotationCanvas final : public QWidget {
     QPointF m_pan;
     QRect m_displayRect;
     qreal m_zoom = 1.0;
+    int m_fitBottomInset = 74;
     bool m_fitToViewport = false;
     bool m_spaceDown = false;
     bool m_panning = false;
@@ -618,7 +637,7 @@ class AnnotationCanvas final : public QWidget {
     QTransform imageTransform() const {
         if (base.isNull())
             return {};
-        const QRectF viewport = m_fitToViewport || m_displayRect.isEmpty() ? QRectF(rect().adjusted(12, 12, -12, -150)) : QRectF(m_displayRect);
+        const QRectF viewport = m_fitToViewport || m_displayRect.isEmpty() ? QRectF(rect().adjusted(12, 12, -12, -m_fitBottomInset)) : QRectF(m_displayRect);
         const qreal scale = std::max(0.001, std::min(viewport.width() / base.width(), viewport.height() / base.height())) * m_zoom;
         const QPointF offset = viewport.center() - QPointF(base.width(), base.height()) * (scale / 2.0) + m_pan;
         QTransform transform;
@@ -683,60 +702,378 @@ class AnnotationCanvas final : public QWidget {
     void notify() { update(); if (changed) changed(); }
 };
 
-QIcon toolIcon(Tool tool) {
+// Native Qt rendering of the compact shortcut-and-glyph strip. The controls are
+// intentionally independent of any external QML or upstream implementation.
+QIcon toolIcon(Tool tool, Variant variant, bool dark, const QColor& accent) {
     QPixmap pixmap(24, 24);
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(QColor("#a7bacf"), 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    const QColor ink(dark ? "#e9f0f6" : "#26313d");
+    const QColor paper(dark ? "#222b36" : "#ffffff");
+    painter.setPen(QPen(ink, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     painter.setBrush(Qt::NoBrush);
     switch (tool) {
         case Tool::Select: {
             QPolygonF cursor;
-            cursor << QPointF(6, 3) << QPointF(19, 13) << QPointF(12, 14) << QPointF(9, 21);
+            cursor << QPointF(4, 3) << QPointF(4, 21) << QPointF(9, 16) << QPointF(12, 21)
+                   << QPointF(15, 19) << QPointF(12, 14) << QPointF(19, 14);
+            painter.setBrush(paper);
             painter.drawPolygon(cursor);
             break;
         }
-        case Tool::Rectangle: painter.drawRoundedRect(QRectF(3, 5, 18, 14), 2, 2); break;
-        case Tool::Ellipse: painter.drawEllipse(QRectF(3, 5, 18, 14)); break;
-        case Tool::Arrow: painter.drawLine(QPointF(4, 20), QPointF(20, 4)); drawArrowHead(painter, QPointF(20, 4), QPointF(16, -16), 0.8); break;
-        case Tool::Line: painter.drawLine(QPointF(4, 20), QPointF(20, 4)); break;
-        case Tool::Pen: {
-            QPainterPath path; path.moveTo(3, 17); path.cubicTo(8, 3, 15, 22, 21, 6); painter.drawPath(path); break;
-        }
-        case Tool::Highlighter: painter.setPen(QPen(QColor("#f3d65c"), 7)); painter.drawLine(QPointF(5, 18), QPointF(19, 6)); break;
-        case Tool::Text: { QFont font; font.setPixelSize(21); font.setBold(true); painter.setFont(font); painter.drawText(pixmap.rect(), Qt::AlignCenter, "T"); break; }
-        case Tool::Number: painter.drawEllipse(QRectF(3, 3, 18, 18)); painter.drawText(pixmap.rect(), Qt::AlignCenter, "1"); break;
-        case Tool::Mosaic:
-            for (int y = 4; y <= 16; y += 6) for (int x = 4; x <= 16; x += 6) painter.fillRect(QRect(x, y, 5, 5), ((x + y) % 12 == 8) ? QColor("#8ea7bd") : QColor("#52667b"));
+        case Tool::Rectangle: {
+            if (variant == Variant::Filled || variant == Variant::RoundedFilled)
+                painter.setBrush(accent);
+            const bool rounded = variant == Variant::Rounded || variant == Variant::RoundedFilled;
+            painter.drawRoundedRect(QRectF(4, 4, 16, 16), rounded ? 4 : 0, rounded ? 4 : 0);
             break;
-        case Tool::Spotlight: painter.fillRect(QRect(3, 3, 18, 18), QColor("#52667b")); painter.setBrush(QColor("#dbe7f2")); painter.drawEllipse(QRectF(7, 7, 10, 10)); break;
+        }
+        case Tool::Ellipse:
+            if (variant == Variant::Filled)
+                painter.setBrush(accent);
+            painter.drawEllipse(QRectF(4, 4, 16, 16));
+            break;
+        case Tool::Arrow: {
+            const bool curved = variant == Variant::Curved || variant == Variant::DoubleCurved;
+            QPainterPath path;
+            path.moveTo(4, 20);
+            if (curved)
+                path.quadTo(QPointF(3, 3), QPointF(20, 5));
+            else
+                path.lineTo(20, 4);
+            painter.drawPath(path);
+            const auto head = [&](QPointF tip, QPointF direction) {
+                const QPointF unit = direction / std::hypot(direction.x(), direction.y());
+                const QPointF normal(-unit.y(), unit.x());
+                QPolygonF arrow;
+                arrow << tip - unit * 7 + normal * 4 << tip << tip - unit * 7 - normal * 4;
+                painter.drawPolyline(arrow);
+            };
+            head(curved ? QPointF(20, 5) : QPointF(20, 4), curved ? QPointF(17, 2) : QPointF(16, -16));
+            if (variant == Variant::DoubleHeaded || variant == Variant::DoubleCurved)
+                head(QPointF(4, 20), curved ? QPointF(1, 17) : QPointF(-16, 16));
+            break;
+        }
+        case Tool::Line:
+            painter.drawLine(QPointF(4, 20), QPointF(20, 4));
+            painter.setBrush(ink);
+            painter.drawEllipse(QPointF(4, 20), 1, 1);
+            painter.drawEllipse(QPointF(20, 4), 1, 1);
+            break;
+        case Tool::Pen:
+        case Tool::Highlighter: {
+            if (tool == Tool::Highlighter) {
+                QColor translucent = accent;
+                translucent.setAlpha(100);
+                painter.fillRect(QRectF(3, 17, 18, 5), translucent);
+            }
+            QPolygonF pen;
+            pen << QPointF(4, 20) << QPointF(6, 14) << QPointF(16, 4) << QPointF(20, 8) << QPointF(10, 18);
+            painter.setBrush(tool == Tool::Highlighter ? accent : paper);
+            painter.drawPolygon(pen);
+            painter.drawLine(QPointF(6, 14), QPointF(10, 18));
+            painter.drawLine(QPointF(14, 6), QPointF(18, 10));
+            break;
+        }
+        case Tool::Text: {
+            QFont font = QApplication::font();
+            font.setPixelSize(21);
+            font.setBold(true);
+            painter.setFont(font);
+            painter.drawText(pixmap.rect(), Qt::AlignCenter, "T");
+            break;
+        }
+        case Tool::Number: {
+            painter.setBrush(paper);
+            painter.drawEllipse(QRectF(3, 3, 18, 18));
+            QFont font = QApplication::font();
+            font.setPixelSize(15);
+            font.setBold(true);
+            painter.setFont(font);
+            painter.drawText(pixmap.rect(), Qt::AlignCenter, "1");
+            break;
+        }
+        case Tool::Mosaic:
+            for (int y = 4; y <= 16; y += 6)
+                for (int x = 4; x <= 16; x += 6)
+                    painter.fillRect(QRect(x, y, 5, 5), ((x + y) % 12 == 8) ? ink : QColor(dark ? "#718297" : "#aab8c6"));
+            break;
+        case Tool::Spotlight:
+            painter.setBrush(QColor("#aebdca"));
+            painter.drawRect(QRectF(3, 3, 18, 18));
+            painter.setBrush(paper);
+            painter.drawEllipse(QRectF(6, 6, 12, 12));
+            break;
     }
     return QIcon(pixmap);
 }
+
+QIcon actionIcon(const QString& action, bool dark, const QColor& accent) {
+    QPixmap pixmap(24, 24);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QColor ink(dark ? "#e9f0f6" : "#26313d");
+    const QColor paper(dark ? "#222b36" : "#ffffff");
+    painter.setPen(QPen(ink, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    if (action == "color") {
+        painter.setBrush(paper);
+        painter.drawEllipse(QRectF(3, 3, 18, 18));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(paper);
+        painter.drawEllipse(QRectF(14, 13, 8, 9));
+        for (const auto& dot : std::vector<std::pair<QPointF, QColor>>{{{8, 8}, accent}, {{14, 7}, QColor("#4d94ff")}, {{17, 11}, QColor("#ffd84d")}, {{7, 15}, QColor("#5bd686")}}) {
+            painter.setBrush(dot.second);
+            painter.drawEllipse(dot.first, 2, 2);
+        }
+    } else if (action == "undo" || action == "redo") {
+        if (action == "redo") {
+            painter.translate(24, 0);
+            painter.scale(-1, 1);
+        }
+        QPainterPath path;
+        path.moveTo(9, 5);
+        path.lineTo(4, 10);
+        path.lineTo(9, 15);
+        path.moveTo(4, 10);
+        path.lineTo(12, 10);
+        path.quadTo(20, 10, 20, 20);
+        painter.drawPath(path);
+    } else if (action == "pin") {
+        QPolygonF pin;
+        pin << QPointF(8, 4) << QPointF(18, 4) << QPointF(16, 7) << QPointF(16, 11)
+            << QPointF(19, 14) << QPointF(7, 14) << QPointF(10, 11) << QPointF(10, 7);
+        painter.setBrush(paper);
+        painter.drawPolygon(pin);
+        painter.drawLine(QPointF(13, 14), QPointF(13, 22));
+    } else if (action == "copy") {
+        painter.drawRoundedRect(QRectF(8, 3, 12, 14), 2, 2);
+        painter.setBrush(paper);
+        painter.drawRoundedRect(QRectF(3, 8, 12, 14), 2, 2);
+    } else if (action == "save") {
+        painter.drawLine(QPointF(12, 3), QPointF(12, 15));
+        painter.drawLine(QPointF(7, 10), QPointF(12, 15));
+        painter.drawLine(QPointF(12, 15), QPointF(17, 10));
+        QPainterPath tray;
+        tray.moveTo(4, 16); tray.lineTo(4, 21); tray.lineTo(20, 21); tray.lineTo(20, 16);
+        painter.drawPath(tray);
+    } else if (action == "confirm") {
+        QPolygonF check;
+        check << QPointF(4, 12) << QPointF(10, 18) << QPointF(21, 5);
+        painter.setPen(QPen(ink, 2.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.drawPolyline(check);
+    } else if (action == "cancel") {
+        painter.setPen(QPen(ink, 2.1, Qt::SolidLine, Qt::RoundCap));
+        painter.drawLine(QPointF(6, 6), QPointF(18, 18));
+        painter.drawLine(QPointF(6, 18), QPointF(18, 6));
+    } else if (action == "light") {
+        painter.drawEllipse(QRectF(8, 8, 8, 8));
+        for (int ray = 0; ray < 8; ++ray) {
+            const qreal angle = ray * std::acos(-1.0) / 4.0;
+            const QPointF unit(std::cos(angle), std::sin(angle));
+            painter.drawLine(QPointF(12, 12) + unit * 7.0, QPointF(12, 12) + unit * 10.0);
+        }
+    } else if (action == "dark") {
+        QPainterPath moon;
+        moon.addEllipse(QRectF(3, 3, 18, 18));
+        QPainterPath bite;
+        bite.addEllipse(QRectF(10, 0, 16, 17));
+        painter.setBrush(ink);
+        painter.drawPath(moon.subtracted(bite));
+    } else if (action == "fit") {
+        for (const auto& point : std::vector<QPointF>{{4, 4}, {20, 4}, {4, 20}, {20, 20}}) {
+            const qreal signX = point.x() < 12 ? 1 : -1;
+            const qreal signY = point.y() < 12 ? 1 : -1;
+            painter.drawLine(point, point + QPointF(signX * 6, 0));
+            painter.drawLine(point, point + QPointF(0, signY * 6));
+        }
+    } else if (action == "clear") {
+        painter.drawLine(QPointF(5, 6), QPointF(19, 6));
+        painter.drawLine(QPointF(9, 3), QPointF(15, 3));
+        painter.drawRoundedRect(QRectF(7, 6, 10, 15), 1, 1);
+        painter.drawLine(QPointF(10, 10), QPointF(10, 17));
+        painter.drawLine(QPointF(14, 10), QPointF(14, 17));
+    } else if (action == "reselect") {
+        painter.setPen(QPen(ink, 1.8, Qt::DashLine));
+        painter.drawRect(QRectF(4, 4, 16, 16));
+    } else {
+        painter.setBrush(ink);
+        painter.setPen(Qt::NoPen);
+        for (int x : {5, 12, 19})
+            painter.drawEllipse(QPointF(x, 12), 1.7, 1.7);
+    }
+    return QIcon(pixmap);
+}
+
+void paintStripButton(QWidget* widget, const QString& hint, const QIcon& icon, bool dark, bool checked, bool hover, bool focus) {
+    QPainter painter(widget);
+    painter.setRenderHint(QPainter::Antialiasing);
+    const QRectF highlight = QRectF(widget->rect()).adjusted(2, 3, -2, -3);
+    if (checked || hover)
+        painter.fillPath([&] { QPainterPath path; path.addRoundedRect(highlight, 5, 5); return path; }(), QColor(checked ? (dark ? "#315577" : "#dcecff") : (dark ? "#354352" : "#edf3f9")));
+    if (focus) {
+        painter.setPen(QPen(QColor(dark ? "#91b8db" : "#6291bd"), 1, Qt::DotLine));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(highlight, 5, 5);
+    }
+    if (!widget->isEnabled())
+        painter.setOpacity(0.38);
+    const int labelWidth = hint.isEmpty() ? 0 : 25;
+    const int contentWidth = labelWidth + (labelWidth ? 2 : 0) + 22;
+    const int left = (widget->width() - contentWidth) / 2;
+    if (labelWidth) {
+        QFont font = QApplication::font();
+        font.setPixelSize(14);
+        painter.setFont(font);
+        painter.setPen(QColor(dark ? "#e9f0f6" : "#26313d"));
+        painter.drawText(QRect(left, (widget->height() - 20) / 2, labelWidth, 20), Qt::AlignCenter, hint + ":");
+    }
+    icon.paint(&painter, QRect(left + labelWidth + (labelWidth ? 2 : 0), (widget->height() - 22) / 2, 22, 22), Qt::AlignCenter, QIcon::Normal);
+}
+
+class StripToolButton final : public QToolButton {
+  public:
+    StripToolButton(QString hint, QWidget* parent) : QToolButton(parent), hint(std::move(hint)) {
+        setAttribute(Qt::WA_Hover);
+        setCursor(Qt::ArrowCursor);
+        setFixedSize(this->hint.isEmpty() ? 36 : 64, 36);
+    }
+    QString hint;
+    bool dark = true;
+  protected:
+    void paintEvent(QPaintEvent*) override { paintStripButton(this, hint, icon(), dark, isChecked(), underMouse(), hasFocus()); }
+};
+
+class StripActionButton final : public QPushButton {
+  public:
+    StripActionButton(QString hint, QWidget* parent) : QPushButton(parent), hint(std::move(hint)) {
+        setAttribute(Qt::WA_Hover);
+        setCursor(Qt::ArrowCursor);
+        setFixedSize(this->hint.isEmpty() ? 36 : 64, 36);
+    }
+    QString hint;
+    bool dark = true;
+  protected:
+    void paintEvent(QPaintEvent*) override { paintStripButton(this, hint, icon(), dark, isChecked(), underMouse(), hasFocus()); }
+};
+
+// These frames absorb clicks on panel padding so they cannot start a new capture
+// through the transparent overlay below them.
+class ToolbarFrame final : public QFrame {
+  public:
+    explicit ToolbarFrame(QWidget* parent) : QFrame(parent) { setAttribute(Qt::WA_StyledBackground); setCursor(Qt::ArrowCursor); }
+  protected:
+    void mousePressEvent(QMouseEvent* event) override { event->accept(); }
+    void mouseReleaseEvent(QMouseEvent* event) override { event->accept(); }
+};
+
+class ColorField final : public QWidget {
+  public:
+    ColorField(bool hueField, QWidget* parent) : QWidget(parent), m_hueField(hueField) {
+        setFixedSize(hueField ? QSize(20, 160) : QSize(208, 160));
+        setCursor(Qt::CrossCursor);
+    }
+    std::function<void(const QColor&)> colorPicked;
+    void setColor(const QColor& color) {
+        if (color.hsvHueF() >= 0)
+            m_hue = color.hsvHueF();
+        m_saturation = color.hsvSaturationF();
+        m_value = color.valueF();
+        update();
+    }
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        QPainter painter(this);
+        if (m_hueField) {
+            QLinearGradient hue(0, 0, 0, height());
+            for (int step = 0; step <= 6; ++step)
+                hue.setColorAt(step / 6.0, QColor::fromHsvF(step == 6 ? 0.0 : step / 6.0, 1, 1));
+            painter.fillRect(rect(), hue);
+            const qreal y = m_hue * (height() - 1);
+            painter.setPen(QPen(Qt::black, 3));
+            painter.drawRect(QRectF(0, y - 2, width() - 1, 4));
+            painter.setPen(QPen(Qt::white, 1));
+            painter.drawRect(QRectF(0, y - 2, width() - 1, 4));
+        } else {
+            painter.fillRect(rect(), QColor::fromHsvF(m_hue, 1, 1));
+            QLinearGradient saturation(0, 0, width(), 0);
+            saturation.setColorAt(0, Qt::white);
+            saturation.setColorAt(1, QColor(255, 255, 255, 0));
+            painter.fillRect(rect(), saturation);
+            QLinearGradient value(0, 0, 0, height());
+            value.setColorAt(0, QColor(0, 0, 0, 0));
+            value.setColorAt(1, Qt::black);
+            painter.fillRect(rect(), value);
+            painter.setRenderHint(QPainter::Antialiasing);
+            const QPointF point(m_saturation * (width() - 1), (1.0 - m_value) * (height() - 1));
+            painter.setBrush(Qt::NoBrush);
+            painter.setPen(QPen(QColor("#26313d"), 3));
+            painter.drawEllipse(point, 6, 6);
+            painter.setPen(QPen(Qt::white, 1.5));
+            painter.drawEllipse(point, 6, 6);
+        }
+    }
+    void mousePressEvent(QMouseEvent* event) override { if (event->button() == Qt::LeftButton) pick(event->position()); else event->ignore(); }
+    void mouseMoveEvent(QMouseEvent* event) override { if (event->buttons() & Qt::LeftButton) pick(event->position()); else event->ignore(); }
+  private:
+    bool m_hueField;
+    qreal m_hue = 0, m_saturation = 1, m_value = 1;
+    void pick(const QPointF& point) {
+        if (m_hueField)
+            m_hue = std::clamp(point.y() / std::max(1, height() - 1), 0.0, 0.99999);
+        else {
+            m_saturation = std::clamp(point.x() / std::max(1, width() - 1), 0.0, 1.0);
+            m_value = 1.0 - std::clamp(point.y() / std::max(1, height() - 1), 0.0, 1.0);
+        }
+        if (colorPicked)
+            colorPicked(QColor::fromHsvF(m_hue, m_saturation, m_value));
+        update();
+    }
+};
 }
 
 struct AnnotationEditor::Impl {
+    struct Choice { int group; Tool tool; Variant variant; QString name; StripToolButton* button = nullptr; };
     explicit Impl(AnnotationEditor* owner) : owner(owner) {}
     AnnotationEditor* owner;
     AnnotationCanvas* canvas = nullptr;
-    QFrame* toolbar = nullptr;
-    QButtonGroup* tools = nullptr;
-    std::vector<QToolButton*> toolButtons;
-    QComboBox* variants = nullptr;
+    ToolbarFrame* toolbar = nullptr;
+    ToolbarFrame* variantPanel = nullptr;
+    ToolbarFrame* colorPanel = nullptr;
+    ToolbarFrame* morePanel = nullptr;
+    std::vector<StripToolButton*> toolButtons = std::vector<StripToolButton*>(11, nullptr);
+    std::vector<Choice> choices;
+    std::vector<QAbstractButton*> strip;
+    std::map<int, std::pair<Tool, Variant>> remembered = {
+        {1, {Tool::Rectangle, Variant::Outline}}, {2, {Tool::Ellipse, Variant::Outline}},
+        {3, {Tool::Arrow, Variant::Straight}}, {5, {Tool::Pen, Variant::Outline}}
+    };
     QSpinBox* width = nullptr;
     QLabel* widthLabel = nullptr;
-    QPushButton* color = nullptr;
-    QPushButton* undo = nullptr;
-    QPushButton* redo = nullptr;
-    QPushButton* clear = nullptr;
-    QPushButton* fit = nullptr;
-    QComboBox* theme = nullptr;
-    QPushButton* copy = nullptr;
-    QPushButton* save = nullptr;
-    QPushButton* pin = nullptr;
-    QPushButton* reselect = nullptr;
+    StripToolButton* color = nullptr;
+    StripToolButton* customColor = nullptr;
+    StripToolButton* themeDark = nullptr;
+    StripToolButton* themeLight = nullptr;
+    ColorField* saturationValue = nullptr;
+    ColorField* hue = nullptr;
+    StripActionButton* undo = nullptr;
+    StripActionButton* redo = nullptr;
+    StripActionButton* clear = nullptr;
+    StripActionButton* fit = nullptr;
+    StripActionButton* confirm = nullptr;
+    StripActionButton* cancel = nullptr;
+    StripActionButton* pin = nullptr;
+    StripActionButton* reselect = nullptr;
+    StripActionButton* more = nullptr;
+    int openGroup = -1;
+    StripToolButton* popupAnchor = nullptr;
     bool dark = true;
+    bool layoutActive = false;
+    QSize captureSize;
+    QRect captureGeometry;
+    QRect clusterGeometry;
     QSettings* settings = nullptr;
 
     void savePreferences() {
@@ -744,7 +1081,6 @@ struct AnnotationEditor::Impl {
         settings->setValue("width", static_cast<int>(canvas->strokeWidth));
         settings->setValue("dark", dark);
     }
-
     QString toolName(Tool tool) const {
         switch (tool) {
             case Tool::Select: return owner->tr("Select");
@@ -761,78 +1097,244 @@ struct AnnotationEditor::Impl {
         }
         return {};
     }
-    QString variantName(Variant variant) const {
-        switch (variant) {
-            case Variant::Outline: return owner->tr("Outline");
-            case Variant::Filled: return owner->tr("Filled");
-            case Variant::Rounded: return owner->tr("Rounded");
+    QString choiceLabel(const Choice& choice) const {
+        switch (choice.variant) {
+            case Variant::Filled: return toolName(choice.tool) + " · " + owner->tr("Filled");
+            case Variant::Rounded: return owner->tr("Rounded") + " · " + toolName(choice.tool);
             case Variant::RoundedFilled: return owner->tr("Rounded filled");
-            case Variant::Straight: return owner->tr("Straight");
-            case Variant::Curved: return owner->tr("Curved");
+            case Variant::Curved: return owner->tr("Curved") + " · " + toolName(choice.tool);
             case Variant::DoubleHeaded: return owner->tr("Double headed");
             case Variant::DoubleCurved: return owner->tr("Double curved");
+            default: return toolName(choice.tool);
         }
-        return {};
     }
-    void updateVariants() {
-        const Variant old = canvas->variant;
-        variants->blockSignals(true);
-        variants->clear();
-        const auto add = [&](Variant variant) { variants->addItem(variantName(variant), static_cast<int>(variant)); };
-        if (canvas->tool == Tool::Rectangle) { add(Variant::Outline); add(Variant::Filled); add(Variant::Rounded); add(Variant::RoundedFilled); }
-        else if (canvas->tool == Tool::Ellipse) { add(Variant::Outline); add(Variant::Filled); }
-        else if (canvas->tool == Tool::Arrow) { add(Variant::Straight); add(Variant::Curved); add(Variant::DoubleHeaded); add(Variant::DoubleCurved); }
-        if (variants->count()) {
-            const int index = variants->findData(static_cast<int>(old));
-            variants->setCurrentIndex(std::max(0, index));
-            canvas->variant = static_cast<Variant>(variants->currentData().toInt());
-        } else
-            canvas->variant = Variant::Outline;
-        variants->setEnabled(variants->count() > 0);
-        variants->setVisible(variants->count() > 0);
-        variants->blockSignals(false);
+    int groupFor(Tool tool) const {
+        switch (tool) {
+            case Tool::Rectangle: return 1;
+            case Tool::Ellipse: case Tool::Spotlight: return 2;
+            case Tool::Arrow: case Tool::Line: return 3;
+            case Tool::Pen: case Tool::Highlighter: return 5;
+            default: return -1;
+        }
+    }
+    void closePanels() {
+        variantPanel->hide();
+        colorPanel->hide();
+        morePanel->hide();
+        openGroup = -1;
+    }
+    void prepareOutput() { canvas->finishEditing(); closePanels(); }
+    void updateTools() {
+        const int selectedGroup = groupFor(canvas->tool);
+        for (int id : {0, 1, 2, 3, 5, 7, 8, 9}) {
+            auto* button = toolButtons[id];
+            const bool group = remembered.contains(id);
+            const Tool displayed = group ? remembered[id].first : static_cast<Tool>(id);
+            const Variant variant = group ? remembered[id].second : Variant::Outline;
+            button->dark = dark;
+            button->setIcon(toolIcon(displayed, variant, dark, canvas->color));
+            button->setChecked(group ? selectedGroup == id : canvas->tool == displayed);
+            button->setAccessibleName(toolName(displayed));
+            button->setToolTip(toolName(displayed) + " (" + button->hint + ")");
+        }
+        for (auto& choice : choices) {
+            choice.button->dark = dark;
+            choice.button->setIcon(toolIcon(choice.tool, choice.variant, dark, canvas->color));
+            choice.button->setChecked(choice.tool == canvas->tool && choice.variant == canvas->variant);
+            choice.button->setAccessibleName(choiceLabel(choice));
+            choice.button->setToolTip(choiceLabel(choice));
+        }
+    }
+    void activateTool(Tool tool, Variant variant, bool remember = true) {
+        canvas->selectTool(tool);
+        canvas->variant = variant;
+        const int group = groupFor(tool);
+        if (remember && group >= 0)
+            remembered[group] = {tool, variant};
+        closePanels();
+        updateTools();
+        canvas->setFocus(Qt::ShortcutFocusReason);
+        positionToolbar();
+    }
+    void activateGroup(int group, bool popup) {
+        const bool wasOpen = variantPanel->isVisible() && openGroup == group;
+        const auto [tool, variant] = remembered[group];
+        activateTool(tool, variant, false);
+        if (popup && !wasOpen) {
+            openGroup = group;
+            popupAnchor = toolButtons[group];
+            for (auto& choice : choices)
+                choice.button->setVisible(choice.group == group);
+            variantPanel->adjustSize();
+            variantPanel->show();
+            positionPopups();
+        }
+    }
+    void toggleColor() {
+        const bool wasOpen = colorPanel->isVisible();
+        canvas->finishEditing();
+        closePanels();
+        if (!wasOpen) {
+            saturationValue->setColor(canvas->color);
+            hue->setColor(canvas->color);
+            colorPanel->show();
+            positionPopups();
+        }
+        canvas->setFocus(Qt::ShortcutFocusReason);
+    }
+    void toggleMore() {
+        const bool wasOpen = morePanel->isVisible();
+        closePanels();
+        if (!wasOpen) {
+            morePanel->show();
+            positionPopups();
+        }
+        canvas->setFocus(Qt::ShortcutFocusReason);
     }
     void updateColor() {
-        color->setStyleSheet(QString("background: %1; color: %2; border: 1px solid %3; border-radius: 6px; padding: 4px 9px;")
-            .arg(canvas->color.name(), canvas->color.lightness() > 155 ? "#101820" : "#ffffff", dark ? "#617086" : "#aebdcc"));
+        color->dark = dark;
+        color->setIcon(actionIcon("color", dark, canvas->color));
+        customColor->dark = dark;
+        customColor->setIcon(actionIcon("color", dark, canvas->color));
+        saturationValue->setColor(canvas->color);
+        hue->setColor(canvas->color);
+        updateTools();
+    }
+    void chooseColor(const QColor& selected, bool close) {
+        if (!selected.isValid())
+            return;
+        canvas->color = selected;
+        updateColor();
+        savePreferences();
+        if (close) {
+            closePanels();
+            canvas->setFocus(Qt::ShortcutFocusReason);
+        }
     }
     void applyTheme() {
-        toolbar->setStyleSheet(dark ?
-            "QFrame#annotationToolbar { background: #17212f; border: 1px solid #526277; border-radius: 12px; }"
-            "QLabel { color: #b7c7da; } QToolButton, QPushButton, QComboBox, QSpinBox { color: #e1eaf5; background: #253348; border: 1px solid #3d5069; border-radius: 6px; padding: 4px 7px; }"
-            "QToolButton:checked { background: #314f78; border-color: #7ab8ff; } QToolButton:hover, QPushButton:hover { background: #354964; }"
-            "QToolButton:disabled, QPushButton:disabled { color: #5d6f86; } QComboBox QAbstractItemView { color: #e1eaf5; background: #253348; selection-background-color: #314f78; }" :
-            "QFrame#annotationToolbar { background: #edf2f7; border: 1px solid #9caec0; border-radius: 12px; }"
-            "QLabel { color: #30485f; } QToolButton, QPushButton, QComboBox, QSpinBox { color: #163047; background: #ffffff; border: 1px solid #adbdcc; border-radius: 6px; padding: 4px 7px; }"
-            "QToolButton:checked { background: #c6ddf7; border-color: #407dbb; } QToolButton:hover, QPushButton:hover { background: #d8e5f2; }"
-            "QToolButton:disabled, QPushButton:disabled { color: #9aa8b6; } QComboBox QAbstractItemView { color: #163047; background: #ffffff; selection-background-color: #c6ddf7; }");
+        const QString surface = dark ? "#222b36" : "#ffffff";
+        const QString border = dark ? "#526171" : "#cbd4de";
+        const QString ink = dark ? "#e9f0f6" : "#26313d";
+        const QString selected = dark ? "#315577" : "#dcecff";
+        for (auto* frame : {toolbar, variantPanel, colorPanel, morePanel})
+            frame->setStyleSheet(QString("QFrame#%1 { background: %2; border: 1px solid %3; border-radius: 6px; } QLabel { color: %4; } QSpinBox { color: %4; background: %2; border: 1px solid %3; border-radius: 4px; padding: 1px 2px; selection-background-color: %5; }")
+                .arg(frame->objectName(), surface, border, ink, selected));
+        for (const auto& [button, action] : std::vector<std::pair<StripActionButton*, QString>>{{undo, "undo"}, {redo, "redo"}, {pin, "pin"}, {confirm, "confirm"}, {cancel, "cancel"}, {clear, "clear"}, {fit, "fit"}, {reselect, "reselect"}, {more, "more"}}) {
+            button->dark = dark;
+            button->setIcon(actionIcon(action, dark, canvas->color));
+            button->update();
+        }
+        themeDark->dark = dark;
+        themeLight->dark = dark;
+        themeDark->setChecked(dark);
+        themeLight->setChecked(!dark);
+        themeDark->setIcon(actionIcon("dark", dark, canvas->color));
+        themeLight->setIcon(actionIcon("light", dark, canvas->color));
         updateColor();
+        positionToolbar();
+    }
+    QSize arrangeStrip(int availableWidth) {
+        constexpr int horizontalMargin = 6, verticalMargin = 5, spacing = 2;
+        int naturalWidth = horizontalMargin * 2 - spacing;
+        for (auto* button : strip)
+            naturalWidth += button->width() + spacing;
+        const int panelWidth = std::max(1, std::min(naturalWidth, availableWidth));
+        const int rowWidth = std::max(1, panelWidth - horizontalMargin * 2);
+        int x = 0, y = 0;
+        for (auto* button : strip) {
+            // Keep the final decision controls together when the strip wraps.
+            const int requiredWidth = button == cancel
+                ? cancel->width() + confirm->width() + more->width() + spacing * 2
+                : button->width();
+            if (x && x + requiredWidth > rowWidth) {
+                x = 0;
+                y += 36 + spacing;
+            }
+            button->move(horizontalMargin + x, verticalMargin + y);
+            x += button->width() + spacing;
+        }
+        return QSize(panelWidth, y + 36 + verticalMargin * 2);
+    }
+    void positionToolbar() {
+        if (layoutActive || !toolbar || !canvas)
+            return;
+        layoutActive = true;
+        const QRect bounds = owner->rect().adjusted(8, 8, -8, -8);
+        const QSize panelSize = arrangeStrip(std::max(1, bounds.width()));
+        const QSize accessory = captureSize.isEmpty() ? QSize() : QSize(std::min(captureSize.width(), std::max(1, bounds.width())), captureSize.height());
+        const int gap = accessory.isEmpty() ? 0 : 6;
+        const int clusterHeight = panelSize.height() + accessory.height() + gap;
+        canvas->setViewportBottomInset(clusterHeight + 28);
+        const QRect imageRect = canvas->displayRect();
+        const int clusterWidth = std::max(panelSize.width(), accessory.width());
+        const int maximumX = std::max(bounds.left(), bounds.right() - clusterWidth + 1);
+        const int x = std::clamp(imageRect.right() - clusterWidth + 1, bounds.left(), maximumX);
+        int y = imageRect.bottom() + 9;
+        if (y + clusterHeight > bounds.bottom() + 1) {
+            const int above = imageRect.top() - clusterHeight - 8;
+            y = above >= bounds.top() ? above : bounds.bottom() - clusterHeight + 1;
+        }
+        y = std::max(bounds.top(), y);
+        const QRect oldToolbar = toolbar->geometry();
+        const QRect oldCapture = captureGeometry;
+        clusterGeometry = QRect(x, y, clusterWidth, clusterHeight);
+        captureGeometry = accessory.isEmpty() ? QRect() : QRect(x + clusterWidth - accessory.width(), y, accessory.width(), accessory.height());
+        toolbar->setGeometry(x + clusterWidth - panelSize.width(), y + accessory.height() + gap, panelSize.width(), panelSize.height());
+        toolbar->raise();
+        positionPopups();
+        layoutActive = false;
+        if (toolbar->geometry() != oldToolbar || captureGeometry != oldCapture)
+            emit owner->toolbarGeometryChanged(toolbar->geometry());
+    }
+    void placePopup(QWidget* panel, int centerX) {
+        const QRect bounds = owner->rect().adjusted(8, 8, -8, -8);
+        QSize size = panel->sizeHint().expandedTo(panel->minimumSizeHint());
+        if (panel == colorPanel)
+            size = QSize(260, 246);
+        const int width = std::min(size.width(), std::max(1, bounds.width()));
+        const int height = std::min(size.height(), std::max(1, bounds.height()));
+        const int maxX = std::max(bounds.left(), bounds.right() - width + 1);
+        const int x = std::clamp(centerX - width / 2, bounds.left(), maxX);
+        int y = clusterGeometry.top() - height - 8;
+        if (y < bounds.top())
+            y = clusterGeometry.bottom() + 9;
+        y = std::clamp(y, bounds.top(), std::max(bounds.top(), bounds.bottom() - height + 1));
+        panel->setGeometry(x, y, width, height);
+        panel->raise();
+    }
+    void positionPopups() {
+        if (variantPanel->isVisible() && popupAnchor)
+            placePopup(variantPanel, popupAnchor->mapTo(owner, popupAnchor->rect().center()).x());
+        if (colorPanel->isVisible())
+            placePopup(colorPanel, toolbar->x() + 130);
+        if (morePanel->isVisible())
+            placePopup(morePanel, more->mapTo(owner, more->rect().center()).x());
     }
     void retranslate() {
-        for (int index = 0; index < static_cast<int>(toolButtons.size()); ++index) {
-            auto* button = toolButtons[index];
-            const QString name = toolName(static_cast<Tool>(index));
-            static const QStringList keys = {"V", "R", "E", "A", "W", "D", "H", "T", "B", "G", "Shift+B"};
-            button->setToolTip(name + " (" + keys[index] + ")");
-            button->setAccessibleName(name);
-        }
+        const auto actionLabel = [&](QAbstractButton* button, const QString& label, const QString& key) {
+            button->setText(label);
+            button->setAccessibleName(label);
+            button->setToolTip(key.isEmpty() ? label : label + " (" + key + ")");
+        };
+        actionLabel(color, owner->tr("Color"), "Q");
+        actionLabel(customColor, owner->tr("Color"), {});
+        actionLabel(undo, owner->tr("Undo"), "Z");
+        actionLabel(redo, owner->tr("Redo"), "X");
+        actionLabel(confirm, owner->tr("Capture"), "Enter");
+        actionLabel(cancel, owner->tr("Cancel"), "Esc");
+        actionLabel(pin, owner->tr("Pin"), "P");
+        actionLabel(clear, owner->tr("Clear"), {});
+        actionLabel(fit, owner->tr("Fit"), "Ctrl+0");
+        actionLabel(reselect, owner->tr("Reselect"), {});
+        actionLabel(more, owner->tr("Pin") + " · " + owner->tr("Fit") + " · " + owner->tr("Clear") + " · " + owner->tr("Reselect"), {});
+        actionLabel(themeDark, owner->tr("Dark"), {});
+        actionLabel(themeLight, owner->tr("Light"), {});
         widthLabel->setText(owner->tr("Width"));
         width->setToolTip(owner->tr("Width"));
-        color->setText(owner->tr("Color"));
-        undo->setText(owner->tr("Undo"));
-        redo->setText(owner->tr("Redo"));
-        clear->setText(owner->tr("Clear"));
-        fit->setText(owner->tr("Fit"));
-        copy->setText(owner->tr("Copy"));
-        save->setText(owner->tr("Save"));
-        pin->setText(owner->tr("Pin"));
-        reselect->setText(owner->tr("Reselect"));
-        theme->setItemText(0, owner->tr("Dark"));
-        theme->setItemText(1, owner->tr("Light"));
-        theme->setToolTip(owner->tr("Theme"));
         canvas->setToolTip(owner->tr("Drag to draw. Select to move or delete annotations. Wheel to zoom; Space+drag to pan."));
-        updateVariants();
-        toolbar->adjustSize();
+        updateTools();
+        morePanel->adjustSize();
+        positionToolbar();
     }
 };
 
@@ -847,83 +1349,154 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         ui.canvas->color = savedColor;
     ui.canvas->strokeWidth = std::clamp(ui.settings->value("width", 4).toInt(), 1, 24);
     ui.dark = ui.settings->value("dark", QApplication::palette().color(QPalette::Window).lightness() < 128).toBool();
-    ui.toolbar = new QFrame(this);
+    ui.toolbar = new ToolbarFrame(this);
     ui.toolbar->setObjectName("annotationToolbar");
-    auto* rows = new QVBoxLayout(ui.toolbar);
-    rows->setContentsMargins(10, 9, 10, 9);
-    rows->setSpacing(6);
-    auto* toolRow = new QHBoxLayout;
-    toolRow->setSpacing(4);
-    ui.tools = new QButtonGroup(this);
-    for (int index = 0; index <= static_cast<int>(Tool::Spotlight); ++index) {
-        auto* button = new QToolButton(ui.toolbar);
-        button->setObjectName(QString("annotationTool%1").arg(index));
-        button->setCheckable(true);
-        button->setIcon(toolIcon(static_cast<Tool>(index)));
-        button->setIconSize(QSize(22, 22));
-        button->setFixedSize(34, 32);
-        ui.tools->addButton(button, index);
-        ui.toolButtons.push_back(button);
-        toolRow->addWidget(button);
-    }
-    ui.toolButtons[static_cast<int>(Tool::Rectangle)]->setChecked(true);
-    ui.variants = new QComboBox(ui.toolbar);
-    ui.variants->setObjectName("annotationVariant");
-    ui.variants->setMinimumWidth(128);
-    toolRow->addWidget(ui.variants, 1);
-    rows->addLayout(toolRow);
+    ui.variantPanel = new ToolbarFrame(this);
+    ui.variantPanel->setObjectName("annotationVariantPanel");
+    ui.colorPanel = new ToolbarFrame(this);
+    ui.colorPanel->setObjectName("annotationColorPanel");
+    ui.morePanel = new ToolbarFrame(this);
+    ui.morePanel->setObjectName("annotationMorePanel");
+    ui.variantPanel->hide();
+    ui.colorPanel->hide();
+    ui.morePanel->hide();
 
-    auto* styleRow = new QHBoxLayout;
-    styleRow->setSpacing(5);
-    const QStringList palette = {"#ff5252", "#ff9b43", "#ffdc5a", "#62d889", "#62b5ff", "#ffffff", "#111111"};
-    for (const auto& value : palette) {
-        auto* swatch = new QToolButton(ui.toolbar);
-        swatch->setObjectName("annotationColor" + value.mid(1));
-        swatch->setFixedSize(21, 23);
-        swatch->setStyleSheet(QString("background: %1; border: 1px solid #79889b; border-radius: 5px;").arg(value));
-        swatch->setToolTip(value);
-        styleRow->addWidget(swatch);
-        connect(swatch, &QToolButton::clicked, this, [this, value] { m_impl->canvas->color = QColor(value); m_impl->updateColor(); m_impl->savePreferences(); });
+    ui.color = new StripToolButton("Q", ui.toolbar);
+    ui.color->setObjectName("annotationColorTrigger");
+    ui.strip.push_back(ui.color);
+    const std::vector<std::pair<int, QString>> mainTools = {{0, "V"}, {1, "R"}, {2, "E"}, {3, "A"}, {5, "D"}, {7, "T"}, {9, "G"}, {8, "B"}};
+    for (const auto& [id, key] : mainTools) {
+        auto* button = new StripToolButton(key, ui.toolbar);
+        button->setObjectName(QString("annotationTool%1").arg(id));
+        button->setCheckable(true);
+        ui.toolButtons[id] = button;
+        ui.strip.push_back(button);
+        connect(button, &QToolButton::clicked, this, [this, id] {
+            if (m_impl->remembered.contains(id))
+                m_impl->activateGroup(id, true);
+            else
+                m_impl->activateTool(static_cast<Tool>(id), Variant::Outline);
+        });
     }
-    ui.color = new QPushButton(ui.toolbar);
-    ui.color->setObjectName("annotationColorPicker");
-    styleRow->addWidget(ui.color);
-    ui.widthLabel = new QLabel(ui.toolbar);
-    styleRow->addWidget(ui.widthLabel);
-    ui.width = new QSpinBox(ui.toolbar);
+    const auto action = [&](const QString& key, const char* name) {
+        auto* button = new StripActionButton(key, ui.toolbar);
+        button->setObjectName(name);
+        ui.strip.push_back(button);
+        return button;
+    };
+    ui.undo = action("Z", "annotationUndo");
+    ui.redo = action("X", "annotationRedo");
+    ui.cancel = action({}, "annotationCancel");
+    ui.confirm = action({}, "annotationConfirm");
+    ui.more = action({}, "annotationMore");
+
+    auto* variantRow = new QHBoxLayout(ui.variantPanel);
+    variantRow->setContentsMargins(5, 6, 5, 6);
+    variantRow->setSpacing(2);
+    const std::vector<Impl::Choice> options = {
+        {1, Tool::Rectangle, Variant::Outline, "annotationVariantRectOutline"},
+        {1, Tool::Rectangle, Variant::Rounded, "annotationVariantRectRounded"},
+        {1, Tool::Rectangle, Variant::Filled, "annotationVariantRectFilled"},
+        {1, Tool::Rectangle, Variant::RoundedFilled, "annotationVariantRectRoundedFilled"},
+        {2, Tool::Ellipse, Variant::Outline, "annotationVariantEllipseOutline"},
+        {2, Tool::Ellipse, Variant::Filled, "annotationVariantEllipseFilled"},
+        {2, Tool::Spotlight, Variant::Outline, "annotationTool10"},
+        {3, Tool::Arrow, Variant::Straight, "annotationVariantArrowStraight"},
+        {3, Tool::Arrow, Variant::Curved, "annotationVariantArrowCurved"},
+        {3, Tool::Arrow, Variant::DoubleCurved, "annotationVariantArrowDoubleCurved"},
+        {3, Tool::Line, Variant::Outline, "annotationTool4"},
+        {3, Tool::Arrow, Variant::DoubleHeaded, "annotationVariantArrowDouble"},
+        {5, Tool::Pen, Variant::Outline, "annotationVariantPen"},
+        {5, Tool::Highlighter, Variant::Outline, "annotationTool6"}
+    };
+    for (auto choice : options) {
+        choice.button = new StripToolButton({}, ui.variantPanel);
+        choice.button->setObjectName(choice.name);
+        choice.button->setCheckable(true);
+        variantRow->addWidget(choice.button);
+        if (choice.tool == Tool::Line || choice.tool == Tool::Highlighter || choice.tool == Tool::Spotlight)
+            ui.toolButtons[static_cast<int>(choice.tool)] = choice.button;
+        choice.button->hide();
+        connect(choice.button, &QToolButton::clicked, this, [this, tool = choice.tool, variant = choice.variant] { m_impl->activateTool(tool, variant); });
+        ui.choices.push_back(std::move(choice));
+    }
+
+    auto* colorRows = new QVBoxLayout(ui.colorPanel);
+    colorRows->setContentsMargins(10, 10, 10, 10);
+    colorRows->setSpacing(10);
+    auto* colorTop = new QHBoxLayout;
+    colorTop->setSpacing(4);
+    ui.themeLight = new StripToolButton({}, ui.colorPanel);
+    ui.themeLight->setObjectName("annotationThemeLight");
+    ui.themeDark = new StripToolButton({}, ui.colorPanel);
+    ui.themeDark->setObjectName("annotationThemeDark");
+    for (auto* button : {ui.themeLight, ui.themeDark}) {
+        button->setCheckable(true);
+        button->setFixedSize(28, 26);
+        colorTop->addWidget(button);
+    }
+    colorTop->addStretch();
+    ui.widthLabel = new QLabel(ui.colorPanel);
+    colorTop->addWidget(ui.widthLabel);
+    ui.width = new QSpinBox(ui.colorPanel);
     ui.width->setObjectName("annotationWidth");
     ui.width->setRange(1, 24);
     ui.width->setValue(static_cast<int>(ui.canvas->strokeWidth));
-    ui.width->setFixedWidth(60);
-    styleRow->addWidget(ui.width);
-    ui.theme = new QComboBox(ui.toolbar);
-    ui.theme->setObjectName("annotationTheme");
-    ui.theme->addItems({QString(), QString()});
-    ui.theme->setCurrentIndex(ui.dark ? 0 : 1);
-    styleRow->addWidget(ui.theme);
-    styleRow->addStretch();
-    rows->addLayout(styleRow);
+    ui.width->setFixedSize(48, 26);
+    colorTop->addWidget(ui.width);
+    ui.customColor = new StripToolButton({}, ui.colorPanel);
+    ui.customColor->setObjectName("annotationColorPicker");
+    ui.customColor->setFixedSize(28, 26);
+    colorTop->addWidget(ui.customColor);
+    colorRows->addLayout(colorTop);
+    auto* hsv = new QHBoxLayout;
+    hsv->setSpacing(10);
+    ui.saturationValue = new ColorField(false, ui.colorPanel);
+    ui.saturationValue->setObjectName("annotationSaturationValue");
+    ui.hue = new ColorField(true, ui.colorPanel);
+    ui.hue->setObjectName("annotationHue");
+    hsv->addWidget(ui.saturationValue);
+    hsv->addWidget(ui.hue);
+    colorRows->addLayout(hsv);
+    auto* swatches = new QHBoxLayout;
+    swatches->setSpacing(5);
+    for (const QString value : {"#ff4b55", "#ff9d42", "#ffd84d", "#5bd686", "#42c8d8", "#4d94ff", "#a77bff", "#f774ba", "#ffffff", "#202020"}) {
+        auto* swatch = new QToolButton(ui.colorPanel);
+        swatch->setObjectName("annotationColor" + value.mid(1));
+        swatch->setFixedSize(18, 18);
+        swatch->setStyleSheet(QString("background: %1; border: 1px solid #79889b; border-radius: 4px;").arg(value));
+        swatch->setToolTip(value);
+        swatch->setAccessibleName(value);
+        swatches->addWidget(swatch);
+        connect(swatch, &QToolButton::clicked, this, [this, value] { m_impl->chooseColor(QColor(value), true); });
+    }
+    swatches->addStretch();
+    colorRows->addLayout(swatches);
+    colorRows->addStretch();
 
-    auto* actionRow = new QHBoxLayout;
-    actionRow->setSpacing(5);
-    const auto button = [&](const char* name) { auto* item = new QPushButton(ui.toolbar); item->setObjectName(name); actionRow->addWidget(item); return item; };
-    ui.undo = button("annotationUndo");
-    ui.redo = button("annotationRedo");
-    ui.clear = button("annotationClear");
-    ui.fit = button("annotationFit");
-    actionRow->addStretch();
-    ui.reselect = button("annotationReselect");
-    ui.pin = button("annotationPin");
-    ui.save = button("annotationSave");
-    ui.copy = button("annotationCopy");
-    rows->addLayout(actionRow);
+    auto* moreRows = new QHBoxLayout(ui.morePanel);
+    moreRows->setContentsMargins(5, 6, 5, 6);
+    moreRows->setSpacing(2);
+    const auto overflow = [&](const char* name) {
+        auto* button = new StripActionButton({}, ui.morePanel);
+        button->setObjectName(name);
+        moreRows->addWidget(button);
+        return button;
+    };
+    ui.pin = overflow("annotationPin");
+    ui.clear = overflow("annotationClear");
+    ui.fit = overflow("annotationFit");
+    ui.reselect = overflow("annotationReselect");
 
     ui.canvas->changed = [this] {
         m_impl->undo->setEnabled(m_impl->canvas->canUndo());
         m_impl->redo->setEnabled(m_impl->canvas->canRedo());
         m_impl->clear->setEnabled(m_impl->canvas->hasAnnotations());
+        m_impl->positionToolbar();
         emit annotationsChanged();
     };
+    ui.canvas->viewChanged = [this] { m_impl->positionToolbar(); };
+    ui.canvas->pressed = [this] { m_impl->closePanels(); };
     ui.canvas->requestText = [this](const QString& existing) {
         QDialog dialog(this);
         dialog.setWindowTitle(tr("Text annotation"));
@@ -940,57 +1513,71 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         input->setFocus();
         return dialog.exec() == QDialog::Accepted ? input->toPlainText() : existing;
     };
-    connect(ui.tools, &QButtonGroup::idClicked, this, [this](int id) { m_impl->canvas->selectTool(static_cast<Tool>(id)); m_impl->updateVariants(); QResizeEvent resize(size(), size()); resizeEvent(&resize); });
-    connect(ui.variants, &QComboBox::currentIndexChanged, this, [this] { if (m_impl->variants->currentIndex() >= 0) m_impl->canvas->variant = static_cast<Variant>(m_impl->variants->currentData().toInt()); });
+    connect(ui.color, &QToolButton::clicked, this, [this] { m_impl->toggleColor(); });
+    connect(ui.more, &QPushButton::clicked, this, [this] { m_impl->toggleMore(); });
     connect(ui.width, &QSpinBox::valueChanged, this, [this](int value) { m_impl->canvas->strokeWidth = value; m_impl->savePreferences(); });
-    connect(ui.theme, &QComboBox::currentIndexChanged, this, [this](int index) { m_impl->dark = index == 0; m_impl->applyTheme(); m_impl->savePreferences(); });
-    connect(ui.color, &QPushButton::clicked, this, [this] {
+    connect(ui.themeLight, &QToolButton::clicked, this, [this] { m_impl->dark = false; m_impl->applyTheme(); m_impl->savePreferences(); });
+    connect(ui.themeDark, &QToolButton::clicked, this, [this] { m_impl->dark = true; m_impl->applyTheme(); m_impl->savePreferences(); });
+    connect(ui.customColor, &QToolButton::clicked, this, [this] {
+        m_impl->closePanels();
         const QColor selected = QColorDialog::getColor(m_impl->canvas->color, this, tr("Color"));
-        if (selected.isValid()) { m_impl->canvas->color = selected; m_impl->updateColor(); m_impl->savePreferences(); }
+        m_impl->chooseColor(selected, true);
     });
-    connect(ui.undo, &QPushButton::clicked, this, &AnnotationEditor::undo);
-    connect(ui.redo, &QPushButton::clicked, this, &AnnotationEditor::redo);
-    connect(ui.clear, &QPushButton::clicked, this, &AnnotationEditor::clearAnnotations);
-    connect(ui.fit, &QPushButton::clicked, this, &AnnotationEditor::fitImage);
-    connect(ui.copy, &QPushButton::clicked, this, &AnnotationEditor::copyRequested);
-    connect(ui.save, &QPushButton::clicked, this, &AnnotationEditor::saveRequested);
-    connect(ui.pin, &QPushButton::clicked, this, &AnnotationEditor::pinRequested);
-    connect(ui.reselect, &QPushButton::clicked, this, &AnnotationEditor::reselectRequested);
+    ui.saturationValue->colorPicked = [this](const QColor& selected) { m_impl->chooseColor(selected, false); };
+    ui.hue->colorPicked = [this](const QColor& selected) { m_impl->chooseColor(selected, false); };
+    connect(ui.undo, &QPushButton::clicked, this, [this] { m_impl->closePanels(); undo(); });
+    connect(ui.redo, &QPushButton::clicked, this, [this] { m_impl->closePanels(); redo(); });
+    connect(ui.clear, &QPushButton::clicked, this, [this] { m_impl->closePanels(); clearAnnotations(); });
+    connect(ui.fit, &QPushButton::clicked, this, [this] { m_impl->closePanels(); fitImage(); });
+    connect(ui.confirm, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit confirmRequested(); });
+    connect(ui.cancel, &QPushButton::clicked, this, [this] { m_impl->closePanels(); emit cancelRequested(); });
+    connect(ui.pin, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit pinRequested(); });
+    connect(ui.reselect, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit reselectRequested(); });
+
     const auto shortcut = [this](const QKeySequence& sequence, std::function<void()> callback) {
         auto* key = new QShortcut(sequence, this);
         key->setContext(Qt::WidgetWithChildrenShortcut);
-        connect(key, &QShortcut::activated, this, std::move(callback));
+        connect(key, &QShortcut::activated, this, [callback = std::move(callback)] {
+            // Color width and text dialogs must retain normal text entry.
+            if (QApplication::activeModalWidget() || qobject_cast<QSpinBox*>(QApplication::focusWidget()) || qobject_cast<QPlainTextEdit*>(QApplication::focusWidget()))
+                return;
+            callback();
+        });
     };
     shortcut(QKeySequence::Undo, [this] { undo(); });
     shortcut(QKeySequence("Ctrl+Shift+Z"), [this] { redo(); });
     shortcut(QKeySequence("Ctrl+Y"), [this] { redo(); });
-    shortcut(QKeySequence::Copy, [this] { emit copyRequested(); });
-    shortcut(QKeySequence::Save, [this] { emit saveRequested(); });
-    shortcut(QKeySequence("Ctrl+P"), [this] { emit pinRequested(); });
+    shortcut(QKeySequence("Ctrl+P"), [this] { m_impl->pin->click(); });
     shortcut(QKeySequence("Ctrl+0"), [this] { fitImage(); });
-    const auto toolShortcut = [&](const QString& key, Tool tool) {
-        shortcut(QKeySequence(key), [this, tool] {
-            if (!QApplication::activeModalWidget())
-                m_impl->toolButtons[static_cast<int>(tool)]->click();
-        });
+    shortcut(QKeySequence("Q"), [this] { m_impl->toggleColor(); });
+    shortcut(QKeySequence("Z"), [this] { undo(); });
+    shortcut(QKeySequence("X"), [this] { redo(); });
+    shortcut(QKeySequence("P"), [this] { m_impl->pin->click(); });
+    shortcut(QKeySequence(Qt::Key_Return), [this] { m_impl->confirm->click(); });
+    shortcut(QKeySequence(Qt::Key_Enter), [this] { m_impl->confirm->click(); });
+    shortcut(QKeySequence(Qt::Key_Escape), [this] {
+        if (m_impl->variantPanel->isVisible() || m_impl->colorPanel->isVisible() || m_impl->morePanel->isVisible())
+            m_impl->closePanels();
+        else
+            m_impl->cancel->click();
+    });
+    const auto toolShortcut = [&](const QString& key, Tool tool, Variant variant = Variant::Outline) {
+        shortcut(QKeySequence(key), [this, tool, variant] { m_impl->activateTool(tool, variant); });
     };
     toolShortcut("V", Tool::Select);
-    toolShortcut("R", Tool::Rectangle);
-    toolShortcut("E", Tool::Ellipse);
-    toolShortcut("A", Tool::Arrow);
+    for (const auto& [key, group] : std::vector<std::pair<QString, int>>{{"R", 1}, {"E", 2}, {"A", 3}, {"D", 5}})
+        shortcut(QKeySequence(key), [this, group] { m_impl->activateGroup(group, false); });
     toolShortcut("W", Tool::Line);
-    toolShortcut("D", Tool::Pen);
     toolShortcut("H", Tool::Highlighter);
     toolShortcut("T", Tool::Text);
     toolShortcut("B", Tool::Number);
     toolShortcut("G", Tool::Mosaic);
+    toolShortcut("Shift+R", Tool::Rectangle, Variant::Rounded);
+    toolShortcut("Shift+E", Tool::Ellipse, Variant::Filled);
+    toolShortcut("Shift+A", Tool::Arrow, Variant::Curved);
+    toolShortcut("Shift+D", Tool::Rectangle, Variant::Filled);
     toolShortcut("Shift+B", Tool::Spotlight);
-    shortcut(QKeySequence("Shift+D"), [this] {
-        if (QApplication::activeModalWidget())
-            return;
-        m_impl->toolButtons[static_cast<int>(Tool::Rectangle)]->click();
-        m_impl->variants->setCurrentIndex(m_impl->variants->findData(static_cast<int>(Variant::Filled)));
-    });
+    toolShortcut("Shift+W", Tool::Arrow, Variant::DoubleCurved);
     ui.retranslate();
     ui.applyTheme();
     ui.undo->setEnabled(false);
@@ -999,10 +1586,22 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
 }
 
 AnnotationEditor::~AnnotationEditor() = default;
-void AnnotationEditor::setImage(const QImage& image, bool preserveAnnotations) { m_impl->canvas->setImage(image, preserveAnnotations); }
+void AnnotationEditor::setImage(const QImage& image, bool preserveAnnotations) {
+    m_impl->closePanels();
+    m_impl->canvas->setImage(image, preserveAnnotations);
+    m_impl->positionToolbar();
+}
 QImage AnnotationEditor::resultImage() const { return m_impl->canvas->result(); }
 QRect AnnotationEditor::canvasGeometry() const { return m_impl->canvas->displayRect(); }
 QWidget* AnnotationEditor::toolbarWidget() const { return m_impl->toolbar; }
+QRect AnnotationEditor::toolbarGeometry() const { return m_impl->toolbar->geometry(); }
+void AnnotationEditor::setCaptureToolbarSize(const QSize& size) {
+    if (m_impl->captureSize == size)
+        return;
+    m_impl->captureSize = size;
+    m_impl->positionToolbar();
+}
+QRect AnnotationEditor::captureToolbarGeometry() const { return m_impl->captureGeometry; }
 void AnnotationEditor::undo() { m_impl->canvas->undo(); }
 void AnnotationEditor::redo() { m_impl->canvas->redo(); }
 void AnnotationEditor::clearAnnotations() { m_impl->canvas->clearAnnotations(); }
@@ -1011,15 +1610,14 @@ void AnnotationEditor::setImageDisplayRect(const QRect& rect) { m_impl->canvas->
 void AnnotationEditor::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     m_impl->canvas->setGeometry(rect());
-    const QSize toolbarSize = m_impl->toolbar->sizeHint();
-    m_impl->toolbar->setGeometry(std::max(0, (width() - toolbarSize.width()) / 2), std::max(0, height() - toolbarSize.height() - 18), toolbarSize.width(), toolbarSize.height());
-    m_impl->toolbar->raise();
+    m_impl->positionToolbar();
+}
+void AnnotationEditor::hideEvent(QHideEvent* event) {
+    m_impl->closePanels();
+    QWidget::hideEvent(event);
 }
 void AnnotationEditor::changeEvent(QEvent* event) {
     QWidget::changeEvent(event);
-    if (event->type() == QEvent::LanguageChange && m_impl->toolbar) {
+    if (event->type() == QEvent::LanguageChange && m_impl->toolbar)
         m_impl->retranslate();
-        QResizeEvent resize(size(), size());
-        resizeEvent(&resize);
-    }
 }

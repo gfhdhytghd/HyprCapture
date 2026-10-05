@@ -5,6 +5,7 @@
 #include "ui/i18n.hpp"
 
 #include <QApplication>
+#include <QAbstractButton>
 #include <QClipboard>
 #include <QDir>
 #include <QFile>
@@ -17,6 +18,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
+#include <QWheelEvent>
 #include <cstdio>
 
 namespace {
@@ -43,8 +45,9 @@ QString writeArtifact(const QImage& image) {
     return path;
 }
 
-QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWindow = true) {
-    QImage desktop(QSize(kLogicalWidth * 2, kLogicalHeight * 2), QImage::Format_RGBA8888);
+QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWindow = true,
+                    QSize logicalSize = QSize(kLogicalWidth, kLogicalHeight), QRect windowGeometry = QRect(100, 100, 200, 120)) {
+    QImage desktop(logicalSize * 2, QImage::Format_RGBA8888);
     desktop.fill(QColor(17, 29, 53));
     const QString desktopPath = writeArtifact(desktop);
     if (desktopPath.isEmpty())
@@ -54,10 +57,10 @@ QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWi
     session.id = "in-place-test";
     session.defaults = defaults;
     session.defaults.language = qEnvironmentVariable("HYPRCAPTURE_TEST_LANGUAGE", QStringLiteral("en")).toStdString();
-    session.cursorPosition = hyprcapture::Point{150, 150};
+    session.cursorPosition = hyprcapture::Point{static_cast<double>(windowGeometry.center().x()), static_cast<double>(windowGeometry.center().y())};
     hyprcapture::MonitorInfo monitor;
     monitor.name = "test-2x";
-    monitor.logicalGeometry = {0, 0, kLogicalWidth, kLogicalHeight};
+    monitor.logicalGeometry = {0, 0, static_cast<double>(logicalSize.width()), static_cast<double>(logicalSize.height())};
     monitor.scale = 2;
     monitor.focused = true;
     monitor.artifactPath = desktopPath.toStdString();
@@ -66,10 +69,11 @@ QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWi
     session.monitors.push_back(monitor);
 
     if (includeWindow) {
-        QImage window(kWindowPixels, QImage::Format_RGBA8888);
+        QImage window(windowGeometry.size() * 2, QImage::Format_RGBA8888);
         window.fill(Qt::transparent);
         {
             QPainter painter(&window);
+            painter.scale(static_cast<double>(window.width()) / kWindowPixels.width(), static_cast<double>(window.height()) / kWindowPixels.height());
             painter.fillRect(QRect(40, 30, 320, 180), QColor(30, 110, 80, 128));
             painter.fillRect(kOpaquePatch, QColor(34, 149, 98));
         }
@@ -81,7 +85,8 @@ QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWi
         info.appClass = "test-app";
         info.title = "Native resolution test";
         info.focused = true;
-        info.fullGeometry = {100, 100, 200, 120};
+        info.fullGeometry = {static_cast<double>(windowGeometry.x()), static_cast<double>(windowGeometry.y()),
+                             static_cast<double>(windowGeometry.width()), static_cast<double>(windowGeometry.height())};
         info.visibleGeometry = info.fullGeometry;
         info.artifactPath = windowPath.toStdString();
         info.artifactWidth = window.width();
@@ -119,6 +124,44 @@ void selectRegion(CaptureOverlay& overlay, const QPoint& start, const QPoint& en
     QTest::mouseRelease(&overlay, Qt::LeftButton, Qt::NoModifier, end);
 }
 
+QRect editorToolbarCluster(CaptureOverlay& overlay, AnnotationEditor& editor) {
+    auto* capture = overlay.findChild<QWidget*>(QStringLiteral("toolbar"));
+    const QRect annotation(editor.toolbarWidget()->mapTo(&overlay, QPoint()), editor.toolbarWidget()->size());
+    return capture ? annotation.united(QRect(capture->mapTo(&overlay, QPoint()), capture->size())) : annotation;
+}
+
+void verifyEditorToolbarCluster(CaptureOverlay& overlay, AnnotationEditor& editor) {
+    const QRect cluster = editorToolbarCluster(overlay, editor);
+    const QRect image = editor.canvasGeometry();
+    QVERIFY(overlay.rect().contains(cluster));
+    QVERIFY(!cluster.intersects(image));
+    const int gap = cluster.top() > image.bottom() ? cluster.top() - image.bottom() : image.top() - cluster.bottom();
+    QVERIFY(gap > 0 && gap <= 24);
+    for (auto* toolbar : {overlay.findChild<QWidget*>(QStringLiteral("toolbar")), editor.toolbarWidget()}) {
+        QVERIFY(toolbar);
+        for (auto* button : toolbar->findChildren<QAbstractButton*>()) {
+            if (button->isVisible())
+                QVERIFY2(overlay.rect().contains(QRect(button->mapTo(&overlay, QPoint()), button->size())), qPrintable(button->objectName()));
+        }
+    }
+}
+
+bool clickEditorAction(AnnotationEditor& editor, const char* name) {
+    auto* button = editor.findChild<QAbstractButton*>(QString::fromLatin1(name));
+    if (!button)
+        return false;
+    if (!button->isVisible()) {
+        auto* more = editor.findChild<QAbstractButton*>(QStringLiteral("annotationMore"));
+        if (!more || !more->isVisible())
+            return false;
+        QTest::mouseClick(more, Qt::LeftButton);
+    }
+    if (!button->isVisible())
+        return false;
+    QTest::mouseClick(button, Qt::LeftButton);
+    return true;
+}
+
 } // namespace
 
 class InPlaceEditorTest final : public QObject {
@@ -148,6 +191,17 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(editor);
         QTRY_VERIFY(editor->isVisible());
         QVERIFY(overlay.isVisible());
+        verifyEditorToolbarCluster(overlay, *editor);
+        auto* confirm = editor->findChild<QAbstractButton*>(QStringLiteral("annotationConfirm"));
+        auto* cancel = editor->findChild<QAbstractButton*>(QStringLiteral("annotationCancel"));
+        auto* previousCancel = overlay.findChild<QAbstractButton*>(QStringLiteral("captureCancel"));
+        QVERIFY(confirm && confirm->isVisible());
+        QVERIFY(cancel && cancel->isVisible());
+        QVERIFY(previousCancel && !previousCancel->isVisible());
+        for (const char* oldOutput : {"annotationCopy", "annotationSave", "annotationPin"}) {
+            auto* button = editor->findChild<QAbstractButton*>(QString::fromLatin1(oldOutput));
+            QVERIFY(!button || !button->isVisible());
+        }
         QCOMPARE(finishing.count(), 0);
         QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clipboard-before-editor"));
         QVERIFY(QDir(output.path()).entryList(QDir::Files).isEmpty());
@@ -233,11 +287,84 @@ class InPlaceEditorTest final : public QObject {
         QTRY_VERIFY(editor->isVisible());
         QCOMPARE(editor->resultImage().size(), QSize(200, 200));
         QCOMPARE(editor->resultImage().pixelColor(50, 50), QColor(17, 29, 53));
-        QVERIFY(QMetaObject::invokeMethod(editor, "reselectRequested", Qt::DirectConnection));
+        QVERIFY(clickEditorAction(*editor, "annotationReselect"));
         QVERIFY(!editor->isVisible());
         selectRegion(overlay, QPoint(400, 150), QPoint(499, 249));
         QTRY_VERIFY(editor->isVisible());
         QCOMPARE(editor->resultImage().size(), QSize(200, 200));
+        QCOMPARE(finishing.count(), 0);
+    }
+
+    void toolbarClusterTracksCapture_data() {
+        QTest::addColumn<QRect>("selection");
+        QTest::addColumn<bool>("below");
+        QTest::newRow("below-left-edge") << QRect(20, 60, 120, 90) << true;
+        QTest::newRow("below-right-edge") << QRect(650, 80, 130, 90) << true;
+        QTest::newRow("above-bottom-edge") << QRect(580, 420, 120, 130) << false;
+    }
+
+    void toolbarClusterTracksCapture() {
+        QFETCH(QRect, selection);
+        QFETCH(bool, below);
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        defaults.inPlaceEditToolbar = true;
+        const QString json = sessionJson(defaults);
+        QVERIFY(!json.isEmpty());
+        CaptureOverlay overlay(defaults, false, false, false, json);
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        overlay.show();
+        QTest::qWait(30);
+        selectRegion(overlay, selection.topLeft(), selection.bottomRight());
+        auto* editor = overlay.findChild<AnnotationEditor*>(QStringLiteral("inPlaceEditor"));
+        QVERIFY(editor);
+        QTRY_VERIFY(editor->isVisible());
+        QCOMPARE(editor->canvasGeometry(), selection);
+        verifyEditorToolbarCluster(overlay, *editor);
+        const QRect cluster = editorToolbarCluster(overlay, *editor);
+        QVERIFY(below ? cluster.top() > selection.bottom() : cluster.bottom() < selection.top());
+        QCOMPARE(editor->resultImage().size(), selection.size() * 2);
+        QCOMPARE(finishing.count(), 0);
+    }
+
+    void zoomAndPanMoveCaptureToolbarCluster() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        defaults.inPlaceEditToolbar = true;
+        const QString json = sessionJson(defaults);
+        QVERIFY(!json.isEmpty());
+        CaptureOverlay overlay(defaults, false, false, false, json);
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        overlay.show();
+        QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(150, 150));
+        auto* editor = overlay.findChild<AnnotationEditor*>(QStringLiteral("inPlaceEditor"));
+        QVERIFY(editor);
+        QTRY_VERIFY(editor->isVisible());
+        auto* canvas = editor->findChild<QWidget*>(QStringLiteral("annotationCanvas"));
+        QVERIFY(canvas);
+        const QImage native = editor->resultImage();
+        const QRect imageBefore = editor->canvasGeometry();
+        const QRect clusterBefore = editorToolbarCluster(overlay, *editor);
+        const QPoint zoomPoint = imageBefore.center();
+        QWheelEvent zoom(zoomPoint, canvas->mapToGlobal(zoomPoint), {}, QPoint(0, 120),
+                         Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QApplication::sendEvent(canvas, &zoom);
+        QTRY_VERIFY(editor->canvasGeometry().width() > imageBefore.width());
+        QTRY_VERIFY(editorToolbarCluster(overlay, *editor) != clusterBefore);
+        verifyEditorToolbarCluster(overlay, *editor);
+        const QRect zoomedImage = editor->canvasGeometry();
+        const QRect zoomedCluster = editorToolbarCluster(overlay, *editor);
+        const QPoint start = zoomedImage.center();
+        const QPoint delta(40, 50);
+        QTest::mousePress(canvas, Qt::MiddleButton, Qt::NoModifier, start);
+        QTest::mouseMove(canvas, start + delta);
+        QTest::mouseRelease(canvas, Qt::MiddleButton, Qt::NoModifier, start + delta);
+        QTRY_COMPARE(editor->canvasGeometry().topLeft(), zoomedImage.topLeft() + delta);
+        QTRY_VERIFY(editorToolbarCluster(overlay, *editor) != zoomedCluster);
+        verifyEditorToolbarCluster(overlay, *editor);
+        QCOMPARE(editor->resultImage(), native);
         QCOMPARE(finishing.count(), 0);
     }
 
@@ -331,7 +458,7 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(editor);
         QTRY_VERIFY(editor->isVisible());
         auto* canvas = editor->findChild<QWidget*>(QStringLiteral("annotationCanvas"));
-        auto* pin = editor->findChild<QPushButton*>(QStringLiteral("annotationPin"));
+        auto* pin = editor->findChild<QAbstractButton*>(QStringLiteral("annotationPin"));
         auto* reselect = editor->findChild<QPushButton*>(QStringLiteral("annotationReselect"));
         QVERIFY(canvas);
         QVERIFY(pin);
@@ -342,7 +469,7 @@ class InPlaceEditorTest final : public QObject {
         QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(200, 160));
         const QImage annotated = editor->resultImage();
         QVERIFY(annotated != original);
-        QTest::mouseClick(pin, Qt::LeftButton);
+        QVERIFY(clickEditorAction(*editor, "annotationPin"));
         QTRY_VERIFY_WITH_TIMEOUT(editor->isEnabled(), 2000);
         QVERIFY(editor->isVisible());
         QVERIFY(overlay.isVisible());
@@ -389,7 +516,7 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(editor);
         QTRY_VERIFY(editor->isVisible());
         auto* canvas = editor->findChild<QWidget*>(QStringLiteral("annotationCanvas"));
-        auto* save = editor->findChild<QPushButton*>(QStringLiteral("annotationSave"));
+        auto* save = editor->findChild<QAbstractButton*>(QStringLiteral("annotationConfirm"));
         QVERIFY(canvas);
         QVERIFY(save);
         const QImage original = editor->resultImage();
@@ -405,7 +532,7 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(editor->resultImage(), annotated);
         QCOMPARE(finishing.count(), 0);
         bool saveFailureDisplayed = false;
-        const QString expectedError = hyprcapture::ui::uiText("Could not save the image. Choose another output directory or copy it.");
+        const QString expectedError = hyprcapture::ui::uiText("Could not save the image. Check the output directory and try again.");
         for (auto* label : overlay.findChildren<QLabel*>())
             saveFailureDisplayed |= label->isVisible() && !label->text().isEmpty() && label->toolTip() == expectedError;
         QVERIFY(saveFailureDisplayed);
@@ -417,6 +544,137 @@ class InPlaceEditorTest final : public QObject {
         // Drain the finished worker's deleteLater event before destroying its
         // callback receiver; the failure callback above has already completed.
         QTest::qWait(30);
+    }
+
+    void confirmationRespectsDisabledSave_data() {
+        QTest::addColumn<bool>("clipboard");
+        QTest::newRow("copy-only") << true;
+        QTest::newRow("no-save-or-copy") << false;
+    }
+
+    void confirmationRespectsDisabledSave() {
+        QFETCH(bool, clipboard);
+        const QString clipboardPath = qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD");
+        QFile::remove(clipboardPath);
+        QTemporaryDir output;
+        QVERIFY(output.isValid());
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        defaults.inPlaceEditToolbar = true;
+        defaults.save = false;
+        defaults.clipboard = clipboard;
+        defaults.showThumbnail = false;
+        defaults.screenshotNotification = false;
+        defaults.saveDir = output.path().toStdString();
+        const QString json = sessionJson(defaults);
+        QVERIFY(!json.isEmpty());
+        CaptureOverlay overlay(defaults, false, false, false, json);
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        QApplication::clipboard()->setText(QStringLiteral("clipboard-before-confirm"));
+        overlay.show();
+        QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(150, 150));
+        auto* editor = overlay.findChild<AnnotationEditor*>(QStringLiteral("inPlaceEditor"));
+        QVERIFY(editor);
+        QTRY_VERIFY(editor->isVisible());
+        const QImage expected = editor->resultImage().convertToFormat(QImage::Format_RGBA8888);
+        QVERIFY(clickEditorAction(*editor, "annotationConfirm"));
+        QTRY_COMPARE_WITH_TIMEOUT(finishing.count(), 1, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.isVisible(), 2000);
+        QVERIFY(QDir(output.path()).entryList(QDir::Files).isEmpty());
+        if (clipboard) {
+            QTRY_VERIFY_WITH_TIMEOUT(!QImage(clipboardPath).isNull(), 2000);
+            QCOMPARE(QImage(clipboardPath).convertToFormat(QImage::Format_RGBA8888), expected);
+        } else {
+            QVERIFY(!QFileInfo::exists(clipboardPath));
+            QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clipboard-before-confirm"));
+        }
+        QTest::qWait(30);
+    }
+
+    void cancelButtonCancelsEntireCaptureWithoutOutput() {
+        QTemporaryDir output;
+        QVERIFY(output.isValid());
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.inPlaceEditToolbar = true;
+        defaults.save = true;
+        defaults.clipboard = true;
+        defaults.showThumbnail = true;
+        defaults.saveDir = output.path().toStdString();
+        const QString json = sessionJson(defaults);
+        QVERIFY(!json.isEmpty());
+        CaptureOverlay overlay(defaults, false, false, false, json);
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        QApplication::clipboard()->setText(QStringLiteral("clipboard-before-cancel"));
+        overlay.show();
+        QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(150, 150));
+        auto* editor = overlay.findChild<AnnotationEditor*>(QStringLiteral("inPlaceEditor"));
+        QVERIFY(editor);
+        QTRY_VERIFY(editor->isVisible());
+        QVERIFY(clickEditorAction(*editor, "annotationCancel"));
+        QCOMPARE(finishing.count(), 1);
+        QVERIFY(!editor->isEnabled());
+        auto* confirm = editor->findChild<QAbstractButton*>(QStringLiteral("annotationConfirm"));
+        QVERIFY(confirm);
+        QVERIFY(!confirm->isEnabled());
+        QTest::mouseClick(confirm, Qt::LeftButton);
+        QTest::keyClick(&overlay, Qt::Key_Return);
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.isVisible(), 2000);
+        QCOMPARE(finishing.count(), 1);
+        QVERIFY(QDir(output.path()).entryList(QDir::Files).isEmpty());
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clipboard-before-cancel"));
+    }
+
+    void wideRenderedToolbarPreview() {
+        const QString screenshot = qEnvironmentVariable("HYPRCAPTURE_TEST_WIDE_SCREENSHOT");
+        if (screenshot.isEmpty())
+            QSKIP("Set HYPRCAPTURE_TEST_WIDE_SCREENSHOT to render the desktop-width review fixture");
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::White;
+        defaults.inPlaceEditToolbar = true;
+        const QRect window(360, 180, 600, 360);
+        const QString json = sessionJson(defaults, true, QSize(1440, 900), window);
+        QVERIFY(!json.isEmpty());
+        CaptureOverlay overlay(defaults, false, false, false, json);
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        overlay.show();
+        QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, window.center());
+        auto* editor = overlay.findChild<AnnotationEditor*>(QStringLiteral("inPlaceEditor"));
+        QVERIFY(editor);
+        QTRY_VERIFY(editor->isVisible());
+        QCOMPARE(editor->canvasGeometry(), window);
+        verifyEditorToolbarCluster(overlay, *editor);
+        QVERIFY(editor->toolbarWidget()->height() <= 64);
+        auto* canvas = editor->findChild<QWidget*>(QStringLiteral("annotationCanvas"));
+        auto* pen = editor->findChild<QToolButton*>(QStringLiteral("annotationTool5"));
+        QVERIFY(canvas && pen);
+        QTest::mouseClick(pen, Qt::LeftButton);
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, window.topLeft() + QPoint(120, 120));
+        QTest::mouseMove(canvas, window.topLeft() + QPoint(320, 200));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, window.topLeft() + QPoint(320, 200));
+        QTest::qWait(30);
+        QVERIFY(overlay.grab().save(screenshot));
+        QCOMPARE(finishing.count(), 0);
+        const QString paletteScreenshot = qEnvironmentVariable("HYPRCAPTURE_TEST_PALETTE_SCREENSHOT");
+        if (!paletteScreenshot.isEmpty()) {
+            QVERIFY(clickEditorAction(*editor, "annotationColorTrigger"));
+            auto* panel = editor->findChild<QWidget*>(QStringLiteral("annotationColorPanel"));
+            QVERIFY(panel && panel->isVisible());
+            QVERIFY(overlay.rect().contains(QRect(panel->mapTo(&overlay, QPoint()), panel->size())));
+            const QImage edited = editor->resultImage();
+            overlay.update();
+            for (auto* widget : overlay.findChildren<QWidget*>()) widget->update();
+            QTest::qWait(50);
+            const QImage preview = overlay.grab().toImage();
+            QCOMPARE(editor->resultImage(), edited);
+            QCOMPARE(preview.pixelColor(window.center()), QColor(34, 149, 98));
+            QVERIFY(preview.save(paletteScreenshot));
+        }
     }
 
     void successfulSaveExportsNativeEditedPixels() {
@@ -443,7 +701,7 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(editor);
         QTRY_VERIFY(editor->isVisible());
         auto* canvas = editor->findChild<QWidget*>(QStringLiteral("annotationCanvas"));
-        auto* save = editor->findChild<QPushButton*>(QStringLiteral("annotationSave"));
+        auto* save = editor->findChild<QAbstractButton*>(QStringLiteral("annotationConfirm"));
         QVERIFY(canvas);
         QVERIFY(save);
         const QImage original = editor->resultImage();
@@ -492,6 +750,22 @@ int main(int argc, char** argv) {
             fputs("{\"outputs\":[],\"inputs\":[],\"windows\":[]}\n", stdout);
         return 0;
     }
+    // Use an isolated trusted HOME for the clipboard backend double. /tmp
+    // is intentionally rejected by the production executable trust policy.
+    QTemporaryDir clipboardHome(QDir::homePath() + QStringLiteral("/.hyprcapture-test-XXXXXX"));
+    if (!clipboardHome.isValid()) return 1;
+    const QString bin = clipboardHome.filePath(QStringLiteral(".nix-profile/bin"));
+    if (!QDir().mkpath(bin)) return 1;
+    const QString clipboardPath = clipboardHome.filePath(QStringLiteral("copied.png"));
+    QFile copyStub(bin + QStringLiteral("/wl-copy"));
+    if (!copyStub.open(QIODevice::WriteOnly)) return 1;
+    QString quotedPath = clipboardPath;
+    quotedPath.replace(QChar(0x27), QStringLiteral("'\\''"));
+    copyStub.write((QStringLiteral("#!/bin/sh\n/bin/cat > '") + quotedPath + QStringLiteral("'\n")).toUtf8());
+    copyStub.close();
+    if (!copyStub.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) return 1;
+    qputenv("HOME", clipboardHome.path().toUtf8());
+    qputenv("HYPRCAPTURE_TEST_CLIPBOARD", clipboardPath.toUtf8());
     QTemporaryDir environment;
     if (!environment.isValid())
         return 1;

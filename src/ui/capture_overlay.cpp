@@ -2005,6 +2005,7 @@ void CaptureOverlay::buildToolbar() {
     });
 
     auto* cancel = new QPushButton(m_toolbar);
+    cancel->setObjectName("captureCancel");
     cancel->setFlat(true);
     cancel->setFocusPolicy(Qt::NoFocus);
     cancel->setIcon(iconFromSvg(kCancelSvg));
@@ -2519,6 +2520,8 @@ void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
 }
 
 void CaptureOverlay::updateToolbarControlsForMode() {
+    if (auto* cancel = m_toolbar->findChild<QPushButton*>("captureCancel"))
+        cancel->setVisible(!m_editing);
     for (auto* button : m_toolbar->findChildren<QPushButton*>("captureModeButton")) {
         const auto mode = hyprcapture::parseCaptureMode(button->property("captureMode").toString().toStdString());
         const bool visible = m_editing || !m_defaults.fushionMode || mode == hyprcapture::CaptureMode::Fullscreen;
@@ -3413,7 +3416,7 @@ void CaptureOverlay::keyPressEvent(QKeyEvent* event) {
         if (event->key() == Qt::Key_Escape)
             cancelCapture();
         else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
-            exportInPlaceImage(m_defaults.save, m_defaults.clipboard);
+            exportInPlaceImage();
         return;
     }
     if (event->key() == Qt::Key_Escape) {
@@ -4025,12 +4028,15 @@ void CaptureOverlay::relayoutToolbar() {
         m_toolbar->setFixedWidth(maxWidth);
     else
         m_toolbar->setFixedWidth(m_toolbar->sizeHint().width());
-    const int y = m_editing ? 16 : std::max(16, height() - m_toolbar->height() - 40);
-    m_toolbar->move(std::max(16, (width() - m_toolbar->width()) / 2), y);
     if (m_editing && m_editor) {
         m_editor->setGeometry(rect());
         m_editor->setImageDisplayRect(m_editImageRect);
+        m_editor->setCaptureToolbarSize(m_toolbar->size());
+        m_toolbar->move(m_editor->captureToolbarGeometry().topLeft());
         m_toolbar->raise();
+    } else {
+        m_toolbar->move(std::max(16, (width() - m_toolbar->width()) / 2),
+                        std::max(16, height() - m_toolbar->height() - 40));
     }
 }
 
@@ -4417,10 +4423,17 @@ void CaptureOverlay::beginInPlaceEdit() {
     if (!m_editor) {
         m_editor = new AnnotationEditor(this);
         m_editor->setObjectName("inPlaceEditor");
-        connect(m_editor, &AnnotationEditor::copyRequested, this, [this] { exportInPlaceImage(false, true); });
-        connect(m_editor, &AnnotationEditor::saveRequested, this, [this] { exportInPlaceImage(true, m_defaults.clipboard); });
+        connect(m_editor, &AnnotationEditor::confirmRequested, this,
+                [this] { exportInPlaceImage(); });
+        connect(m_editor, &AnnotationEditor::cancelRequested, this, &CaptureOverlay::cancelCapture);
         connect(m_editor, &AnnotationEditor::pinRequested, this, &CaptureOverlay::pinInPlaceImage);
         connect(m_editor, &AnnotationEditor::reselectRequested, this, &CaptureOverlay::leaveInPlaceEdit);
+        connect(m_editor, &AnnotationEditor::toolbarGeometryChanged, this, [this] {
+            if (m_editing && m_toolbar) {
+                m_toolbar->move(m_editor->captureToolbarGeometry().topLeft());
+                m_toolbar->raise();
+            }
+        });
     }
     m_editing = true;
     m_pendingConfirm = false;
@@ -4471,14 +4484,12 @@ void CaptureOverlay::leaveInPlaceEdit() {
     emit editingChanged(false);
 }
 
-void CaptureOverlay::exportInPlaceImage(bool save, bool clipboard) {
+void CaptureOverlay::exportInPlaceImage() {
     if (!m_editing || m_finishing || !m_editor)
         return;
     m_editedOutput = m_editor->resultImage();
     if (m_editedOutput.isNull())
         return;
-    m_defaults.save = save;
-    m_defaults.clipboard = clipboard;
     m_finishing = true;
     m_editor->setEnabled(false);
     m_toolbar->setEnabled(false);
@@ -4726,7 +4737,7 @@ void CaptureOverlay::saveImage(const QImage& image,
                     m_finishing = false;
                     m_editor->setEnabled(true);
                     m_toolbar->setEnabled(true);
-                    m_recordError = tr("Could not save the image. Choose another output directory or copy it.");
+                    m_recordError = tr("Could not save the image. Check the output directory and try again.");
                     updateStatus();
                     return;
                 }
@@ -4773,6 +4784,11 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
 }
 
 void CaptureOverlay::cancelCapture() {
+    m_finishing = true;
+    if (m_editing && m_editor) {
+        m_editor->setEnabled(false);
+        m_toolbar->setEnabled(false);
+    }
     emit finishingStarted();
     fadeOutThen([this] {
         endHymissionCaptureInputSuppression();

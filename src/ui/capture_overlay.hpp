@@ -126,7 +126,7 @@ class CaptureOverlay final : public QMainWindow {
     void beginInPlaceEdit();
     void refreshInPlaceImage();
     void leaveInPlaceEdit();
-    void exportInPlaceImage(bool save, bool clipboard);
+    void exportInPlaceImage();
     void pinInPlaceImage();
     void cancelCapture();
     QString prepareRecordingRequest();
