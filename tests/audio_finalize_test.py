@@ -15,7 +15,12 @@ if not shutil.which('ffmpeg') or not shutil.which('ffprobe'):
     sys.exit(77)
 
 def run(*args, **kwargs):
-    return subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs).stdout
+    try:
+        return subprocess.run(args, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs).stdout
+    except subprocess.CalledProcessError as error:
+        print(error.stdout.decode(errors="replace"), file=sys.stderr)
+        print(error.stderr.decode(errors="replace"), file=sys.stderr)
+        raise
 
 def samples(path):
     values = array.array('f')

@@ -314,6 +314,11 @@ if(BUILD_TESTING)
   )
   target_include_directories(hyprcapture-trusted-path-test PRIVATE src)
   add_test(NAME hyprcapture-trusted-path-test COMMAND hyprcapture-trusted-path-test)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME hyprcapture-trusted-path-namespace-test COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/trusted_path_namespace_test.py $<TARGET_FILE:hyprcapture-trusted-path-test>)
+    set_tests_properties(hyprcapture-trusted-path-namespace-test PROPERTIES TIMEOUT 20 SKIP_RETURN_CODE 77)
+  endif()
 
   add_executable(hyprcapture-window-stream-test
     tests/window_stream_test.cpp

@@ -40,7 +40,11 @@ void setMode(const std::filesystem::path& path, mode_t mode) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    // Used by the user-namespace regression to check remapped file owners.
+    if (argc == 4 && std::string(argv[1]) == "--probe")
+        return hyprcapture::security::trustedExecutablePath(argv[2], argv[3]) ? 0 : 1;
+
     TempTree tree;
     require(!tree.root.empty(), "temporary tree is created");
 
