@@ -10,6 +10,8 @@
 #include <QListWidget>
 #include <QLineEdit>
 #include <QTextDocument>
+#include <QTextBlock>
+#include <QTextLayout>
 #include <QAbstractTextDocumentLayout>
 #include <QHideEvent>
 #include <QLinearGradient>
@@ -297,6 +299,22 @@ void drawAnnotation(QPainter& painter, const QImage& source, const Annotation& a
 class AnnotationTextInput final : public QPlainTextEdit {
   public:
     using QPlainTextEdit::QPlainTextEdit;
+    bool textAt(const QPointF& point) const {
+        for (auto block = firstVisibleBlock(); block.isValid(); block = block.next()) {
+            const QPointF origin = blockBoundingGeometry(block).translated(contentOffset()).topLeft();
+            if (origin.y() > viewport()->height()) break;
+            const auto* layout = block.layout();
+            if (!layout) continue;
+            const QPointF local = point - origin;
+            for (int i = 0; i < layout->lineCount(); ++i) {
+                const auto line = layout->lineAt(i);
+                if (!line.naturalTextRect().contains(local)) continue;
+                const int character = line.xToCursor(local.x(), QTextLine::CursorOnCharacter);
+                return character < block.text().size() && !block.text().at(character).isSpace();
+            }
+        }
+        return false;
+    }
     std::function<void(bool)> finished;
   protected:
     bool event(QEvent* event) override {
@@ -320,10 +338,10 @@ class TextBoxFrame final : public QFrame {
     using QFrame::QFrame;
     std::function<void(bool)> finished;
     std::function<void()> geometryChanged;
-    void setDragHandle(QWidget* handle) {
-        m_handle = handle;
-        handle->setCursor(Qt::SizeAllCursor);
-        handle->installEventFilter(this);
+    void setTextInput(AnnotationTextInput* input) {
+        m_input = input;
+        input->viewport()->setMouseTracking(true);
+        input->viewport()->installEventFilter(this);
     }
   protected:
     void moveEvent(QMoveEvent* event) override { QFrame::moveEvent(event); if (geometryChanged) geometryChanged(); }
@@ -338,17 +356,24 @@ class TextBoxFrame final : public QFrame {
                 event->accept(); return true;
             }
         }
-        if (watched != m_handle) return QFrame::eventFilter(watched, event);
+        if (!m_input || watched != m_input->viewport()) return QFrame::eventFilter(watched, event);
         if (event->type() == QEvent::MouseButtonPress) {
             auto* mouse = static_cast<QMouseEvent*>(event);
-            if (mouse->button() == Qt::LeftButton) { begin(mouse, 0); return true; }
+            if (mouse->button() == Qt::LeftButton && !m_input->textAt(mouse->position())) {
+                m_input->setFocus(Qt::MouseFocusReason);
+                begin(mouse, 0); return true;
+            }
         }
-        if (event->type() == QEvent::MouseMove && m_active) { change(static_cast<QMouseEvent*>(event)); return true; }
+        if (event->type() == QEvent::MouseMove) {
+            auto* mouse = static_cast<QMouseEvent*>(event);
+            if (m_active) { change(mouse); return true; }
+            if (!mouse->buttons()) m_input->viewport()->setCursor(m_input->textAt(mouse->position()) ? Qt::IBeamCursor : Qt::SizeAllCursor);
+        }
         if (event->type() == QEvent::MouseButtonRelease && m_active) { m_active = false; return true; }
         return false;
     }
     void mousePressEvent(QMouseEvent* event) override {
-        if (event->button() == Qt::LeftButton && edgesAt(event->position())) begin(event, edgesAt(event->position()));
+        if (event->button() == Qt::LeftButton) begin(event, edgesAt(event->position()));
         else QFrame::mousePressEvent(event);
     }
     void mouseMoveEvent(QMouseEvent* event) override {
@@ -356,7 +381,7 @@ class TextBoxFrame final : public QFrame {
         const int edges = edgesAt(event->position());
         setCursor(edges == 5 || edges == 10 ? Qt::SizeFDiagCursor :
                   edges == 6 || edges == 9 ? Qt::SizeBDiagCursor :
-                  edges & 3 ? Qt::SizeHorCursor : edges ? Qt::SizeVerCursor : Qt::ArrowCursor);
+                  edges & 3 ? Qt::SizeHorCursor : edges ? Qt::SizeVerCursor : Qt::SizeAllCursor);
     }
     void mouseReleaseEvent(QMouseEvent* event) override {
         if (m_active) { change(event); m_active = false; event->accept(); }
@@ -368,13 +393,19 @@ class TextBoxFrame final : public QFrame {
         painter.setRenderHint(QPainter::Antialiasing);
         painter.setPen(QPen(QColor("#69bfff"), 1));
         painter.setBrush(Qt::white);
-        for (QPointF point : {QPointF(3, 3), QPointF(width()-4, 3), QPointF(3, height()-4), QPointF(width()-4, height()-4)})
-            painter.drawRoundedRect(QRectF(point - QPointF(2, 2), QSizeF(4, 4)), 1, 1);
+        painter.setPen(QPen(QColor("#69bfff"), 3, Qt::SolidLine, Qt::RoundCap));
+        const qreal cx = (width()-1)/2.0, cy = (height()-1)/2.0;
+        painter.drawLine(QPointF(cx-18, 3), QPointF(cx+18, 3));
+        painter.drawLine(QPointF(cx-18, height()-4), QPointF(cx+18, height()-4));
+        painter.drawLine(QPointF(3, cy-18), QPointF(3, cy+18));
+        painter.drawLine(QPointF(width()-4, cy-18), QPointF(width()-4, cy+18));
     }
   private:
     int edgesAt(QPointF p) const {
-        return (p.x() <= 6 ? 1 : p.x() >= width()-7 ? 2 : 0) |
-               (p.y() <= 6 ? 4 : p.y() >= height()-7 ? 8 : 0);
+        const bool middleX = std::abs(p.x()-(width()-1)/2.0) <= 20;
+        const bool middleY = std::abs(p.y()-(height()-1)/2.0) <= 20;
+        return (middleY ? (p.x() <= 6 ? 1 : p.x() >= width()-7 ? 2 : 0) : 0) |
+               (middleX ? (p.y() <= 6 ? 4 : p.y() >= height()-7 ? 8 : 0) : 0);
     }
     void begin(QMouseEvent* event, int edges) {
         m_active = true; m_edges = edges; m_start = geometry(); m_pointer = event->globalPosition(); event->accept();
@@ -395,7 +426,7 @@ class TextBoxFrame final : public QFrame {
         }
         setGeometry(target); event->accept();
     }
-    QWidget* m_handle = nullptr;
+    AnnotationTextInput* m_input = nullptr;
     bool m_active = false;
     int m_edges = 0;
     QRect m_start;
@@ -1653,31 +1684,45 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         const int fieldHeight = std::max({fontButton->sizeHint().height(), size->sizeHint().height(), color->sizeHint().height(), 28});
         for (QWidget* field : {static_cast<QWidget*>(fontButton), static_cast<QWidget*>(size), static_cast<QWidget*>(color)})
             field->setFixedHeight(fieldHeight);
-        styleRow->addWidget(fontButton, 1); styleRow->addWidget(size); styleRow->addWidget(color);
+        styleRow->addWidget(fontButton, 1);
+        auto* sizeGroup = new QHBoxLayout;
+        sizeGroup->setSpacing(2);
+        sizeGroup->addWidget(size);
+        auto* sizeSteps = new QVBoxLayout;
+        sizeSteps->setSpacing(0);
+        for (int direction : {1, -1}) {
+            auto* step = new QToolButton(controls);
+            step->setObjectName(direction > 0 ? "annotationTextSizeIncrease" : "annotationTextSizeDecrease");
+            step->setText(direction > 0 ? QStringLiteral("+") : QStringLiteral("−"));
+            step->setFixedSize(22, direction > 0 ? fieldHeight/2 : fieldHeight-fieldHeight/2);
+            step->setAutoRepeat(true);
+            step->setAccessibleName(tr("Font size") + (direction > 0 ? " +" : " −"));
+            step->setStyleSheet(QString("QToolButton { color:%1; background:%2; border:1px solid %3; padding:0; }")
+                .arg(dark ? "#e9f0f6" : "#26313d", dark ? "#222b36" : "#ffffff", dark ? "#536171" : "#cbd5e1"));
+            sizeSteps->addWidget(step);
+            connect(step, &QToolButton::clicked, size, [size, direction] { size->stepBy(direction); });
+        }
+        sizeGroup->addLayout(sizeSteps);
+        styleRow->addLayout(sizeGroup);
         rows->addLayout(styleRow);
         auto* colors = new QHBoxLayout;
         colors->setSpacing(5);
-        auto* handle = new QLabel(QStringLiteral("⠿"), controls);
-        handle->setObjectName("annotationTextDragHandle");
-        handle->setAlignment(Qt::AlignCenter);
-        handle->setFixedSize(22, 26);
-        handle->setToolTip(tr("Drag to move · Resize from edges"));
-        handle->setAccessibleName(tr("Drag to move · Resize from edges"));
-        handle->setStyleSheet(QString("color:%1;").arg(dark ? "#e9f0f6" : "#26313d"));
-        panel->setDragHandle(handle);
-        colors->addWidget(handle);
         auto* paletteButton = new QToolButton(controls);
         paletteButton->setObjectName("annotationTextPaletteButton");
         paletteButton->setIcon(actionIcon("color", dark, existing.color));
         paletteButton->setFixedSize(28, 26);
         paletteButton->setAccessibleName(tr("Color")); paletteButton->setToolTip(tr("Color"));
         colors->addWidget(paletteButton);
+        colors->addWidget(color);
         auto* textPalette = new QFrame(this);
         textPalette->setObjectName("annotationTextPalette");
         textPalette->setAttribute(Qt::WA_StyledBackground);
         textPalette->setStyleSheet(QString("QFrame#annotationTextPalette { background:%1; border:1px solid #79889b; border-radius:6px; }").arg(dark ? "#222b36" : "#ffffff"));
-        auto* paletteLayout = new QHBoxLayout(textPalette);
-        paletteLayout->setContentsMargins(10, 10, 10, 10); paletteLayout->setSpacing(10);
+        auto* paletteRows = new QVBoxLayout(textPalette);
+        paletteRows->setContentsMargins(10, 10, 10, 10); paletteRows->setSpacing(8);
+        auto* paletteLayout = new QHBoxLayout;
+        paletteRows->addLayout(paletteLayout);
+        paletteLayout->setContentsMargins(0, 0, 0, 0); paletteLayout->setSpacing(10);
         auto* textSaturation = new ColorField(false, textPalette);
         textSaturation->setObjectName("annotationTextSaturationValue");
         auto* textHue = new ColorField(true, textPalette);
@@ -1692,17 +1737,21 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
             paletteButton->setIcon(actionIcon("color", dark, selected));
         });
         textPalette->hide();
+        auto* presetColors = new QHBoxLayout;
+        presetColors->setSpacing(5);
         for (const QString hex : {"#ff4b55", "#ffd84d", "#5bd686", "#4d94ff", "#a77bff", "#ffffff", "#202020"}) {
-            auto* swatch = new QToolButton(controls);
+            auto* swatch = new QToolButton(textPalette);
             swatch->setFixedSize(17, 17); swatch->setToolTip(hex); swatch->setAccessibleName(hex);
             swatch->setStyleSheet(QString("background:%1; border:1px solid #79889b; border-radius:4px").arg(hex));
-            colors->addWidget(swatch);
+            presetColors->addWidget(swatch);
             connect(swatch, &QToolButton::clicked, color, [color, hex] { color->setText(hex); });
         }
         colors->addStretch(); rows->addLayout(colors);
+        presetColors->addStretch(); paletteRows->addLayout(presetColors);
 
         auto* input = new AnnotationTextInput(panel);
         input->setObjectName("annotationTextInput");
+        panel->setTextInput(input);
         input->setAccessibleName(tr("Text annotation"));
         input->setFrameShape(QFrame::NoFrame);
         input->document()->setDocumentMargin(0);
