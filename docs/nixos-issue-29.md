@@ -45,8 +45,37 @@ subcases. The original trust implementation fails its acceptance regression.
 Both real FFmpeg integration tests also pass with a read-only `/usr` bind at a
 temporary `/nix/store` path inside a user namespace; no host store is changed.
 
-This is **not a NixOS acceptance result**. No full Nix derivation or reporter's
-flake configuration was built here. The audio log did not include the helper's
-error, so the namespace reproduction establishes a matching failure mechanism,
-not a recovered diagnostic from that machine. The tests now print captured
-stdout/stderr on command failure so any remaining Nix-specific cause is visible.
+The reporter's own flake configuration and multi-user setup remain unverified.
+The audio log did not include the helper's error, so the namespace reproduction
+establishes a matching failure mechanism, not a recovered diagnostic from that
+machine. The tests now print captured stdout/stderr on command failure so any
+remaining Nix-specific cause is visible.
+
+## Full Nix derivation build (2026-10-04)
+
+Commit `07da87f` successfully completed a sandboxed Nix build on the Arch host
+using Nix 2.35.2 and the repository's unchanged `flake.lock`. The system store
+was uninitialized, so a separate single-user chroot store was used inside the
+worktree; no system installation or plugin loading was performed.
+
+```sh
+nix --extra-experimental-features 'nix-command flakes' build .#hyprcapture \
+  --store "local?root=$PWD/build-issue29/nix-root" \
+  --option build-users-group '' --option sandbox true \
+  --no-link --no-write-lock-file --print-out-paths --cores 4 --max-jobs 2 -L
+```
+
+The locked toolchain used GCC 16.1.0, Hyprland
+`0.56.0+date=2026-07-25_453d96e`, and Python 3.14.6. All dependencies, including
+TensorFlow Lite and Hyprland, built successfully. HyprCapture completed build,
+check, install, and fixup phases with exit status 0.
+
+CTest: **24 passed, 1 skipped, 0 failed**. `audio-finalize`,
+`supervised-process`, `recording-timestamps`, and `window-stream` all passed.
+The optional Bubblewrap namespace test was skipped in this derivation; it
+passed separately on the host as described above. This verifies the locked Nix
+package, not the reporter's different lock/toolchain or a live NixOS desktop.
+
+Output: `/nix/store/yxsa18qcq7kpnmrg422dx7i4dwpzswpm-hyprcapture-0.2.8`
+(physically under `build-issue29/nix-root`). Full local log:
+`build-issue29/nix-build.log`. The store is retained for repeat builds.
