@@ -1,4 +1,5 @@
 #include "ui/annotation_editor.hpp"
+#include "ui/material_icon.hpp"
 
 #include <QApplication>
 #include <QAbstractButton>
@@ -103,6 +104,24 @@ void defaults() {
 class AnnotationEditorTest final : public QObject {
     Q_OBJECT
   private slots:
+    void materialIconsRenderAtRequestedDeviceResolution() {
+        const auto icon = hyprcapture::ui::materialIcon("edit", QColor("#26313d"));
+        QVERIFY(!icon.isNull());
+        for (qreal scale : {1.0, 1.25, 1.5, 2.0, 3.0}) {
+            const QPixmap pixmap = icon.pixmap(QSize(24, 24), scale);
+            QCOMPARE(pixmap.size(), QSize(qRound(24 * scale), qRound(24 * scale)));
+            QCOMPARE(pixmap.devicePixelRatio(), scale);
+            const QImage rendered = pixmap.toImage();
+            int covered = 0;
+            for (int y = 0; y < rendered.height(); ++y)
+                for (int x = 0; x < rendered.width(); ++x)
+                    covered += rendered.pixelColor(x, y).alpha() > 0;
+            QVERIFY(covered > 25 * scale * scale);
+        }
+        const auto highResolution = icon.pixmap(QSize(24, 24), 2.0).toImage();
+        const auto upscaledBitmap = icon.pixmap(QSize(24, 24), 1.0).toImage().scaled(48, 48, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        QVERIFY(highResolution != upscaledBitmap);
+    }
     void init() { defaults(); }
 
     void transparentExportAndNativeCoordinates() {

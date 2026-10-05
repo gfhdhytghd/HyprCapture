@@ -1,4 +1,5 @@
 #include "ui/annotation_editor.hpp"
+#include "ui/material_icon.hpp"
 
 #include <QApplication>
 #include <QButtonGroup>
@@ -702,209 +703,44 @@ class AnnotationCanvas final : public QWidget {
     void notify() { update(); if (changed) changed(); }
 };
 
-// Native Qt rendering of the compact shortcut-and-glyph strip. The controls are
-// intentionally independent of any external QML or upstream implementation.
-QIcon toolIcon(Tool tool, Variant variant, bool dark, const QColor& accent) {
-    QPixmap pixmap(24, 24);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
+// Official Material Symbols Rounded, rendered directly from SVG at device DPI.
+QIcon toolIcon(Tool tool, Variant variant, bool dark, const QColor&) {
     const QColor ink(dark ? "#e9f0f6" : "#26313d");
-    const QColor paper(dark ? "#222b36" : "#ffffff");
-    painter.setPen(QPen(ink, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(Qt::NoBrush);
+    const bool filled = variant == Variant::Filled || variant == Variant::RoundedFilled;
+    const char* name = "arrow_selector_tool";
+    qreal rotation = 0;
     switch (tool) {
-        case Tool::Select: {
-            QPolygonF cursor;
-            cursor << QPointF(4, 3) << QPointF(4, 21) << QPointF(9, 16) << QPointF(12, 21)
-                   << QPointF(15, 19) << QPointF(12, 14) << QPointF(19, 14);
-            painter.setBrush(paper);
-            painter.drawPolygon(cursor);
+        case Tool::Select: break;
+        case Tool::Rectangle:
+            name = filled ? "rectangle_fill1" : (variant == Variant::Rounded ? "rounded_corner" : "crop_square");
             break;
-        }
-        case Tool::Rectangle: {
-            if (variant == Variant::Filled || variant == Variant::RoundedFilled)
-                painter.setBrush(accent);
-            const bool rounded = variant == Variant::Rounded || variant == Variant::RoundedFilled;
-            painter.drawRoundedRect(QRectF(4, 4, 16, 16), rounded ? 4 : 0, rounded ? 4 : 0);
+        case Tool::Ellipse: name = filled ? "circle_fill1" : "circle"; break;
+        case Tool::Arrow:
+            name = variant == Variant::Curved ? "trending_up" :
+                   variant == Variant::DoubleHeaded ? "open_in_full" :
+                   variant == Variant::DoubleCurved ? "swap_calls" : "north_east";
             break;
-        }
-        case Tool::Ellipse:
-            if (variant == Variant::Filled)
-                painter.setBrush(accent);
-            painter.drawEllipse(QRectF(4, 4, 16, 16));
-            break;
-        case Tool::Arrow: {
-            const bool curved = variant == Variant::Curved || variant == Variant::DoubleCurved;
-            QPainterPath path;
-            path.moveTo(4, 20);
-            if (curved)
-                path.quadTo(QPointF(3, 3), QPointF(20, 5));
-            else
-                path.lineTo(20, 4);
-            painter.drawPath(path);
-            const auto head = [&](QPointF tip, QPointF direction) {
-                const QPointF unit = direction / std::hypot(direction.x(), direction.y());
-                const QPointF normal(-unit.y(), unit.x());
-                QPolygonF arrow;
-                arrow << tip - unit * 7 + normal * 4 << tip << tip - unit * 7 - normal * 4;
-                painter.drawPolyline(arrow);
-            };
-            head(curved ? QPointF(20, 5) : QPointF(20, 4), curved ? QPointF(17, 2) : QPointF(16, -16));
-            if (variant == Variant::DoubleHeaded || variant == Variant::DoubleCurved)
-                head(QPointF(4, 20), curved ? QPointF(1, 17) : QPointF(-16, 16));
-            break;
-        }
-        case Tool::Line:
-            painter.drawLine(QPointF(4, 20), QPointF(20, 4));
-            painter.setBrush(ink);
-            painter.drawEllipse(QPointF(4, 20), 1, 1);
-            painter.drawEllipse(QPointF(20, 4), 1, 1);
-            break;
-        case Tool::Pen:
-        case Tool::Highlighter: {
-            if (tool == Tool::Highlighter) {
-                QColor translucent = accent;
-                translucent.setAlpha(100);
-                painter.fillRect(QRectF(3, 17, 18, 5), translucent);
-            }
-            QPolygonF pen;
-            pen << QPointF(4, 20) << QPointF(6, 14) << QPointF(16, 4) << QPointF(20, 8) << QPointF(10, 18);
-            painter.setBrush(tool == Tool::Highlighter ? accent : paper);
-            painter.drawPolygon(pen);
-            painter.drawLine(QPointF(6, 14), QPointF(10, 18));
-            painter.drawLine(QPointF(14, 6), QPointF(18, 10));
-            break;
-        }
-        case Tool::Text: {
-            QFont font = QApplication::font();
-            font.setPixelSize(21);
-            font.setBold(true);
-            painter.setFont(font);
-            painter.drawText(pixmap.rect(), Qt::AlignCenter, "T");
-            break;
-        }
-        case Tool::Number: {
-            painter.setBrush(paper);
-            painter.drawEllipse(QRectF(3, 3, 18, 18));
-            QFont font = QApplication::font();
-            font.setPixelSize(15);
-            font.setBold(true);
-            painter.setFont(font);
-            painter.drawText(pixmap.rect(), Qt::AlignCenter, "1");
-            break;
-        }
-        case Tool::Mosaic:
-            for (int y = 4; y <= 16; y += 6)
-                for (int x = 4; x <= 16; x += 6)
-                    painter.fillRect(QRect(x, y, 5, 5), ((x + y) % 12 == 8) ? ink : QColor(dark ? "#718297" : "#aab8c6"));
-            break;
-        case Tool::Spotlight:
-            painter.setBrush(QColor("#aebdca"));
-            painter.drawRect(QRectF(3, 3, 18, 18));
-            painter.setBrush(paper);
-            painter.drawEllipse(QRectF(6, 6, 12, 12));
-            break;
+        case Tool::Line: name = "horizontal_rule"; rotation = -45; break;
+        case Tool::Pen: name = "edit"; break;
+        case Tool::Highlighter: name = "ink_highlighter"; break;
+        case Tool::Text: name = "text_fields"; break;
+        case Tool::Number: name = "counter_1"; break;
+        case Tool::Mosaic: name = "grid_view"; break;
+        case Tool::Spotlight: name = "center_focus_strong"; break;
     }
-    return QIcon(pixmap);
+    return hyprcapture::ui::materialIcon(name, ink, rotation);
 }
 
-QIcon actionIcon(const QString& action, bool dark, const QColor& accent) {
-    QPixmap pixmap(24, 24);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing);
+QIcon actionIcon(const QString& action, bool dark, const QColor&) {
     const QColor ink(dark ? "#e9f0f6" : "#26313d");
-    const QColor paper(dark ? "#222b36" : "#ffffff");
-    painter.setPen(QPen(ink, 1.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    painter.setBrush(Qt::NoBrush);
-    if (action == "color") {
-        painter.setBrush(paper);
-        painter.drawEllipse(QRectF(3, 3, 18, 18));
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(paper);
-        painter.drawEllipse(QRectF(14, 13, 8, 9));
-        for (const auto& dot : std::vector<std::pair<QPointF, QColor>>{{{8, 8}, accent}, {{14, 7}, QColor("#4d94ff")}, {{17, 11}, QColor("#ffd84d")}, {{7, 15}, QColor("#5bd686")}}) {
-            painter.setBrush(dot.second);
-            painter.drawEllipse(dot.first, 2, 2);
-        }
-    } else if (action == "undo" || action == "redo") {
-        if (action == "redo") {
-            painter.translate(24, 0);
-            painter.scale(-1, 1);
-        }
-        QPainterPath path;
-        path.moveTo(9, 5);
-        path.lineTo(4, 10);
-        path.lineTo(9, 15);
-        path.moveTo(4, 10);
-        path.lineTo(12, 10);
-        path.quadTo(20, 10, 20, 20);
-        painter.drawPath(path);
-    } else if (action == "pin") {
-        QPolygonF pin;
-        pin << QPointF(8, 4) << QPointF(18, 4) << QPointF(16, 7) << QPointF(16, 11)
-            << QPointF(19, 14) << QPointF(7, 14) << QPointF(10, 11) << QPointF(10, 7);
-        painter.setBrush(paper);
-        painter.drawPolygon(pin);
-        painter.drawLine(QPointF(13, 14), QPointF(13, 22));
-    } else if (action == "copy") {
-        painter.drawRoundedRect(QRectF(8, 3, 12, 14), 2, 2);
-        painter.setBrush(paper);
-        painter.drawRoundedRect(QRectF(3, 8, 12, 14), 2, 2);
-    } else if (action == "save") {
-        painter.drawLine(QPointF(12, 3), QPointF(12, 15));
-        painter.drawLine(QPointF(7, 10), QPointF(12, 15));
-        painter.drawLine(QPointF(12, 15), QPointF(17, 10));
-        QPainterPath tray;
-        tray.moveTo(4, 16); tray.lineTo(4, 21); tray.lineTo(20, 21); tray.lineTo(20, 16);
-        painter.drawPath(tray);
-    } else if (action == "confirm") {
-        QPolygonF check;
-        check << QPointF(4, 12) << QPointF(10, 18) << QPointF(21, 5);
-        painter.setPen(QPen(ink, 2.3, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-        painter.drawPolyline(check);
-    } else if (action == "cancel") {
-        painter.setPen(QPen(ink, 2.1, Qt::SolidLine, Qt::RoundCap));
-        painter.drawLine(QPointF(6, 6), QPointF(18, 18));
-        painter.drawLine(QPointF(6, 18), QPointF(18, 6));
-    } else if (action == "light") {
-        painter.drawEllipse(QRectF(8, 8, 8, 8));
-        for (int ray = 0; ray < 8; ++ray) {
-            const qreal angle = ray * std::acos(-1.0) / 4.0;
-            const QPointF unit(std::cos(angle), std::sin(angle));
-            painter.drawLine(QPointF(12, 12) + unit * 7.0, QPointF(12, 12) + unit * 10.0);
-        }
-    } else if (action == "dark") {
-        QPainterPath moon;
-        moon.addEllipse(QRectF(3, 3, 18, 18));
-        QPainterPath bite;
-        bite.addEllipse(QRectF(10, 0, 16, 17));
-        painter.setBrush(ink);
-        painter.drawPath(moon.subtracted(bite));
-    } else if (action == "fit") {
-        for (const auto& point : std::vector<QPointF>{{4, 4}, {20, 4}, {4, 20}, {20, 20}}) {
-            const qreal signX = point.x() < 12 ? 1 : -1;
-            const qreal signY = point.y() < 12 ? 1 : -1;
-            painter.drawLine(point, point + QPointF(signX * 6, 0));
-            painter.drawLine(point, point + QPointF(0, signY * 6));
-        }
-    } else if (action == "clear") {
-        painter.drawLine(QPointF(5, 6), QPointF(19, 6));
-        painter.drawLine(QPointF(9, 3), QPointF(15, 3));
-        painter.drawRoundedRect(QRectF(7, 6, 10, 15), 1, 1);
-        painter.drawLine(QPointF(10, 10), QPointF(10, 17));
-        painter.drawLine(QPointF(14, 10), QPointF(14, 17));
-    } else if (action == "reselect") {
-        painter.setPen(QPen(ink, 1.8, Qt::DashLine));
-        painter.drawRect(QRectF(4, 4, 16, 16));
-    } else {
-        painter.setBrush(ink);
-        painter.setPen(Qt::NoPen);
-        for (int x : {5, 12, 19})
-            painter.drawEllipse(QPointF(x, 12), 1.7, 1.7);
-    }
-    return QIcon(pixmap);
+    static const std::map<QString, std::string_view> names{
+        {"color", "palette"}, {"undo", "undo"}, {"redo", "redo"},
+        {"pin", "push_pin"}, {"confirm", "check"}, {"cancel", "close"},
+        {"light", "light_mode"}, {"dark", "dark_mode"}, {"fit", "fit_screen"},
+        {"clear", "delete"}, {"reselect", "restart_alt"}, {"more", "more_horiz"}};
+    const auto found = names.find(action);
+    return hyprcapture::ui::materialIcon(found == names.end() ? "more_horiz" : found->second,
+                                        ink);
 }
 
 void paintStripButton(QWidget* widget, const QString& hint, const QIcon& icon, bool dark, bool checked, bool hover, bool focus) {
@@ -931,6 +767,12 @@ void paintStripButton(QWidget* widget, const QString& hint, const QIcon& icon, b
         painter.drawText(QRect(left, (widget->height() - 20) / 2, labelWidth, 20), Qt::AlignCenter, hint + ":");
     }
     icon.paint(&painter, QRect(left + labelWidth + (labelWidth ? 2 : 0), (widget->height() - 22) / 2, 22, 22), Qt::AlignCenter, QIcon::Normal);
+    if (widget->property("annotationAccent").isValid()) {
+        const QRectF swatch(left + labelWidth + (labelWidth ? 2 : 0) + 2, widget->height() - 5, 18, 3);
+        painter.setPen(QPen(QColor(dark ? "#718297" : "#aab8c6"), 0.5));
+        painter.setBrush(widget->property("annotationAccent").value<QColor>());
+        painter.drawRoundedRect(swatch, 1.5, 1.5);
+    }
 }
 
 class StripToolButton final : public QToolButton {
@@ -1193,6 +1035,7 @@ struct AnnotationEditor::Impl {
     }
     void updateColor() {
         color->dark = dark;
+        color->setProperty("annotationAccent", canvas->color);
         color->setIcon(actionIcon("color", dark, canvas->color));
         customColor->dark = dark;
         customColor->setIcon(actionIcon("color", dark, canvas->color));

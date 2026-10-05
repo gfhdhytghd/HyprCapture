@@ -1,3 +1,4 @@
+#include "ui/material_icon.hpp"
 #include <QScrollArea>
 #include <QSlider>
 #include <QCheckBox>
@@ -159,13 +160,6 @@ struct TransparentAutoChoice {
     QString warning;
 };
 
-const char* kFullscreenSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M128 266.666667v490.666666a53.393333 53.393333 0 0 0 53.333333 53.333334h661.333334a53.393333 53.393333 0 0 0 53.333333-53.333334V266.666667a53.393333 53.393333 0 0 0-53.333333-53.333334H181.333333a53.393333 53.393333 0 0 0-53.333333 53.333334z m725.333333 0v490.666666a10.666667 10.666667 0 0 1-10.666666 10.666667H181.333333a10.666667 10.666667 0 0 1-10.666666-10.666667V266.666667a10.666667 10.666667 0 0 1 10.666666-10.666667h661.333334a10.666667 10.666667 0 0 1 10.666666 10.666667z m-597.333333 608a21.333333 21.333333 0 0 1-21.333333 21.333333H96a53.393333 53.393333 0 0 1-53.333333-53.333333v-138.666667a21.333333 21.333333 0 0 1 42.666666 0v138.666667a10.666667 10.666667 0 0 0 10.666667 10.666666h138.666667a21.333333 21.333333 0 0 1 21.333333 21.333334zM42.666667 320V181.333333a53.393333 53.393333 0 0 1 53.333333-53.333333h138.666667a21.333333 21.333333 0 0 1 0 42.666667H96a10.666667 10.666667 0 0 0-10.666667 10.666666v138.666667a21.333333 21.333333 0 0 1-42.666666 0z m938.666666-138.666667v138.666667a21.333333 21.333333 0 0 1-42.666666 0V181.333333a10.666667 10.666667 0 0 0-10.666667-10.666666h-138.666667a21.333333 21.333333 0 0 1 0-42.666667h138.666667a53.393333 53.393333 0 0 1 53.333333 53.333333z m0 522.666667v138.666667a53.393333 53.393333 0 0 1-53.333333 53.333333h-138.666667a21.333333 21.333333 0 0 1 0-42.666667h138.666667a10.666667 10.666667 0 0 0 10.666667-10.666666v-138.666667a21.333333 21.333333 0 0 1 42.666666 0z" fill="#000000"/></svg>)";
-const char* kWindowSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M808.125883 243.195881 134.874315 243.195881c-30.608112 0-55.513338 24.905226-55.513338 55.520501l0 505.178641c0 30.615275 24.905226 55.520501 55.513338 55.520501L808.125883 859.415524c30.607088 0 55.512315-24.905226 55.512315-55.520501L863.638197 298.716382C863.638197 268.101107 838.733994 243.195881 808.125883 243.195881zM835.629283 803.895023c0 15.167444-12.338003 27.510564-27.503401 27.510564L134.874315 831.405587c-15.167444 0-27.504424-12.343119-27.504424-27.510564L107.369891 383.246591l728.259392 0L835.629283 803.895023zM835.629283 355.236654 107.370915 355.236654l0-56.519248c0-15.173584 12.33698-27.510564 27.504424-27.510564L808.125883 271.206842c15.165398 0 27.503401 12.33698 27.503401 27.510564L835.629283 355.236654zM920.166655 131.156132 274.924002 131.156132c-30.608112 0-55.513338 24.905226-55.513338 55.514361l0 28.515451c0 7.734148 6.263657 14.004969 14.005992 14.004969 7.740288 0 14.005992-6.27082 14.005992-14.004969l0-28.515451c0-15.167444 12.33698-27.504424 27.503401-27.504424L920.167678 159.166069c15.165398 0 27.503401 12.33698 27.503401 27.504424l0 519.188726c0 15.167444-12.338003 27.511587-27.503401 27.511587l-28.516474 0c-7.739265 0-14.004969 6.27082-14.004969 14.004969 0 7.736195 6.263657 14.007015 14.004969 14.007015l28.516474 0c30.607088 0 55.512315-24.905226 55.512315-55.521524L975.679993 186.670493C975.67897 156.061358 950.773743 131.156132 920.166655 131.156132zM219.410664 299.216779l-56.019875 0c-7.740288 0-14.005992 6.27082-14.005992 13.998829 0 7.740288 6.263657 14.011108 14.005992 14.011108l56.019875 0c7.740288 0 14.005992-6.27082 14.005992-14.011108C233.415632 305.487599 227.151975 299.216779 219.410664 299.216779zM331.450413 299.216779l-56.019875 0c-7.741311 0-14.005992 6.27082-14.005992 13.998829 0 7.740288 6.262634 14.011108 14.005992 14.011108l56.019875 0c7.739265 0 14.004969-6.27082 14.004969-14.011108C345.455381 305.487599 339.191724 299.216779 331.450413 299.216779zM443.490162 299.216779l-56.018851 0c-7.741311 0-14.007015 6.27082-14.007015 13.998829 0 7.740288 6.263657 14.011108 14.007015 14.011108l56.018851 0c7.740288 0 14.005992-6.27082 14.005992-14.011108C457.49513 305.487599 451.231473 299.216779 443.490162 299.216779z" fill="#000000"/></svg>)";
-const char* kRegionSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M960 256V64H768v64H256V64H64v192h64v512H64v192h192v-64h512v64h192V768h-64V256z m-128 512h-64v64H256v-64h-64V256h64v-64h512v64h64z" fill="#000000"/></svg>)";
-const char* kCancelSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M883.8304 41.01546667L512.00213333 412.84693333 140.1696 41.01546667c-27.38026667-27.3792-71.77386667-27.3792-99.1552 0-27.37813333 27.3792-27.37813333 71.77066667 0 99.1552l371.8336 371.83146666L41.0144 883.82933333c-27.37813333 27.38026667-27.37813333 71.776 0 99.15413334 27.38133333 27.38133333 71.776 27.38133333 99.1552 0L512.00213333 611.15733333l371.82933334 371.82613334c27.37813333 27.38133333 71.77386667 27.38133333 99.15306666 0 27.3792-27.37813333 27.3792-71.77386667 0-99.15413334L611.15733333 512.00213333 982.98453333 140.17066667c27.3792-27.38133333 27.3792-71.776 0-99.1552-27.3792-27.38133333-71.7696-27.38133333-99.15413333 0z m0 0" fill="#333333"/></svg>)";
-const char* kConfirmSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M398.5 741.1 190.9 533.5c-22.2-22.2-22.2-58.2 0-80.4s58.2-22.2 80.4 0l127.2 127.2 354.2-354.2c22.2-22.2 58.2-22.2 80.4 0s22.2 58.2 0 80.4L438.7 701c-11.1 11.1-25.6 16.6-40.2 16.6s-29.1-5.5-40-16.5z" fill="#333333"/></svg>)";
-const char* kRecordSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M507.6 508.2m-229.8 0a229.8 229.8 0 1 0 459.6 0 229.8 229.8 0 1 0-459.6 0Z" fill="#1c1c1c"/><path d="M507.6 952.9c-245.2 0-444.7-199.5-444.7-444.6S262.4 63.6 507.6 63.6s444.7 199.5 444.7 444.7-199.5 444.6-444.7 444.6z m0-837.2C291.2 115.7 115 291.8 115 508.3c0 216.5 176.1 392.6 392.7 392.6s392.7-176.1 392.7-392.6c-0.1-216.5-176.2-392.6-392.8-392.6z" fill="#1c1c1c"/></svg>)";
-const char* kSelectArrowSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M827.733333 411.733333L526.933333 712.533333c-8.533333 8.533333-21.333333 8.533333-29.866666 0L196.266667 411.733333c-17.066667-17.066667-17.066667-42.666667 0-59.733333 17.066667-17.066667 42.666667-17.066667 59.733333 0l256 256 256-256c17.066667-17.066667 42.666667-17.066667 59.733333 0s17.066667 42.666667 0 59.733333z"/></svg>)";
 
 QString qString(const std::string& value) {
     return QString::fromStdString(value);
@@ -784,20 +778,8 @@ double maxScreenDevicePixelRatio() {
     return dpr;
 }
 
-QIcon iconFromSvg(const char* svg, int logicalSize = kModeIconSize, double rotationDegrees = 0.0) {
-    QSvgRenderer renderer{QByteArray(svg)};
-    const double dpr = maxScreenDevicePixelRatio();
-    QPixmap pixmap(QSize(std::max(1, static_cast<int>(std::ceil(logicalSize * dpr))),
-                         std::max(1, static_cast<int>(std::ceil(logicalSize * dpr)))));
-    pixmap.setDevicePixelRatio(dpr);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.translate(logicalSize / 2.0, logicalSize / 2.0);
-    if (rotationDegrees != 0.0)
-        painter.rotate(rotationDegrees);
-    renderer.render(&painter, QRectF(-logicalSize / 2.0, -logicalSize / 2.0, logicalSize, logicalSize));
-    return QIcon(pixmap);
+QIcon toolbarIcon(std::string_view name, double rotationDegrees = 0.0) {
+    return hyprcapture::ui::materialIcon(name, QApplication::palette().color(QPalette::WindowText), rotationDegrees);
 }
 
 QColor followSystemColor() {
@@ -1425,7 +1407,7 @@ void InlineSelect::updateButtonIcon() {
     if (!m_button)
         return;
     const double rotationDegrees = isPopupVisible() ? 180.0 : 0.0;
-    m_button->setIcon(iconFromSvg(kSelectArrowSvg, kSelectArrowIconSize, rotationDegrees));
+    m_button->setIcon(toolbarIcon("keyboard_arrow_down", rotationDegrees));
 }
 
 void InlineSelect::positionPopup() {
@@ -1934,9 +1916,9 @@ void CaptureOverlay::buildToolbar() {
             }
         });
     };
-    addMode("Fullscreen", hyprcapture::CaptureMode::Fullscreen, iconFromSvg(kFullscreenSvg));
-    addMode("Region", hyprcapture::CaptureMode::Region, iconFromSvg(kRegionSvg));
-    addMode("Window", hyprcapture::CaptureMode::Window, iconFromSvg(kWindowSvg));
+    addMode("Fullscreen", hyprcapture::CaptureMode::Fullscreen, toolbarIcon("screenshot_monitor"));
+    addMode("Region", hyprcapture::CaptureMode::Region, toolbarIcon("select_all"));
+    addMode("Window", hyprcapture::CaptureMode::Window, toolbarIcon("select_window"));
 
     m_fullscreenScope = new InlineSelect(this, m_toolbar);
     m_fullscreenScope->setPrefix("Full");
@@ -1972,7 +1954,7 @@ void CaptureOverlay::buildToolbar() {
     m_recordToggle->setObjectName(m_recordActive ? "recordActiveButton" : "recordToggleButton");
     m_recordToggle->setFlat(true);
     m_recordToggle->setFocusPolicy(Qt::NoFocus);
-    m_recordToggle->setIcon(iconFromSvg(kRecordSvg));
+    m_recordToggle->setIcon(toolbarIcon("radio_button_checked"));
     m_recordToggle->setIconSize(QSize(kModeIconSize, kModeIconSize));
     m_recordToggle->setFixedSize(36, 32);
     m_recordToggle->setToolTip(hyprcapture::ui::uiText(m_recordActive ? "Stop recording" : "Record"));
@@ -2008,7 +1990,7 @@ void CaptureOverlay::buildToolbar() {
     cancel->setObjectName("captureCancel");
     cancel->setFlat(true);
     cancel->setFocusPolicy(Qt::NoFocus);
-    cancel->setIcon(iconFromSvg(kCancelSvg));
+    cancel->setIcon(toolbarIcon("close"));
     cancel->setIconSize(QSize(kCancelIconSize, kCancelIconSize));
     cancel->setFixedSize(36, 32);
     cancel->setToolTip(hyprcapture::ui::uiText("Cancel"));
@@ -2019,7 +2001,7 @@ void CaptureOverlay::buildToolbar() {
     m_confirmButton = new QPushButton(m_toolbar);
     m_confirmButton->setFlat(true);
     m_confirmButton->setFocusPolicy(Qt::NoFocus);
-    m_confirmButton->setIcon(iconFromSvg(kConfirmSvg, kConfirmIconSize));
+    m_confirmButton->setIcon(toolbarIcon("check"));
     m_confirmButton->setIconSize(QSize(kConfirmIconSize, kConfirmIconSize));
     m_confirmButton->setFixedSize(36, 32);
     m_confirmButton->setToolTip(hyprcapture::ui::uiText("Capture"));
