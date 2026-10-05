@@ -4550,8 +4550,9 @@ void CaptureOverlay::pinInPlaceImage() {
         if (m_toolbar)
             m_toolbar->setEnabled(true);
         if (success) {
-            m_finishing = true;
-            cancelCapture();
+            // Pin adds a desktop reference; it still completes the same
+            // configured save, clipboard and thumbnail pipeline as Confirm.
+            exportInPlaceImage();
         } else {
             m_recordError = error.isEmpty() ? tr("Could not open the pinned image") : error;
             updateStatus();

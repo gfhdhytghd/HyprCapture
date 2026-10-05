@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
@@ -553,6 +554,67 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(requestWritten);
     }
 
+    void successfulPinUsesNormalOutputFlow_data() {
+        QTest::addColumn<bool>("save");
+        QTest::addColumn<bool>("clipboard");
+        QTest::addColumn<bool>("thumbnail");
+        QTest::newRow("all-outputs") << true << true << true;
+        QTest::newRow("clipboard-and-thumbnail") << false << true << true;
+        QTest::newRow("outputs-disabled") << false << false << false;
+    }
+    void successfulPinUsesNormalOutputFlow() {
+        QFETCH(bool, save); QFETCH(bool, clipboard); QFETCH(bool, thumbnail);
+        QTemporaryDir artifacts, output;
+        QVERIFY(artifacts.isValid() && output.isValid());
+        const QString pinPath = artifacts.filePath("pinned.png");
+        const QString thumbnailPath = artifacts.filePath("thumbnail.png");
+        const QString clipboardPath = qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD");
+        QFile::remove(clipboardPath);
+        qputenv("HYPRCAPTURE_TEST_PIN_SUCCESS", pinPath.toUtf8());
+        qputenv("HYPRCAPTURE_TEST_THUMBNAIL", thumbnailPath.toUtf8());
+        const auto reset = qScopeGuard([] {
+            qunsetenv("HYPRCAPTURE_TEST_PIN_SUCCESS");
+            qunsetenv("HYPRCAPTURE_TEST_THUMBNAIL");
+        });
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.inPlaceEditToolbar = true;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        defaults.save = save; defaults.clipboard = clipboard; defaults.showThumbnail = thumbnail;
+        defaults.screenshotNotification = false;
+        defaults.saveDir = output.path().toStdString();
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        overlay.show(); QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(150, 150));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor);
+        auto* canvas = editor->findChild<QWidget*>("annotationCanvas");
+        auto* pen = editor->findChild<QToolButton*>("annotationTool5");
+        QVERIFY(pen); QTest::mouseClick(pen, Qt::LeftButton);
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(150, 140));
+        QTest::mouseMove(canvas, QPoint(200, 160));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(200, 160));
+        const auto expected = editor->resultImage().convertToFormat(QImage::Format_RGBA8888);
+        QVERIFY(clickEditorAction(*editor, "annotationPin"));
+        QTRY_COMPARE_WITH_TIMEOUT(finishing.count(), 1, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.isVisible(), 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(!QImage(pinPath).isNull(), 2000);
+        QCOMPARE(QImage(pinPath).convertToFormat(QImage::Format_RGBA8888), expected);
+        const auto saved = QDir(output.path()).entryList({"*.png"}, QDir::Files);
+        QCOMPARE(saved.size(), save ? 1 : 0);
+        if (save) QCOMPARE(QImage(output.filePath(saved.front())).convertToFormat(QImage::Format_RGBA8888), expected);
+        if (clipboard) {
+            QTRY_VERIFY_WITH_TIMEOUT(!QImage(clipboardPath).isNull(), 2000);
+            QCOMPARE(QImage(clipboardPath).convertToFormat(QImage::Format_RGBA8888), expected);
+        } else QVERIFY(!QFileInfo::exists(clipboardPath));
+        if (thumbnail) {
+            QTRY_VERIFY_WITH_TIMEOUT(!QImage(thumbnailPath).isNull(), 2000);
+            QCOMPARE(QImage(thumbnailPath).convertToFormat(QImage::Format_RGBA8888), expected);
+        } else QVERIFY(!QFileInfo::exists(thumbnailPath));
+        QTest::qWait(30);
+    }
+
     void failedPinPreservesEditorAndAnnotations() {
         QTemporaryDir output;
         QVERIFY(output.isValid());
@@ -854,9 +916,25 @@ int main(int argc, char** argv) {
         socket.connectToServer(arguments.at(option + 1));
         if (!socket.waitForConnected(1000))
             return 1;
+        const QString resultPath = qEnvironmentVariable("HYPRCAPTURE_TEST_PIN_SUCCESS");
+        if (!resultPath.isEmpty()) {
+            const QImage pinned(arguments.at(2));
+            if (pinned.isNull()) return 1;
+            socket.write("ready\n");
+            socket.flush();
+            if (socket.bytesToWrite() && !socket.waitForBytesWritten(1000)) return 1;
+            QByteArray accepted;
+            while (!accepted.contains('\n') && socket.waitForReadyRead(2000)) accepted += socket.readAll();
+            return accepted.startsWith("accepted\n") && pinned.save(resultPath) ? 0 : 1;
+        }
         socket.write("error:Injected pin failure\n");
         socket.flush();
         return socket.bytesToWrite() == 0 || socket.waitForBytesWritten(1000) ? 0 : 1;
+    }
+    if (argc > 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--thumbnail-window")) {
+        QCoreApplication child(argc, argv);
+        const QString target = qEnvironmentVariable("HYPRCAPTURE_TEST_THUMBNAIL");
+        return !target.isEmpty() && QImage(QString::fromLocal8Bit(argv[2])).save(target) ? 0 : 1;
     }
     // Recording controls may enumerate sound sources. Keep that child process
     // isolated from host devices and prevent it from recursively running tests.
