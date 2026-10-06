@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Changelog · HyprCapture</title>
+<meta name="description" content="Release history for HyprCapture, a screenshot and screen recording tool for Hyprland.">
+<meta name="color-scheme" content="light dark">
+<link rel="canonical" href="https://gfhdhytghd.github.io/HyprCapture/">
+<meta property="og:title" content="HyprCapture changelog">
+<meta property="og:description" content="Release history for HyprCapture, a screenshot and screen recording tool for Hyprland.">
+<meta property="og:url" content="https://gfhdhytghd.github.io/HyprCapture/">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2358a6ff'/%3E%3Cpath d='M9 12V9h3M20 9h3v3M23 20v3h-3M12 23H9v-3' fill='none' stroke='%23fff' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --text: #1b1f24;
+    --muted: #57606a;
+    --border: #d8dee4;
+    --accent: #0a5fd1;
+    --accent-soft: #e4efff;
+    --pending: #8a5a00;
+    --pending-soft: #fff4d6;
+    --code-bg: #eef1f4;
+    --shadow: 0 1px 2px rgb(27 31 36 / 6%), 0 4px 16px rgb(27 31 36 / 5%);
+    --radius: 14px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --surface: #151b23;
+      --text: #e6edf3;
+      --muted: #9da7b3;
+      --border: #2d3540;
+      --accent: #6cb6ff;
+      --accent-soft: #15273d;
+      --pending: #e3b341;
+      --pending-soft: #2c230f;
+      --code-bg: #212a35;
+      --shadow: 0 1px 2px rgb(0 0 0 / 30%);
+    }
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 1.5rem; }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", Ubuntu, Cantarell, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  a { color: var(--accent); text-underline-offset: 0.15em; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+  code {
+    font: 0.88em/1.4 ui-monospace, "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+    background: var(--code-bg);
+    padding: 0.1em 0.35em;
+    border-radius: 5px;
+    overflow-wrap: anywhere;
+  }
+  .skip {
+    position: absolute; left: 1rem; top: -4rem;
+    background: var(--surface); padding: 0.5rem 1rem; border-radius: 8px; z-index: 10;
+  }
+  .skip:focus { top: 1rem; }
+
+  header.site {
+    border-bottom: 1px solid var(--border);
+    background:
+      radial-gradient(60rem 20rem at 10% -40%, var(--accent-soft), transparent 70%),
+      var(--surface);
+  }
+  .wrap { max-width: 72rem; margin: 0 auto; padding: 0 1.25rem; }
+  .hero { padding-top: 3rem; padding-bottom: 2.25rem; }
+  .eyebrow {
+    margin: 0 0 0.5rem; color: var(--accent); font-weight: 600;
+    letter-spacing: 0.06em; text-transform: uppercase; font-size: 0.8rem;
+  }
+  .hero h1 { margin: 0; font-size: clamp(2rem, 5vw, 2.9rem); line-height: 1.1; letter-spacing: -0.02em; }
+  .hero p.lede { margin: 0.9rem 0 1.4rem; color: var(--muted); max-width: 42rem; font-size: 1.08rem; }
+  .actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0; padding: 0; list-style: none; }
+  .button {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.5rem 0.95rem; border-radius: 999px; font-weight: 600; font-size: 0.95rem;
+    border: 1px solid var(--border); background: var(--surface); color: var(--text); text-decoration: none;
+  }
+  .button:hover { border-color: var(--accent); }
+  .button.primary { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+
+  .layout {
+    display: grid; gap: 2.5rem; padding-top: 2.25rem; padding-bottom: 4rem;
+    grid-template-columns: minmax(0, 1fr);
+  }
+  @media (min-width: 62rem) {
+    .layout { grid-template-columns: 13rem minmax(0, 1fr); }
+    nav.toc { position: sticky; top: 1.5rem; align-self: start; max-height: calc(100vh - 3rem); overflow: auto; }
+  }
+  nav.toc h2 {
+    font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin: 0 0 0.6rem;
+  }
+  nav.toc ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.15rem; }
+  nav.toc a {
+    display: flex; justify-content: space-between; gap: 0.75rem;
+    padding: 0.3rem 0.6rem; border-radius: 8px; text-decoration: none; color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  nav.toc a:hover { background: var(--accent-soft); }
+  nav.toc a span { color: var(--muted); font-size: 0.85rem; }
+  @media (max-width: 61.99rem) {
+    nav.toc ol { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    nav.toc a { border: 1px solid var(--border); background: var(--surface); padding: 0.25rem 0.7rem; }
+    nav.toc a span { display: none; }
+  }
+
+  .timeline { list-style: none; margin: 0; padding: 0; display: grid; gap: 1.25rem; }
+  article.entry {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 1.4rem 1.5rem 1.2rem;
+  }
+  article.entry.unreleased { border-style: dashed; border-color: var(--pending); background: linear-gradient(var(--pending-soft), var(--surface) 9rem); }
+  article.entry:target { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .entry-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.4rem 0.9rem; }
+  .entry-head h2 { margin: 0; font-size: 1.5rem; letter-spacing: -0.01em; }
+  .entry-head h2 a { color: inherit; text-decoration: none; }
+  .entry-head h2 a:hover { text-decoration: underline; }
+  .meta { display: flex; flex-wrap: wrap; gap: 0.4rem 0.6rem; align-items: center; color: var(--muted); font-size: 0.92rem; }
+  .badge {
+    display: inline-block; padding: 0.05rem 0.6rem; border-radius: 999px; font-size: 0.8rem; font-weight: 600;
+    background: var(--accent-soft); color: var(--accent); white-space: nowrap;
+  }
+  .badge.latest { background: var(--accent); color: var(--surface); }
+  .badge.pending { background: var(--pending-soft); color: var(--pending); border: 1px solid var(--pending); }
+  .headline { margin: 0.45rem 0 0; font-size: 1.08rem; font-weight: 600; }
+  .summary { margin: 0.45rem 0 0; color: var(--muted); }
+  .entry h3 {
+    margin: 1.15rem 0 0.35rem; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted);
+  }
+  .entry ul { margin: 0; padding-left: 1.2rem; }
+  .entry li { margin: 0.25rem 0; }
+  .entry li::marker { color: var(--accent); }
+  .entry-foot {
+    margin-top: 1.1rem; padding-top: 0.8rem; border-top: 1px solid var(--border);
+    display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; font-size: 0.92rem;
+  }
+  footer.site { border-top: 1px solid var(--border); color: var(--muted); font-size: 0.9rem; padding: 1.5rem 0 2.5rem; }
+  footer.site p { margin: 0.3rem 0; }
+  @media (max-width: 30rem) {
+    .hero { padding-top: 2.25rem; padding-bottom: 1.75rem; }
+    article.entry { padding: 1.1rem 1.05rem 1rem; }
+  }
+  @media print {
+    nav.toc, .actions, .skip { display: none; }
+    article.entry { box-shadow: none; break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<a class="skip" href="#changelog">Skip to changelog</a>
+<header class="site">
+  <div class="wrap hero">
+    <p class="eyebrow">Changelog</p>
+    <h1>HyprCapture</h1>
+    <p class="lede">Release history of the HyprCapture screenshot and screen recording plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
+    <ul class="actions">
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.8-0.56.2">Latest: v0.2.8-0.56.2</a></li>
+      <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture#installation">Installation</a></li>
+      <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture/releases">All GitHub releases</a></li>
+      <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture">Source code</a></li>
+    </ul>
+  </div>
+</header>
+<div class="wrap layout">
+  <nav class="toc" aria-labelledby="toc-title">
+    <h2 id="toc-title">Versions</h2>
+    <ol>
+      <li><a href="#unreleased">Unreleased <span>next</span></a></li>
+      <li><a href="#v0-2-8-0-56-2">0.2.8 <span>2026-09-06</span></a></li>
+      <li><a href="#v0-2-7-0-56-1">0.2.7 <span>2026-08-07</span></a></li>
+      <li><a href="#v0-2-6-0-56-0">0.2.6 <span>2026-07-27</span></a></li>
+      <li><a href="#v0-2-5-0-56-0">0.2.5 <span>2026-07-27</span></a></li>
+      <li><a href="#v0-2-4-0-55-4">0.2.4 <span>2026-06-23</span></a></li>
+      <li><a href="#v0-2-3-0-55-4">0.2.3 <span>2026-06-20</span></a></li>
+      <li><a href="#v0-2-2-0-55">0.2.2 <span>2026-06-19</span></a></li>
+      <li><a href="#v0-2-1-0-55">0.2.1 <span>2026-05-09</span></a></li>
+      <li><a href="#v0-2-0-0-54-3">0.2.0 <span>2026-05-05</span></a></li>
+      <li><a href="#v0-1-0-0-54-3">0.1.0 <span>2026-05-03</span></a></li>
+    </ol>
+  </nav>
+  <main id="changelog" tabindex="-1">
+    <ol class="timeline" aria-label="Releases, newest first">
+      <li>
+        <article class="entry unreleased" id="unreleased" aria-labelledby="unreleased-title">
+          <div class="entry-head">
+            <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
+            <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.2.8-0.56.2</span></div>
+          </div>
+          <p class="summary">Changes on master since v0.2.8-0.56.2. They are not part of a tagged release yet, so the version and release date are still open.</p>
+          <h3>New</h3>
+          <ul>
+            <li>Scrolling screenshots: select a region, scroll slowly, and HyprCapture stitches stable frames into one long image using the plugin&#x27;s cursor-free renderer.</li>
+            <li>Optional in-place screenshot editor, enabled with <code>in_place_edit_toolbar = true</code>: rectangles, ellipses, arrows, lines, pen, highlighter, numbered markers, mosaic, spotlight, undo/redo, and zoom/pan.</li>
+            <li>Movable, resizable multiline text boxes with a floating toolbar for font, pixel size, and color.</li>
+            <li>Desktop pins that stay above normal windows and then follow the normal save, clipboard, and thumbnail flow.</li>
+            <li>UI translations for Simplified and Traditional Chinese, Japanese, German, French, Spanish, and Korean, selected through the new <code>language</code> option.</li>
+          </ul>
+          <h3>Faster</h3>
+          <ul>
+            <li>The capture overlay starts sooner: the Qt helper launches in parallel with compositor capture, and panels and icons are created on demand and cached.</li>
+            <li>Frozen screenshot artifacts are memory-mapped instead of copied pixel by pixel.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Recordings no longer hang when the compositor was started from a terminal; the recorder&#x27;s stdin now comes from /dev/null (<a href="https://github.com/gfhdhytghd/HyprCapture/issues/25">#25</a>, contributed by Vedaru).</li>
+            <li>Nix build fixes for <a href="https://github.com/gfhdhytghd/HyprCapture/issues/29">#29</a>: read-only store paths whose owner is unmapped inside the build sandbox are now trusted (writable paths are still rejected), and supervised processes handle stop signals under BusyBox ash. A sandboxed build of the repository flake passed its tests locally; the reporter&#x27;s own setup has not been verified yet.</li>
+            <li>Microphone-only recordings ignore changes to application audio, and only capture dropdown settings are persisted.</li>
+            <li>Toolbar icons now use Google Material Symbols and render sharply at any scale.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.8-0.56.2...master">Compare v0.2.8-0.56.2…master</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-8-0-56-2" aria-labelledby="v0-2-8-0-56-2-title">
+          <div class="entry-head">
+            <h2 id="v0-2-8-0-56-2-title"><a href="#v0-2-8-0-56-2">0.2.8</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-09-06T19:13:22Z">Sep 6, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.2.8-0.56.2</code></div>
+          </div>
+          <p class="headline">Audio recording, echo cancellation, and accurate video timing</p>
+          <h3>Recording</h3>
+          <ul>
+            <li>Videos keep the frames&#x27; real capture timestamps instead of accumulating repeated frames, so audio stays in sync.</li>
+            <li>Oversized automatic recordings prefer hardware HEVC encoding.</li>
+            <li>Audio modes, device selection, application audio capture, mixing presets, manual gain controls, and live level meters.</li>
+            <li>Echo cancellation through PipeWire WebRTC, plus a native DTLN-AEC candidate with a validated CPU selection policy and optional OpenVINO NPU support. Real-recording, speech-quality, and long-duration acceptance tests are still pending.</li>
+            <li>First-frame recording previews, a finalization animation, centered recording controls, and optional restoration of capture settings.</li>
+          </ul>
+          <h3>Performance and reliability</h3>
+          <ul>
+            <li>Less window-capture work thanks to compact render targets and cached GPU exports.</li>
+            <li>Fenced window streaming, frame-bound input geometry, and checks on the capture target&#x27;s lifecycle.</li>
+            <li>Better handling of rotated and scaled outputs, encoder/backend fallback, countdown cancellation, screenshot notifications, window selection controls, and narrow toolbars.</li>
+          </ul>
+          <h3>Build</h3>
+          <ul>
+            <li>New build dependency: FFmpeg development libraries (libavformat, libavcodec, libavutil). Install the DTLN runtime and models with the included AEC scripts.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.8-0.56.2">Release notes for v0.2.8-0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.7-0.56.1...v0.2.8-0.56.2">Compare with v0.2.7-0.56.1</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-7-0-56-1" aria-labelledby="v0-2-7-0-56-1-title">
+          <div class="entry-head">
+            <h2 id="v0-2-7-0-56-1-title"><a href="#v0-2-7-0-56-1">0.2.7</a></h2>
+            <div class="meta"><time datetime="2026-08-07T02:32:30Z">Aug 7, 2026</time><span class="badge">Hyprland 0.56.1</span><code>v0.2.7-0.56.1</code></div>
+          </div>
+          <p class="headline">Correct window backgrounds and transparency</p>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Window screenshots keep the selected background mode; real and transparent output no longer fall back to follow-system.</li>
+            <li>Painted window backgrounds are clipped to the visible rounded frame, while transparent edge and shadow pixels are kept.</li>
+            <li>Window artifacts are rendered straight into an RGBA framebuffer through Hyprland&#x27;s snapshot path, preserving client alpha without heuristic matte recovery.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.7-0.56.1">Release notes for v0.2.7-0.56.1 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.6-0.56.0...v0.2.7-0.56.1">Compare with v0.2.6-0.56.0</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-6-0-56-0" aria-labelledby="v0-2-6-0-56-0-title">
+          <div class="entry-head">
+            <h2 id="v0-2-6-0-56-0-title"><a href="#v0-2-6-0-56-0">0.2.6</a></h2>
+            <div class="meta"><time datetime="2026-07-27T15:47:49Z">Jul 27, 2026</time><span class="badge">Hyprland 0.56.0</span><code>v0.2.6-0.56.0</code></div>
+          </div>
+          <p class="headline">Lua-only plugin API</p>
+          <h3>Changed</h3>
+          <ul>
+            <li>All plugin actions and helper callbacks now go through the Hyprland Lua API. Legacy dispatcher registration and fallback paths have been removed (<a href="https://github.com/gfhdhytghd/HyprCapture/issues/20">#20</a>).</li>
+            <li>README configuration and key-binding examples are written in Lua.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Immutable Nix store paths are accepted, while writable child directories and executables are still rejected (<a href="https://github.com/gfhdhytghd/HyprCapture/issues/19">#19</a>).</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.6-0.56.0">Release notes for v0.2.6-0.56.0 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.5-0.56.0...v0.2.6-0.56.0">Compare with v0.2.5-0.56.0</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-5-0-56-0" aria-labelledby="v0-2-5-0-56-0-title">
+          <div class="entry-head">
+            <h2 id="v0-2-5-0-56-0-title"><a href="#v0-2-5-0-56-0">0.2.5</a></h2>
+            <div class="meta"><time datetime="2026-07-27T06:46:51Z">Jul 27, 2026</time><span class="badge">Hyprland 0.56.0</span><code>v0.2.5-0.56.0</code></div>
+          </div>
+          <p class="headline">Hyprland 0.56 support and a Nix flake</p>
+          <h3>New</h3>
+          <ul>
+            <li>Compatibility with Hyprland 0.56 and Nix flake packaging.</li>
+            <li>Configurable notification backends and a recording-state socket for status bars and other integrations.</li>
+            <li>The <code>hyprcam</code> watermark preset.</li>
+          </ul>
+          <h3>Improved</h3>
+          <ul>
+            <li>Complete fusion capture interactions, plus better multi-monitor overlays, synchronized thumbnails, and monitor targeting.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Captures and recordings on transformed monitors, fullscreen recording, scrolling-window selection, cursor capture, and fullscreen preview geometry.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.5-0.56.0">Release notes for v0.2.5-0.56.0 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.4-0.55.4...v0.2.5-0.56.0">Compare with v0.2.4-0.55.4</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-4-0-55-4" aria-labelledby="v0-2-4-0-55-4-title">
+          <div class="entry-head">
+            <h2 id="v0-2-4-0-55-4-title"><a href="#v0-2-4-0-55-4">0.2.4</a></h2>
+            <div class="meta"><time datetime="2026-06-23T15:18:11Z">Jun 23, 2026</time><span class="badge">Hyprland 0.55.4</span><code>v0.2.4-0.55.4</code></div>
+          </div>
+          <p class="headline">Rotated monitors and faster thumbnails</p>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Fullscreen screenshots on transformed multi-monitor layouts no longer crop or invert rotated secondary outputs.</li>
+            <li>Unsafe compositor readback state, which could crash Hyprland or capture the overlay blur, is avoided.</li>
+          </ul>
+          <h3>Faster</h3>
+          <ul>
+            <li>Result thumbnails appear sooner because a small preview launches before the full-size PNG save and clipboard work finish.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.4-0.55.4">Release notes for v0.2.4-0.55.4 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.3-0.55.4...v0.2.4-0.55.4">Compare with v0.2.3-0.55.4</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-3-0-55-4" aria-labelledby="v0-2-3-0-55-4-title">
+          <div class="entry-head">
+            <h2 id="v0-2-3-0-55-4-title"><a href="#v0-2-3-0-55-4">0.2.3</a></h2>
+            <div class="meta"><time datetime="2026-06-20T07:23:46Z">Jun 20, 2026</time><span class="badge">Hyprland 0.55.4</span><code>v0.2.3-0.55.4</code></div>
+          </div>
+          <p class="headline">hymission overview support</p>
+          <h3>New</h3>
+          <ul>
+            <li>Windows can be captured from the hymission overview.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>The first click now captures correctly in hymission overview windows.</li>
+            <li>Result thumbnails scale better on high-DPI displays.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.3-0.55.4">Release notes for v0.2.3-0.55.4 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.2-0.55...v0.2.3-0.55.4">Compare with v0.2.2-0.55</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-2-0-55" aria-labelledby="v0-2-2-0-55-title">
+          <div class="entry-head">
+            <h2 id="v0-2-2-0-55-title"><a href="#v0-2-2-0-55">0.2.2</a></h2>
+            <div class="meta"><time datetime="2026-06-19T20:30:36Z">Jun 19, 2026</time><span class="badge">Hyprland 0.55</span><code>v0.2.2-0.55</code></div>
+          </div>
+          <p class="headline">Export pipe for external tools</p>
+          <h3>New</h3>
+          <ul>
+            <li>A trusted, private FIFO export-pipe backend that streams fullscreen compositor RGBA frames to external programs.</li>
+            <li>The export pipe is available through both the hyprctl dispatcher and the Lua config API.</li>
+            <li>Documentation of the FIFO capture request and response protocol.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.2-0.55">Release notes for v0.2.2-0.55 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.1-0.55...v0.2.2-0.55">Compare with v0.2.1-0.55</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-1-0-55" aria-labelledby="v0-2-1-0-55-title">
+          <div class="entry-head">
+            <h2 id="v0-2-1-0-55-title"><a href="#v0-2-1-0-55">0.2.1</a></h2>
+            <div class="meta"><time datetime="2026-05-09T15:15:40Z">May 9, 2026</time><span class="badge">Hyprland 0.55</span><code>v0.2.1-0.55</code></div>
+          </div>
+          <p class="headline">Hyprland 0.55 and better window shadows</p>
+          <h3>Improved</h3>
+          <ul>
+            <li>Faster window shadow synthesis that uses Hyprland-style shadow geometry and falloff.</li>
+            <li>Compositor window recordings stay on the compositor backend instead of silently falling back to visible GSR when alpha is unavailable.</li>
+            <li>Recordings keep window shadows and are cropped only when shadow removal is requested.</li>
+            <li>When the output cannot carry alpha, shadows are composited over the selected solid or follow-system background.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Lua fallback dispatch from the helper, and the overlay now fades out before window rendering and saving.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.1-0.55">Release notes for v0.2.1-0.55 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.0-0.54.3...v0.2.1-0.55">Compare with v0.2.0-0.54.3</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-2-0-0-54-3" aria-labelledby="v0-2-0-0-54-3-title">
+          <div class="entry-head">
+            <h2 id="v0-2-0-0-54-3-title"><a href="#v0-2-0-0-54-3">0.2.0</a></h2>
+            <div class="meta"><time datetime="2026-05-05T06:57:54Z">May 5, 2026</time><span class="badge">Hyprland 0.54.3</span><code>v0.2.0-0.54.3</code></div>
+          </div>
+          <p class="headline">Renamed to HyprCapture, fusion mode, and watermarks</p>
+          <h3>New</h3>
+          <ul>
+            <li>The project is now called HyprCapture.</li>
+            <li>Fusion toolbar mode: a single click captures fullscreen, and gestures combine region and window capture.</li>
+            <li>Configurable watermarks with built-in Activate Linux and HyperCam-style presets, plus position, size, and offset controls.</li>
+          </ul>
+          <h3>Improved</h3>
+          <ul>
+            <li>Lower capture latency: the overlay closes without waiting for saving, clipboard, and thumbnail work.</li>
+            <li>Simpler region capture, updated toolbar icons and status, cleaner cancel and dropdown controls, and no window titles in window mode.</li>
+            <li>Installation steps and default helper path guidance for hyprpm.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Real-background window sampling.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.2.0-0.54.3">Release notes for v0.2.0-0.54.3 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.1.0-0.54.3...v0.2.0-0.54.3">Compare with v0.1.0-0.54.3</a></div>
+        </article>
+      </li>
+      <li>
+        <article class="entry" id="v0-1-0-0-54-3" aria-labelledby="v0-1-0-0-54-3-title">
+          <div class="entry-head">
+            <h2 id="v0-1-0-0-54-3-title"><a href="#v0-1-0-0-54-3">0.1.0</a></h2>
+            <div class="meta"><time datetime="2026-05-03T08:24:03Z">May 3, 2026</time><span class="badge">Hyprland 0.54.3</span><code>v0.1.0-0.54.3</code></div>
+          </div>
+          <p class="headline">First release (as hyprshot)</p>
+          <h3>Highlights</h3>
+          <ul>
+            <li>Fullscreen, region, and window capture modes with a frozen compositor snapshot behind the overlay.</li>
+            <li>Fullscreen and region output at display resolution.</li>
+            <li>Window artifacts rendered by the compositor, including windows that are occluded or partly off-screen.</li>
+            <li>Window background modes: follow system, white, black, real background, and transparent, with optional border and shadow removal.</li>
+            <li>Save to file, persistent Wayland clipboard output through wl-copy, and result thumbnails with open, copy, and delete actions.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.1.0-0.54.3">Release notes for v0.1.0-0.54.3 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/tree/v0.1.0-0.54.3">Browse source at v0.1.0-0.54.3</a></div>
+        </article>
+      </li>
+    </ol>
+  </main>
+</div>
+<footer class="site">
+  <div class="wrap">
+    <p>Dates are the GitHub release publication dates in UTC. Hyprland plugins are ABI-sensitive, so build HyprCapture against the same Hyprland version you run.</p>
+    <p>Generated from <a href="https://github.com/gfhdhytghd/HyprCapture/blob/master/docs/changelog/releases.json"><code>docs/changelog/releases.json</code></a>.</p>
+  </div>
+</footer>
+</body>
+</html>
