@@ -55,6 +55,20 @@ QString runtimeLibrary() {
     return nativeComponent("libtensorflowlite_c.so");
 }
 QString workerPath() { return QCoreApplication::applicationDirPath() + "/hyprcapture-aec"; }
+QString effectiveCpuQuota(const QStringList& limits) {
+    double quota = -1;
+    for (const auto& limit : limits) {
+        const auto fields = limit.simplified().split(' ');
+        if (fields.size() != 2 || fields[0] == "max") continue;
+        bool numeratorOK = false, denominatorOK = false;
+        const auto numerator = fields[0].toULongLong(&numeratorOK);
+        const auto denominator = fields[1].toULongLong(&denominatorOK);
+        if (!numeratorOK || !denominatorOK || !numerator || !denominator) continue;
+        const double value = double(numerator) / double(denominator);
+        if (quota < 0 || value < quota) quota = value;
+    }
+    return quota < 0 ? QStringLiteral("unlimited") : QString::number(quota, 'g', 17);
+}
 QString fingerprint(const QString& backend) {
     QByteArray stable = "dtln-policy-2-stream48-state-split-1\n";
     // Local OS installation identifier, hashed only. Never persist the raw ID.
@@ -67,15 +81,20 @@ QString fingerprint(const QString& backend) {
     }
     cpu_set_t mask; CPU_ZERO(&mask);
     stable += QByteArray::number(sched_getaffinity(0, sizeof(mask), &mask) == 0 ? CPU_COUNT(&mask) : std::thread::hardware_concurrency());
+    QStringList quotas;
     for (const auto& line : read("/proc/self/cgroup", 4096).split('\n')) {
         if (!line.startsWith("0::")) continue;
         auto group = QDir::cleanPath("/sys/fs/cgroup" + QString::fromUtf8(line.mid(3)));
         while (group.startsWith("/sys/fs/cgroup")) {
-            stable += read(group + "/cpu.max", 256) + read(group + "/cpuset.cpus.effective", 256);
+            quotas.append(QString::fromUtf8(read(group + "/cpu.max", 256)));
             if (group == "/sys/fs/cgroup") break;
             group = QFileInfo(group).absolutePath();
         }
     }
+    // Affinity above already reflects the effective cpuset. Hash the strictest
+    // quota, not redundant unlimited ancestors: desktop and terminal scopes can
+    // have different depths while providing identical processing capacity.
+    stable += "\ncpu-quota:" + effectiveCpuQuota(quotas).toUtf8() + '\n';
     stable += backend.toUtf8() + fileHash(runtimeLibrary());
     stable += fileHash(workerPath()) + fileHash(nativeComponent("libspa-aec-dtln.so"));
     for (const auto& directory : {QString("/usr/lib"), QString("/usr/lib/x86_64-linux-gnu"), QString("/usr/lib/aarch64-linux-gnu")})
@@ -125,6 +144,7 @@ QJsonObject selection(int policy, const QString& backend) {
     QJsonObject result{{"aec", "off"}, {"backend", backend}, {"model", 0}, {"reason", "disabled"}};
     if (policy == 0) return result;
     const auto cache = readCache(backend);
+    if (cache["status"] == "failed") { result["aec"] = "failed"; result["reason"] = cache["reason"].toString("test failed"); return result; }
     if (cache.isEmpty() || cache["status"] == "pending") { result["aec"] = "pending"; result["reason"] = cache["reason"].toString("test required"); return result; }
     const auto entries = cache["models"].toObject();
     for (int model : {512, 256}) {
@@ -139,7 +159,8 @@ QJsonObject selection(int policy, const QString& backend) {
 QString description(const QJsonObject& d, int policy) {
     if (policy == 0) return "AEC off";
     if (d["model"].toInt() > 0) return QString("%1 · %2 %3").arg(policy < 0 ? "Auto" : "On", d["backend"].toString().toUpper()).arg(d["model"].toInt());
-    if (d["aec"] == "pending") return "AEC · test pending";
+    if (d["aec"] == "pending") return "AEC · " + d["reason"].toString("test required");
+    if (d["aec"] == "failed") return "AEC test failed · " + d["reason"].toString();
     return "AEC off · " + d["reason"].toString();
 }
 }

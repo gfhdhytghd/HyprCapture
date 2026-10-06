@@ -16,6 +16,10 @@ int main(int argc,char** argv){
     qputenv("HYPRCAPTURE_AEC_MODEL_DIR",(root.path()+"/models").toUtf8());
     qputenv("HYPRCAPTURE_TFLITE_LIBRARY",(root.path()+"/runtime.so").toUtf8());
     QCoreApplication app(argc,argv);namespace aec=audio::aec;
+    require(aec::effectiveCpuQuota({"max 100000", "max 100000"})==aec::effectiveCpuQuota({"", "max 100000", "max 100000", "max 100000"}),"equivalent desktop and terminal scopes share a fingerprint");
+    require(aec::effectiveCpuQuota({"200000 100000", "max 100000"})==aec::effectiveCpuQuota({"400000 200000", "200000 100000"}),"equivalent quotas and redundant ancestors normalize");
+    require(aec::effectiveCpuQuota({"200000 100000", "50000 100000"})=="0.5","strictest ancestor quota applies");
+    require(aec::effectiveCpuQuota({"50000 100000"})!=aec::effectiveCpuQuota({"max 100000"}),"real CPU restrictions still invalidate cache");
     require(aec::selection(-1,"cpu")["aec"]=="pending","new machine starts pending");
     require(aec::selection(0,"cpu")["aec"]=="off","forced off needs no runtime");
     require(aec::writeCache("cpu",{{"status","complete"},{"reason","insufficient performance"}}),"save cache");
@@ -29,6 +33,10 @@ int main(int argc,char** argv){
     require(aec::readCache("cpu").isEmpty(),"copied cache invalidated");
     require(aec::writeCache("cpu",{{"status","pending"},{"reason","computer busy"}}),"busy cache");
     require(aec::selection(-1,"cpu")["aec"]=="pending","busy is retryable");
+    require(aec::writeCache("cpu",{{"status","failed"},{"reason","Experimental OpenVINO backend unavailable"}}),"failed test cache");
+    const auto failed=aec::selection(1,"cpu");
+    require(failed["aec"]=="failed" && failed["reason"]=="Experimental OpenVINO backend unavailable","failed test preserves its cause instead of remaining pending");
+    require(aec::description(failed,1).contains("failed"),"failed test has an explicit failure label");
     const auto before=aec::fingerprint("cpu");QFile runtime(root.path()+"/runtime.so");
     require(runtime.open(QIODevice::WriteOnly),"runtime fixture");runtime.write("changed");runtime.close();
     require(before!=aec::fingerprint("cpu"),"runtime change invalidates fingerprint");

@@ -804,6 +804,9 @@ QString toolbarStyleSheet(const QPalette& palette) {
                "QPushButton:hover { background: %4; }"
                "QPushButton:checked { color: %3; background: %5; }"
                "QPushButton:pressed { color: %6; background: %7; }"
+               "QPushButton#aecRetest { background: %12; }"
+               "QPushButton#aecRetest:hover { background: %4; }"
+               "QPushButton#aecRetest:pressed { background: %7; }"
                "QPushButton#captureModeButton { padding: 4px 6px; background: transparent; border: none; outline: none; }"
                "QPushButton#captureModeButton:hover { background: transparent; }"
                "QPushButton#captureModeButton:checked { background: %8; border-radius: 7px; }"
@@ -827,7 +830,8 @@ QString toolbarStyleSheet(const QPalette& palette) {
              cssRgba(modeChecked),
              cssRgba(recordArmed, 190),
              cssRgba(recordChecked, 220),
-             cssRgba(recordPressed, 230));
+             cssRgba(recordPressed, 230),
+             cssRgba(mixedColor(window, text, 0.06)));
 }
 
 QString popupStyleSheet(const QPalette& palette) {
@@ -2198,9 +2202,9 @@ void CaptureOverlay::ensureRecordControls() {
         hyprcapture::ui::saveAecPreferences(m_defaults);refreshAecStatus();updateSoundMeter();
     });
     aecLayout->addWidget(m_echoBackend);
-    auto* retest = new QPushButton("Retest",m_aecOptions);retest->setObjectName("aecRetest");
-    retest->setToolTip("Download missing models and retest this computer without microphone capture");
-    connect(retest,&QPushButton::clicked,this,[this]{refreshAecStatus(true);});aecLayout->addWidget(retest);
+    m_aecTest = new QPushButton("Test now",m_aecOptions);m_aecTest->setObjectName("aecRetest");
+    m_aecTest->setToolTip("Download missing models and test AEC on this computer. This test does not record the microphone.");
+    connect(m_aecTest,&QPushButton::clicked,this,[this]{refreshAecStatus(true);});aecLayout->addWidget(m_aecTest);
     m_aecStatus = new QLabel("AEC · checking",m_aecOptions);m_aecStatus->setObjectName("aecStatus");
     m_aecStatus->setMinimumWidth(1);m_aecStatus->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Preferred);
     aecLayout->addWidget(m_aecStatus);
@@ -2819,34 +2823,60 @@ void CaptureOverlay::refreshAecStatus(bool retest) {
         return;
     }
     m_aecChecking = true;
+    m_aecTestResult.clear();
     updateSoundMeter();
-    m_aecStatus->setText("AEC · checking");
+    m_aecStatus->setText(retest ? "AEC · testing…" : "AEC · checking");
+    m_aecTest->setEnabled(false);
+    m_aecTest->setText(retest ? "Testing…" : "Checking…");
     const auto backend = qString(m_defaults.recordAudioEchoBackend);
     auto* process = new QProcess(this);
     process->setProperty("aecCheck", true);
-    QStringList args{"--install"};
-    if (!retest && m_defaults.recordAudioEchoCancellation == 0) args = {"--status", "0"};
-    if (retest) args << "--force";
+    // Inspect readiness when opening the controls; run installation and the
+    // benchmark only when the user chooses Test now / Retest.
+    QStringList args = retest ? QStringList{"--install", "--force"}
+                             : QStringList{"--status", QString::number(m_defaults.recordAudioEchoCancellation)};
     if (backend == "npu") args << "--npu";
-    auto finish = [this, process, backend] {
+    auto finish = [this, process, backend, retest] {
+        if (process->property("aecHandled").toBool()) return;
+        process->setProperty("aecHandled", true);
+        const auto test = QJsonDocument::fromJson(process->readAllStandardOutput()).object();
+        QString error;
+        if (process->property("aecTimedOut").toBool()) error = "test timed out";
+        else if (process->error() == QProcess::FailedToStart) error = "cannot start AEC tester";
+        else if (process->exitStatus() != QProcess::NormalExit || process->exitCode() != 0)
+            error = test["error"].toString("AEC tester exited unexpectedly");
+        else if (retest && test.isEmpty()) error = "AEC tester returned no result";
         process->deleteLater();
         if (backend != qString(m_defaults.recordAudioEchoBackend)) { m_aecChecking=false; refreshAecStatus(); return; }
         auto* status = new QProcess(this);
-        auto done = [this, status] {
+        auto done = [this, status, retest, test, error] {
+            if (status->property("aecHandled").toBool()) return;
+            status->setProperty("aecHandled", true);
             const auto object=QJsonDocument::fromJson(status->readAllStandardOutput()).object();
-            const auto text=object["description"].toString("AEC · installation required");
-            m_aecStatus->setText(text);m_aecStatus->setToolTip(text);m_aecChecking=false;
+            auto text=object["description"].toString("AEC · cannot read test status");
+            if (retest) {
+                if (!error.isEmpty()) text = "Test failed · " + error;
+                else if (test["status"] == "pending") text = "Test not completed · " + test["reason"].toString("try again");
+                else if (test["status"] == "failed") text = "Test failed · " + test["reason"].toString("unknown error");
+                else if (object["model"].toInt() > 0) text = QString("Test passed · %1 %2").arg(object["backend"].toString().toUpper()).arg(object["model"].toInt());
+                else text = "Test failed · " + object["reason"].toString("cannot read test status");
+                m_aecTestResult = text;
+            }
+            m_aecStatus->setText(m_aecStatus->fontMetrics().elidedText(text, Qt::ElideRight, 270));m_aecStatus->setToolTip(text);m_aecChecking=false;
+            m_aecTest->setText(object["model"].toInt() > 0 ? "Retest" : "Test now");
+            m_aecTest->setEnabled(true);
             m_meterKey.clear();status->deleteLater();updateSoundMeter();
         };
         connect(status,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[done](int,QProcess::ExitStatus){done();});
         connect(status,&QProcess::errorOccurred,this,[done](QProcess::ProcessError e){if(e==QProcess::FailedToStart)done();});
-        QStringList statusArgs{"--status",QString::number(m_defaults.recordAudioEchoCancellation)};
+        const auto statusPolicy = retest && m_defaults.recordAudioEchoCancellation == 0 ? -1 : m_defaults.recordAudioEchoCancellation;
+        QStringList statusArgs{"--status",QString::number(statusPolicy)};
         if(qString(m_defaults.recordAudioEchoBackend)=="npu")statusArgs<<"--npu";
         status->start(hyprcapture::audio::aec::workerPath(),statusArgs);
     };
     connect(process,qOverload<int,QProcess::ExitStatus>(&QProcess::finished),this,[finish](int,QProcess::ExitStatus){finish();});
     connect(process,&QProcess::errorOccurred,this,[finish](QProcess::ProcessError e){if(e==QProcess::FailedToStart)finish();});
-    QTimer::singleShot(180000,process,[process]{if(process->state()!=QProcess::NotRunning)process->kill();});
+    QTimer::singleShot(180000,process,[process]{if(process->state()!=QProcess::NotRunning){process->setProperty("aecTimedOut",true);process->kill();}});
     process->start(hyprcapture::audio::aec::workerPath(),args);
 }
 
@@ -2887,9 +2917,13 @@ void CaptureOverlay::updateSoundMeter() {
             if (object.contains("error")) m_systemMeter->setToolTip(object["error"].toString());
             if (object.contains("aec") && m_aecStatus) {
                 const auto state = object["aec"].toString();
-                const auto text = state == "unavailable" ? "AEC unavailable · raw mic" : object["description"].toString(
+                auto text = state == "unavailable" ? "AEC unavailable · raw mic" : object["description"].toString(
                     hyprcapture::audio::aec::description(object,int(m_defaults.recordAudioEchoCancellation)));
-                m_aecStatus->setText(text); m_aecStatus->setToolTip(text);
+                if (state == "unavailable") m_aecTestResult.clear();
+                if (!m_aecTestResult.isEmpty()) text = m_aecTestResult;
+                m_aecStatus->setText(m_aecStatus->fontMetrics().elidedText(text, Qt::ElideRight, 270)); m_aecStatus->setToolTip(text);
+                if (!m_aecChecking && m_aecTest)
+                    m_aecTest->setText((state == "active" || state == "ready") ? "Retest" : "Test now");
             }
             if (!object.contains("levels")) continue;
             const auto levels = object["levels"].toObject();

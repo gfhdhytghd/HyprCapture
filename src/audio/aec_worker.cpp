@@ -104,7 +104,12 @@ QJsonObject check(const QString& backend,bool force) {
         try {auto r=benchmark(size,backend);models[QString::number(size)]=r;anyCorrect|=r["correct"].toBool();if(r["fast"].toBool()){anyFast=true;break;}}
         catch(const std::exception& e){models[QString::number(size)]=QJsonObject{{"correct",false},{"fast",false},{"error",e.what()}};}
     }
-    QJsonObject result{{"status",anyCorrect?"complete":"pending"},{"models",models},{"reason",anyFast?"":anyCorrect?"insufficient performance":"runtime or correctness check unavailable"},{"testedAt",QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}};
+    QString failureReason = "correctness check failed";
+    if (!anyCorrect) for (int size : {512, 256}) {
+        const auto error = models[QString::number(size)].toObject()["error"].toString();
+        if (!error.isEmpty()) { failureReason = error; break; }
+    }
+    QJsonObject result{{"status",anyCorrect?"complete":"failed"},{"models",models},{"reason",anyFast?"":anyCorrect?QString("insufficient performance"):failureReason},{"testedAt",QDateTime::currentDateTimeUtc().toString(Qt::ISODate)}};
     // Contended tests are not durable evidence of a slow machine.
     if(busy()){result["status"]="pending";result["reason"]="computer busy";}
     aec::writeCache(backend,result);return result;

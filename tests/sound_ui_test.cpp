@@ -7,6 +7,7 @@
 #include <unistd.h>
 #include "ui/audio_meter.hpp"
 #include <QSlider>
+#include <QLabel>
 
 #include "ui/capture_overlay.hpp"
 #include "audio/helper.hpp"
@@ -53,6 +54,8 @@ int main(int argc, char** argv) {
         QCoreApplication app(argc, argv);
         QTimer timer;
         QObject::connect(&timer, &QTimer::timeout, [] {
+            if (qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_AEC_FEEDBACK"))
+                std::cout << R"({"aec":"pending","description":"AEC · test pending"})" << std::endl;
             std::cout << R"({"levels":{"System":{"peak":0.1,"rms":0.05,"available":true},"Microphone":{"peak":0.1,"rms":0.05,"available":true}}})" << std::endl;
         });
         QSocketNotifier stop(STDIN_FILENO, QSocketNotifier::Read);
@@ -67,6 +70,32 @@ int main(int argc, char** argv) {
     qputenv("XDG_CACHE_HOME", (configDir.path()+"/cache").toUtf8());
     qputenv("XDG_DATA_HOME", (configDir.path()+"/data").toUtf8());
     QApplication app(argc, argv);
+    if (qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_AEC_FEEDBACK")) {
+        for (const auto& outcome : {QString("failed"), QString("success"), QString("busy"), QString("crash")}) {
+            qputenv("HYPRCAPTURE_TEST_AEC_OUTCOME", outcome.toUtf8());
+            hyprcapture::CaptureDefaults defaults;
+            defaults.recordAudio = hyprcapture::RecordAudio::Microphone;
+            defaults.recordAudioEchoCancellation = 1;
+            CaptureOverlay overlay(defaults, false, true, false, "{}");
+            overlay.show();
+            auto* test = overlay.findChild<QPushButton*>("aecRetest");
+            auto* status = overlay.findChild<QLabel*>("aecStatus");
+            require(test && status, "AEC feedback controls exist");
+            QTest::qWait(400);
+            require(test->isEnabled(), "test action available after status query");
+            test->click();
+            require(!test->isEnabled() && test->text().contains("Testing"), "test shows progress and prevents duplicate clicks");
+            for (int i=0; i<100 && !test->isEnabled(); ++i) QTest::qWait(20);
+            require(test->isEnabled(), "test action restored after completion");
+            const auto expected = outcome == "success" ? "Test passed" : outcome == "busy" ? "Test not completed" : "Test failed";
+            require(status->text().startsWith(expected), "explicit test outcome displayed");
+            if (outcome == "failed") require(status->toolTip().contains("OpenVINO backend unavailable"), "failure details retained");
+            QTest::qWait(200);
+            require(status->text().startsWith(expected), "meter updates must not overwrite test outcome with pending");
+        }
+        std::cout << "AEC UI feedback: failure, success, busy, crash and persistent results passed\n";
+        return 0;
+    }
     QString expectedOutput = "test-output", expectedLabel = "Test speakers";
     if (qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
         QProcess list;

@@ -272,6 +272,8 @@ class CaptureOverlay final : public QMainWindow {
     InlineSelect* m_echoCancellation = nullptr;
     InlineSelect* m_echoBackend = nullptr;
     QLabel* m_aecStatus = nullptr;
+    QPushButton* m_aecTest = nullptr;
+    QString m_aecTestResult;
     bool m_aecChecking = false;
     QWidget* m_soundMixer = nullptr;
     InlineSelect* m_soundPreset = nullptr;

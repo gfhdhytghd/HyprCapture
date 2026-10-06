@@ -8,6 +8,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -29,7 +30,24 @@
 
 namespace hyprcapture::audio {
 namespace {
+QFile diagnosticLog;
+void logEvent(QJsonObject event) {
+    if (!diagnosticLog.isOpen()) return;
+    event["time"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+    event["monotonicUs"] = static_cast<double>(monotonicUs());
+    diagnosticLog.write(QJsonDocument(event).toJson(QJsonDocument::Compact) + '\n');
+    diagnosticLog.flush();
+}
+void openLog(const QString& directory, bool create) {
+    const auto path = QFile::encodeName(directory + ".audio.jsonl");
+    const int fd = open(path.constData(), O_WRONLY | O_APPEND | O_CLOEXEC | O_NOFOLLOW | (create ? O_CREAT | O_EXCL : 0), 0600);
+    if (fd < 0) return;
+    struct stat st{};
+    if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != getuid() || (st.st_mode & 0077) ||
+        !diagnosticLog.open(fd, QIODevice::WriteOnly | QIODevice::Append, QFileDevice::AutoCloseHandle)) close(fd);
+}
 void report(const QString& message) {
+    logEvent({{"event", "error"}, {"message", message}});
     const auto data = QJsonDocument(QJsonObject{{"error", message}}).toJson(QJsonDocument::Compact) + '\n';
     (void)!write(STDOUT_FILENO, data.constData(), data.size());
 }
@@ -112,6 +130,7 @@ struct Track {
     double peak = 0, energy = 0;
     size_t samples = 0;
     bool failed = false;
+    std::int64_t receivedFrames = 0, lastSamplesUs = 0;
 };
 struct Recorder {
     pa_mainloop* loop = nullptr;
@@ -143,6 +162,7 @@ struct Recorder {
     bool listOnly = false, initialized = false, serverFailed = false;
     int pending = 3;
     QTimer pump;
+    std::int64_t lastLogUs = 0;
 
     ~Recorder() {
         pump.stop();
@@ -255,6 +275,7 @@ struct Recorder {
         }
     }
     void echoStatus(const QString& state) {
+        logEvent({{"event", "aec"}, {"state", state}, {"model", echoModel}, {"backend", echoBackend}});
         const auto data = QJsonDocument(QJsonObject{{"aec", state}, {"model", echoModel}, {"backend", echoBackend}}).toJson(QJsonDocument::Compact) + '\n';
         (void)!write(STDOUT_FILENO, data.constData(), data.size());
     }
@@ -271,12 +292,14 @@ struct Recorder {
     bool startEcho(const QString& microphone) {
         originalMicrophone = microphone;
         const auto decision = aec::selection(echoPolicy, echoBackend);
+        logEvent({{"event", "aec_selection"}, {"decision", decision}});
         echoModel = decision["model"].toInt();
         if (!echoModel) {
+            report("Echo cancellation not active: " + decision["reason"].toString() + "; microphone continues without AEC");
             auto status = decision; status["description"] = aec::description(decision, echoPolicy);
             const auto bytes = QJsonDocument(status).toJson(QJsonDocument::Compact) + '\n';
             (void)!write(STDOUT_FILENO, bytes.constData(), bytes.size());
-            if (decision["aec"] == "pending") {
+            if (decision["aec"] == "pending" && !meterOnly) {
                 // Quick recordings may never create an overlay. Validate for the
                 // next recording without changing this recording's raw path.
                 auto* check = new QProcess(QCoreApplication::instance());
@@ -294,6 +317,7 @@ struct Recorder {
         for (const auto& sink : sinks) if (sink.name == outputName) { found = true; echoOutputIndex = sink.index; }
         for (const auto& source : sources) if (source.name == microphone) echoMicrophoneIndex = source.index;
         QString error;
+        logEvent({{"event", "aec_targets"}, {"microphone", microphone}, {"referenceSink", outputName}});
         echo = std::make_unique<EchoSource>();
         if (!found || !echo->start(microphone, outputName, echoModel, echoBackend, error)) {
             echo.reset(); report("Echo cancellation unavailable: " + (found ? error : "playback output not found") + "; microphone continues without AEC");
@@ -373,6 +397,7 @@ struct Recorder {
         }
     }
     void openTrack(Track& t, const QString& role, const QString& source) {
+        logEvent({{"event", "track_open"}, {"role", role}, {"source", source}});
         t.owner = this; t.role = role; t.device = source;
         if (source.isEmpty()) { fail(t, "selected device unavailable"); return; }
         for (const auto& d : sources) if (d.name == source) t.sourceIndex = d.index;
@@ -390,6 +415,9 @@ struct Recorder {
         if (!t.stream) { fail(t, "cannot create capture stream"); return; }
         pa_stream_set_state_callback(t.stream, [](pa_stream* s, void* data) {
             auto& t = *static_cast<Track*>(data);
+            const auto* device = pa_stream_get_state(s) == PA_STREAM_READY ? pa_stream_get_device_name(s) : nullptr;
+            logEvent({{"event", "stream_state"}, {"role", t.role}, {"state", int(pa_stream_get_state(s))},
+                      {"device", device ? QString::fromUtf8(device) : QString{}}});
             if (pa_stream_get_state(s) == PA_STREAM_READY && t.role == "Microphone" && !t.owner->meterOnly) {
                 // Let the fixed AEC reservoir fill before the first video frame.
                 QTimer::singleShot(t.owner->echoActive ? 120 : 0, QCoreApplication::instance(), [] {
@@ -411,6 +439,8 @@ struct Recorder {
             if (pa_stream_peek(s, &samples, &bytes) < 0) { t.owner->fail(t, "capture read failed"); return; }
             if (!bytes) return;
             if (!t.failed && samples) {
+                t.receivedFrames += bytes / frameBytes;
+                t.lastSamplesUs = monotonicUs();
                 if (t.owner->meterOnly && t.sinkInput == PA_INVALID_INDEX) {
                     const auto* values = static_cast<const float*>(samples);
                     for (size_t i = 0; i < bytes / sizeof(float); ++i) {
@@ -504,6 +534,13 @@ struct Recorder {
         }, this);
         if (pa_context_connect(context, nullptr, PA_CONTEXT_NOAUTOSPAWN, nullptr) < 0) serverError();
         QObject::connect(&pump, &QTimer::timeout, [&] {
+            if (diagnosticLog.isOpen() && monotonicUs() - lastLogUs >= 1000000) {
+                lastLogUs = monotonicUs();
+                for (const auto& t : tracks) if (!t.role.isEmpty())
+                    logEvent({{"event", "track_health"}, {"role", t.role}, {"failed", t.failed},
+                              {"receivedFrames", double(t.receivedFrames)}, {"lastSamplesUs", double(t.lastSamplesUs)},
+                              {"aecActive", echoActive}});
+            }
             if (echo) {
                 echo->iterate();
                 if (echo->failed()) fallbackEcho("audio processing module stopped");
@@ -556,6 +593,8 @@ int finalize(const QStringList& args) {
     if (args.size() != 6) return 2;
     const QString directory = args[2], video = args[3], format = args[5];
     if (!privateDirectory(directory) || !regularOwnedFile(video)) return 2;
+    openLog(directory, false);
+    logEvent({{"event", "finalize_start"}, {"video", video}});
     if (format != "mp4" && format != "mov" && format != "webm" && format != "mkv") return 2;
     QFile metadata(directory + "/session.json");
     if (!metadata.open(QIODevice::ReadOnly) || metadata.size() > 8192) return 2;
@@ -644,6 +683,9 @@ int finalize(const QStringList& args) {
         report("Cannot replace video; merged file retained: " + combined); return 1;
     }
     QDir(directory).removeRecursively();
+    logEvent({{"event", "finalize_success"}, {"video", video}});
+    diagnosticLog.close();
+    QFile::rename(directory + ".audio.jsonl", video + ".audio.jsonl");
     QFile::remove(video + ".ts");
     return 0;
 }
@@ -685,6 +727,8 @@ int runHelper(int argc, char** argv) {
         const auto bytes = QJsonDocument(meta).toJson();
         if (metadata.write(bytes) != bytes.size()) return 2;
         metadata.close();
+        openLog(recorder.directory, true);
+        logEvent({{"event", "capture_start"}, {"settings", meta}, {"input", recorder.input}, {"output", recorder.output}});
     }
     if (recorder.listOnly || recorder.output.startsWith("window:")) recorder.windows = windowSources();
     recorder.applicationSource = recorder.output.startsWith("window:") || recorder.output.startsWith("pid:");
@@ -708,6 +752,8 @@ int runHelper(int argc, char** argv) {
     });
     if (recorder.listOnly) stop.setEnabled(false);
     recorder.start();
-    return app.exec();
+    const int result = app.exec();
+    logEvent({{"event", "capture_stop"}, {"exitCode", result}, {"aecActive", recorder.echoActive}});
+    return result;
 }
 }
