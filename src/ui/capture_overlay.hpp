@@ -55,6 +55,7 @@ class CaptureOverlay final : public QMainWindow {
     void activationRequested();
     void finishingStarted();
     void editingChanged(bool editing);
+    void scrollingChanged(bool scrolling);
 
   protected:
     bool event(QEvent* event) override;
@@ -126,7 +127,8 @@ class CaptureOverlay final : public QMainWindow {
     void updateConfirmCursor(const QPoint& point);
     QRect regionSelectionForDrag(const QPoint& point) const;
     void finishCapture();
-    void beginInPlaceEdit();
+    void beginInPlaceEdit(const QImage& capturedImage = {});
+    void beginScrollCapture();
     void refreshInPlaceImage();
     void leaveInPlaceEdit();
     void exportInPlaceImage();
@@ -221,8 +223,12 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_quick = false;
     bool                      m_record = false;
     bool                      m_recordActive = false;
+    bool                      m_scrollMode = false;
+    bool                      m_scrolling = false;
+    bool                      m_scrollResult = false;
     QString                   m_recordError;
     bool                      m_sessionDecoded = false;
+    bool                      m_regionCaptureAvailable = false;
     bool                      m_hymissionOverviewSession = false;
     bool                      m_hymissionCaptureInputSuppressed = false;
     bool                      m_confirmBeforeCapture = false;
@@ -253,6 +259,7 @@ class CaptureOverlay final : public QMainWindow {
     QString                   m_hymissionCaptureInputToken;
 
     QWidget*     m_toolbar = nullptr;
+    QPushButton* m_scrollToggle = nullptr;
     QGraphicsOpacityEffect* m_toolbarOpacity = nullptr;
     QPropertyAnimation* m_fadeAnimation = nullptr;
     InlineSelect* m_fullscreenScope = nullptr;

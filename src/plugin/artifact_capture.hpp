@@ -45,6 +45,7 @@ struct WindowStreamCapturedFrame {
 };
 
 CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool quick);
+LaunchResult captureRegionArtifactFromRequestFile(const std::string& path);
 LaunchResult captureWindowArtifactFromRequestFile(const std::string& path);
 LaunchResult captureExportPipeFromRequestFile(const std::string& path);
 LaunchResult startWindowStreamFromRequestFile(const std::string& path);

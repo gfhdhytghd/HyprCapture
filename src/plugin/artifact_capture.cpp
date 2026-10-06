@@ -3419,6 +3419,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
 
 CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool quick) {
     CaptureSession session;
+    session.regionCaptureAvailable = true;
     session.id = makeSessionId();
     session.defaults = defaults;
     if (g_pInputManager) {
@@ -3545,6 +3546,73 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     }
 
     return session;
+}
+
+// Bounded, cursor-free sampling for scrolling capture. Artifacts live beside
+// the private request so cancellation can remove the entire exchange at once.
+LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
+    const auto json = readPrivateRequestFile(path);
+    const auto request = json ? decodeRecordingRequestJson(*json) : std::nullopt;
+    if (!request || request->mode != CaptureMode::Region || !g_pCompositor)
+        return {.success = false, .error = "invalid region capture request"};
+    const auto& rect = request->targetGeometry;
+    if (!std::isfinite(rect.x) || !std::isfinite(rect.y) || !std::isfinite(rect.width) || !std::isfinite(rect.height) ||
+        rect.width < 64 || rect.height < 96)
+        return {.success = false, .error = "invalid region capture geometry"};
+    PHLMONITOR target;
+    for (const auto& monitor : State::monitorState()->monitors()) {
+        if (!monitor) continue;
+        const auto bounds = monitorRect(monitor);
+        if (rect.x >= bounds.x && rect.y >= bounds.y && rect.x + rect.width <= bounds.x + bounds.width &&
+            rect.y + rect.height <= bounds.y + bounds.height) {
+            target = monitor;
+            break;
+        }
+    }
+    if (!target || !std::isfinite(target->m_scale) || target->m_scale <= 0)
+        return {.success = false, .error = "region capture monitor unavailable"};
+    const double scale = target->m_scale;
+    if (rect.width * scale > 16384 || rect.height * scale > 16384 || rect.width * rect.height * scale * scale > 32.0 * 1024 * 1024)
+        return {.success = false, .error = "region capture exceeds size limit"};
+    const auto bounds = monitorRect(target);
+    const int x = clampedIntFromDouble((rect.x - bounds.x) * scale);
+    const int y = clampedIntFromDouble((rect.y - bounds.y) * scale);
+    const int width = positiveRoundedIntFromDouble(rect.width * scale);
+    const int height = positiveRoundedIntFromDouble(rect.height * scale);
+    const int transform = std::clamp(static_cast<int>(target->m_transform), 0, 7);
+    RgbaReadback readback;
+    if (transform == 0) {
+        // Hyprland's fake monitor render is already top-down in GL row order.
+        // The generic framebuffer reader converts a top-origin crop to GL Y,
+        // so mirror the crop argument (not the resulting pixel rows) here.
+        const int readTop = positiveRoundedIntFromDouble(target->m_pixelSize.y) - y - height;
+        readback = renderMonitorReadback(target, Time::steadyNow(), x, readTop, width, height);
+    } else {
+        readback = renderMonitorReadback(target, Time::steadyNow(), 0, 0,
+            positiveRoundedIntFromDouble(target->m_pixelSize.x), positiveRoundedIntFromDouble(target->m_pixelSize.y));
+        readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), transform);
+        readback = cropReadbackToBounds(readback, PixelBounds{.x = x, .y = y, .width = width, .height = height});
+    }
+    if (readback.pixels.empty() || readback.width != width || readback.height != height)
+        return {.success = false, .error = "region capture render failed"};
+    const auto artifact = path + ".rgba";
+    if (!writeRgbaFile(artifact, readback.pixels))
+        return {.success = false, .error = "region capture artifact write failed"};
+    CaptureSession session;
+    session.id = makeSessionId();
+    MonitorInfo info;
+    info.name = target->m_name;
+    info.logicalGeometry = rect;
+    info.scale = scale;
+    info.artifactPath = artifact;
+    info.artifactWidth = width;
+    info.artifactHeight = height;
+    session.monitors.push_back(std::move(info));
+    if (!writePrivateResponseFile(path, encodeSessionJson(session))) {
+        unlink(artifact.c_str());
+        return {.success = false, .error = "region capture response write failed"};
+    }
+    return {.success = true};
 }
 
 LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {

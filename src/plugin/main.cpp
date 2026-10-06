@@ -41,6 +41,7 @@ constexpr std::array  kLuaFunctionNames = {
     "record_stop",
     "record_start",
     "window_capture",
+    "region_capture",
     "window_stream_start",
     "window_stream_stop",
     "export_pipe",
@@ -429,6 +430,10 @@ int luaRecordStart(lua_State* L) {
     return luaDispatchResult(L, dispatchRecordStart(luaOptionalString(L, 1)));
 }
 
+int luaRegionCapture(lua_State* L) {
+    return luaDispatchResult(L, dispatchResult(hyprcapture::captureRegionArtifactFromRequestFile(luaOptionalString(L, 1))));
+}
+
 int luaWindowCapture(lua_State* L) {
     return luaDispatchResult(L, dispatchWindowCapture(luaOptionalString(L, 1)));
 }
@@ -465,6 +470,8 @@ int luaDispatch(lua_State* L) {
         return luaDispatchResult(L, dispatchRecordStop(args));
     if (action == "record_start")
         return luaDispatchResult(L, dispatchRecordStart(args));
+    if (action == "region_capture")
+        return luaDispatchResult(L, dispatchResult(hyprcapture::captureRegionArtifactFromRequestFile(args)));
     if (action == "window_capture")
         return luaDispatchResult(L, dispatchWindowCapture(args));
     if (action == "export_pipe")
@@ -512,6 +519,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         registerLuaFunction("record_stop", luaRecordStop);
         registerLuaFunction("record_start", luaRecordStart);
         registerLuaFunction("window_capture", luaWindowCapture);
+        registerLuaFunction("region_capture", luaRegionCapture);
         registerLuaFunction("export_pipe", luaExportPipe);
         registerLuaFunction("window_stream_start", luaWindowStreamStart);
         registerLuaFunction("window_stream_stop", luaWindowStreamStop);

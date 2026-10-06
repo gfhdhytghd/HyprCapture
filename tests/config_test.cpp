@@ -229,6 +229,7 @@ int main() {
     session.windows.back().realBackgroundWidth = 200;
     session.windows.back().realBackgroundHeight = 100;
     session.windows.back().title = std::string("Title") + '\x01';
+    session.regionCaptureAvailable = true;
     const auto json = encodeSessionJson(session);
     require(json.find("\"fushionMode\":true") != std::string::npos, "fushion mode json");
     require(json.find("\"overlayScope\":\"all\"") != std::string::npos, "overlay scope json");
@@ -277,6 +278,13 @@ int main() {
     require(json.find("Title\\u0001") != std::string::npos, "control byte json escaping");
     const auto decoded = decodeSessionJson(json);
     require(decoded.has_value(), "encoded session decodes");
+    require(decoded->regionCaptureAvailable, "native region capture capability survives round trip");
+    auto capabilityJson = nlohmann::json::parse(json);
+    capabilityJson.erase("regionCaptureAvailable");
+    const auto legacyCapability = decodeSessionJson(capabilityJson.dump());
+    require(legacyCapability && !legacyCapability->regionCaptureAvailable, "older plugins do not advertise scrolling capture");
+    capabilityJson["regionCaptureAvailable"] = "true";
+    require(!decodeSessionJson(capabilityJson.dump()), "region capability must be a boolean");
     require(decoded->id == "test-session", "decoded id");
     require(decoded->defaults.mode == CaptureMode::Window, "decoded mode");
     require(decoded->defaults.overlayScope == OverlayScope::All, "decoded overlay scope");

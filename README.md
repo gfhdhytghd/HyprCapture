@@ -241,6 +241,14 @@ Use lowercase `s` for `SUPER + s`. In Lua config key strings, uppercase `S` mean
 - Esc cancels the helper.
 - The toolbar is anchored near the bottom of the screen and only shows controls relevant to the active mode.
 
+### Scrolling screenshots
+
+Click **Scrolling capture** (the vertical arrows) in the overlay toolbar, then drag a region around the scrolling content. Leave space outside the region for the capture controls. Scroll **down slowly**, pausing between movements: HyprCapture samples stable frames and appends matching content automatically. Click **Finish** to annotate, zoom, copy, save or pin the long image through the existing editor. **Cancel** returns to the selection without exporting.
+
+Select content within one monitor and exclude fixed headers, footers, sidebars and scrollbars. Scrolling capture uses the plugin's native cursor-free renderer; both the plugin and helper must be updated for the button to appear. It does not drive application scrolling. If the page moves too far or has ambiguous repeating content, no pixels are appended and the controls ask you to scroll back slightly. Upward scrolling does not extend the image. Animated or changing pages may not align reliably.
+
+Capture stops at 200 accepted frames, 64 megapixels, 32,768 pixels in height, or five minutes; an existing result can still be finished. A display change or capture failure also stops sampling while retaining the collected result. A single sampled region is limited to 32 megapixels and 16,384 pixels per side.
+
 ### In-place screenshot editing
 
 Set `in_place_edit_toolbar = true` to keep the capture overlay open after selecting a screenshot target. The editor shows the rendered screenshot with the configured window background, border, shadow, cursor, and watermark options. Annotations use native image coordinates, so exported edits retain their position at the original capture resolution.

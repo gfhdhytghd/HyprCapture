@@ -412,6 +412,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
     Json root;
     root["id"] = boundedString(session.id, MAX_METADATA_STRING_BYTES);
     root["defaults"] = defaultsJson(session.defaults);
+    root["regionCaptureAvailable"] = session.regionCaptureAvailable;
     if (session.cursorPosition)
         root["cursorPosition"] = pointJson(*session.cursorPosition);
 
@@ -487,6 +488,8 @@ std::optional<CaptureSession> decodeSessionJson(const std::string& json) {
         return std::nullopt;
 
     CaptureSession session;
+    if (!boolValue(root, "regionCaptureAvailable", session.regionCaptureAvailable, false))
+        return std::nullopt;
     if (!stringValue(root, "id", session.id, MAX_METADATA_STRING_BYTES) || session.id.empty())
         return std::nullopt;
     if (!root.contains("defaults") || !parseDefaults(root.value("defaults", Json{}), session.defaults))

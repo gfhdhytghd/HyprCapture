@@ -1115,6 +1115,22 @@ int main(int argc, char** argv) {
         }
     }
 
+    for (CaptureOverlay* candidate : overlays) {
+        QObject::connect(candidate, &CaptureOverlay::scrollingChanged, &app, [&, candidate](bool scrolling) {
+            activeOverlay = candidate;
+            for (CaptureOverlay* peer : overlays) {
+                if (scrolling)
+                    peer->hide();
+                else
+                    peer->show();
+            }
+            if (!scrolling) {
+                candidate->raise();
+                candidate->activateWindow();
+            }
+        });
+    }
+
     hyprcapture::ui::traceTiming(QStringLiteral("ui.show_begin"));
     for (CaptureOverlay* candidate : overlays) {
         candidate->show();

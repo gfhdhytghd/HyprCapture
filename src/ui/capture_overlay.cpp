@@ -1,5 +1,6 @@
 #include "ui/timing.hpp"
 #include "ui/mapped_image.hpp"
+#include "ui/scroll_capture.hpp"
 #include "ui/material_icon.hpp"
 #include <QScrollArea>
 #include <QSlider>
@@ -1472,8 +1473,10 @@ CaptureOverlay::CaptureOverlay(const CaptureOverlay& source, const QRect& overla
       m_quick(source.m_quick),
       m_record(source.m_record),
       m_recordActive(source.m_recordActive),
+      m_scrollMode(source.m_scrollMode),
       m_recordError(source.m_recordError),
       m_sessionDecoded(source.m_sessionDecoded),
+      m_regionCaptureAvailable(source.m_regionCaptureAvailable),
       m_hymissionOverviewSession(source.m_hymissionOverviewSession),
       m_confirmBeforeCapture(source.m_confirmBeforeCapture),
       m_overlayActive(active),
@@ -1601,6 +1604,9 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
 
     m_mode = source.m_mode;
     m_record = source.m_record;
+    m_scrollMode = source.m_scrollMode;
+    if (m_scrollToggle)
+        m_scrollToggle->setChecked(m_scrollMode);
     m_recordError = source.m_recordError;
     m_recordFormatAuto = source.m_recordFormatAuto;
     m_recordCodecAuto = source.m_recordCodecAuto;
@@ -1658,6 +1664,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         return;
 
     m_sessionDecoded = true;
+    m_regionCaptureAvailable = decoded->regionCaptureAvailable;
     m_defaults = decoded->defaults;
     m_mode = m_defaults.mode;
     if (decoded->cursorPosition) {
@@ -1954,6 +1961,26 @@ void CaptureOverlay::buildToolbar() {
     });
     layout->addWidget(m_windowBackground);
 
+    m_scrollToggle = new QPushButton(m_toolbar);
+    m_scrollToggle->setObjectName("scrollCaptureToggle");
+    m_scrollToggle->setFlat(true);
+    m_scrollToggle->setFocusPolicy(Qt::NoFocus);
+    m_scrollToggle->setIcon(toolbarIcon("swap_calls"));
+    m_scrollToggle->setIconSize(QSize(kModeIconSize, kModeIconSize));
+    m_scrollToggle->setFixedSize(36, 32);
+    m_scrollToggle->setToolTip(hyprcapture::ui::uiText("Scrolling capture"));
+    m_scrollToggle->setAccessibleName(hyprcapture::ui::uiText("Scrolling capture"));
+    m_scrollToggle->setCheckable(true);
+    m_scrollToggle->setChecked(m_scrollMode);
+    layout->addWidget(m_scrollToggle);
+    connect(m_scrollToggle, &QPushButton::clicked, this, [this](bool enabled) {
+        m_scrollMode = enabled;
+        m_recordError.clear();
+        m_dragStart = {};
+        m_dragEnd = {};
+        setMode(hyprcapture::CaptureMode::Region);
+    });
+
     m_recordToggle = new QPushButton(m_toolbar);
     m_recordToggle->setObjectName(m_recordActive ? "recordActiveButton" : "recordToggleButton");
     m_recordToggle->setFlat(true);
@@ -1983,6 +2010,7 @@ void CaptureOverlay::buildToolbar() {
         if (m_editing)
             leaveInPlaceEdit();
         m_record = m_recordToggle->isChecked();
+        updateToolbarControlsForMode();
         if (m_record)
             applyRecordDefaultsForCurrentBackground();
         updateRecordOptionsVisibility();
@@ -2527,21 +2555,32 @@ void CaptureOverlay::updateToolbarControlsForMode() {
         cancel->setVisible(!m_editing);
     for (auto* button : m_toolbar->findChildren<QPushButton*>("captureModeButton")) {
         const auto mode = hyprcapture::parseCaptureMode(button->property("captureMode").toString().toStdString());
-        const bool visible = m_editing || !m_defaults.fushionMode || mode == hyprcapture::CaptureMode::Fullscreen;
+        const bool visible = !m_scrollMode && !m_scrollResult && (m_editing || !m_defaults.fushionMode || mode == hyprcapture::CaptureMode::Fullscreen);
         button->setVisible(visible);
         button->setFixedSize(visible ? QSize(36, 32) : QSize(0, 0));
         button->setChecked(mode == m_mode);
     }
     if (m_fullscreenScope) {
-        const bool visible = hasMultipleMonitors() && (m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Fullscreen);
+        const bool visible = !m_scrollMode && !m_scrollResult && hasMultipleMonitors() && (m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Fullscreen);
         m_fullscreenScope->setControlVisible(visible);
     }
 
     if (m_windowBackground) {
-        const bool visible = m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Window;
+        const bool visible = !m_scrollMode && !m_scrollResult && (m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Window);
         m_windowBackground->setControlVisible(visible);
     }
 
+    if (m_scrollToggle) {
+        const bool visible = !m_record && !m_recordActive && !m_editing && !m_quick &&
+            m_regionCaptureAvailable;
+        m_scrollToggle->setVisible(visible);
+        m_scrollToggle->setFixedSize(visible ? QSize(36, 32) : QSize(0, 0));
+        m_scrollToggle->setChecked(m_scrollMode);
+    }
+    if (m_recordToggle) {
+        m_recordToggle->setVisible(!m_scrollMode && !m_scrollResult);
+        m_recordToggle->setFixedSize(m_scrollMode || m_scrollResult ? QSize(0, 0) : QSize(36, 32));
+    }
     updateRecordOptionsVisibility();
     updateConfirmButtonVisibility();
     relayoutToolbar();
@@ -3006,7 +3045,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     if (m_editing)
         return;
 
-    const bool fusionGesture = m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen;
+    const bool fusionGesture = !m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen;
     const bool fusionTargetPreview = fusionGesture && !pendingConfirmActive();
     const QRect sel = normalizedSelection().intersected(regionCaptureBounds());
     const bool selectionLargeEnough = sel.width() > 4 && sel.height() > 4;
@@ -3117,7 +3156,7 @@ void CaptureOverlay::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
+    if (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
         if (m_record)
             m_recordError.clear();
         m_mode = hyprcapture::CaptureMode::Region;
@@ -3180,7 +3219,7 @@ void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
         }
     }
 
-    if (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
+    if (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
         if (m_dragging)
             m_dragEnd = clampedToRect(event->pos(), regionCaptureBounds());
         updateStatus();
@@ -3256,7 +3295,7 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
 
-    if (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
+    if (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
         if (!m_dragging)
             return;
 
@@ -3439,7 +3478,7 @@ void CaptureOverlay::keyPressEvent(QKeyEvent* event) {
             return;
         }
 
-        if (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
+        if (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
             const QRect selection = normalizedSelection().intersected(regionCaptureBounds());
             if (selection.width() > 4 && selection.height() > 4) {
                 m_mode = hyprcapture::CaptureMode::Region;
@@ -3870,7 +3909,7 @@ bool CaptureOverlay::windowWheelSelectionEnabled() const {
     if (pendingConfirmActive())
         return m_mode == hyprcapture::CaptureMode::Window;
     return m_mode == hyprcapture::CaptureMode::Window ||
-        (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen);
+        (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen);
 }
 
 std::vector<int> CaptureOverlay::currentMonitorWindowCandidates() const {
@@ -3966,6 +4005,18 @@ void CaptureOverlay::updateStatus() {
 
     if (!m_recordError.isEmpty()) {
         setStatusText(m_recordError);
+        relayoutToolbar();
+        return;
+    }
+
+    if (m_scrollMode) {
+        setStatusText("Select scrolling content, excluding fixed headers");
+        updateConfirmButtonVisibility();
+        relayoutToolbar();
+        return;
+    }
+    if (m_scrollResult) {
+        setStatusText("Long screenshot");
         relayoutToolbar();
         return;
     }
@@ -4407,13 +4458,66 @@ bool CaptureOverlay::stopRecording() {
     return dispatchRecordingStop().success;
 }
 
-void CaptureOverlay::beginInPlaceEdit() {
+void CaptureOverlay::beginScrollCapture() {
+    if (m_scrolling || m_editing)
+        return;
+    if (m_hymissionOverviewSession) {
+        m_recordError = tr("Exit overview before scrolling capture");
+        updateStatus();
+        return;
+    }
+    if (m_mode != hyprcapture::CaptureMode::Region || !regionSelectionValid(normalizedSelection())) {
+        m_mode = hyprcapture::CaptureMode::Region;
+        m_recordError = tr("Select scrolling content, excluding fixed headers");
+        updateStatus();
+        return;
+    }
+    auto* controller = new hyprcapture::ui::ScrollCaptureController;
+    QString error;
+    if (!controller->prepare(localToDesktopLogicalRect(normalizedSelection().intersected(regionCaptureBounds())), error)) {
+        delete controller;
+        m_recordError = error;
+        updateStatus();
+        return;
+    }
+    connect(this, &QObject::destroyed, controller, &QObject::deleteLater);
+    connect(controller, &hyprcapture::ui::ScrollCaptureController::completed, this, [this, controller](const QImage& image) {
+        m_scrolling = false;
+        m_scrollMode = false;
+        m_scrollResult = true;
+        emit scrollingChanged(false);
+        beginInPlaceEdit(image);
+        activateWindow();
+        if (m_editor) m_editor->setFocus();
+        controller->deleteLater();
+    });
+    connect(controller, &hyprcapture::ui::ScrollCaptureController::cancelled, this, [this, controller] {
+        m_scrolling = false;
+        m_recordError.clear();
+        clearPendingConfirm();
+        emit scrollingChanged(false);
+        updateToolbarControlsForMode();
+        updateStatus();
+        activateWindow();
+        setFocus();
+        controller->deleteLater();
+    });
+    m_scrolling = true;
+    m_pendingConfirm = false;
+    m_dragging = false;
+    hideOptionPopups();
+    endHymissionCaptureInputSuppression();
+    emit scrollingChanged(true);
+    controller->start();
+}
+
+void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
     if (m_editing || m_record || m_recordActive)
         return;
     // Once a window is chosen, toolbar pointer movement must not retarget it.
     if (m_mode == hyprcapture::CaptureMode::Window && !selectedWindow())
         m_selectedWindowIndex = hoveredWindowIndex();
-    auto image = renderResultImage();
+    auto image = capturedImage.isNull() ? renderResultImage() : capturedImage;
     if (image.isNull()) {
         m_recordError = tr("Could not capture the selected target");
         updateStatus();
@@ -4432,13 +4536,13 @@ void CaptureOverlay::beginInPlaceEdit() {
     }
     // Window captures stay at their original desktop position, including
     // windows crossing output edges. Only a full-desktop capture auto-fits.
-    if (m_mode != hyprcapture::CaptureMode::Window && !rect().contains(m_editImageRect))
+    if (m_scrollResult || (m_mode != hyprcapture::CaptureMode::Window && !rect().contains(m_editImageRect)))
         m_editImageRect = {};
     if (!m_editor) {
         m_editor = new AnnotationEditor(this);
         m_editor->setObjectName("inPlaceEditor");
         connect(m_editor, &AnnotationEditor::captureRectChangeRequested, this, [this](const QRect& requested) {
-            if (!m_editing || m_finishing || m_mode != hyprcapture::CaptureMode::Region) return;
+            if (!m_editing || m_finishing || m_scrollResult || m_mode != hyprcapture::CaptureMode::Region) return;
             const QRect target = requested.intersected(regionCaptureBounds());
             if (!regionSelectionValid(target)) return;
             const QPoint previousStart = m_dragStart, previousEnd = m_dragEnd;
@@ -4469,7 +4573,7 @@ void CaptureOverlay::beginInPlaceEdit() {
     m_dragging = false;
     m_recordError.clear();
     m_editor->setGeometry(rect());
-    m_editor->setRegionResizeBounds(m_mode == hyprcapture::CaptureMode::Region ? regionCaptureBounds() : QRect());
+    m_editor->setRegionResizeBounds(!m_scrollResult && m_mode == hyprcapture::CaptureMode::Region ? regionCaptureBounds() : QRect());
     m_editor->setImage(image, false);
     m_editor->setImageDisplayRect(m_editImageRect);
     m_editor->show();
@@ -4482,7 +4586,7 @@ void CaptureOverlay::beginInPlaceEdit() {
 }
 
 void CaptureOverlay::refreshInPlaceImage() {
-    if (!m_editing || !m_editor)
+    if (!m_editing || !m_editor || m_scrollResult)
         return;
     auto image = renderResultImage();
     if (image.isNull()) {
@@ -4500,6 +4604,7 @@ void CaptureOverlay::leaveInPlaceEdit() {
     if (!m_editing)
         return;
     m_editing = false;
+    m_scrollResult = false;
     m_editor->hide();
     m_editedOutput = {};
     m_fullscreenClientSelected = false;
@@ -4647,8 +4752,12 @@ void CaptureOverlay::pinInPlaceImage() {
 }
 
 void CaptureOverlay::finishCapture() {
-    if (m_finishing)
+    if (m_finishing || m_scrolling)
         return;
+    if (m_scrollMode && !m_record && !m_recordActive) {
+        beginScrollCapture();
+        return;
+    }
     if (m_defaults.inPlaceEditToolbar && !m_record && !m_recordActive) {
         beginInPlaceEdit();
         return;

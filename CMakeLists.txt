@@ -111,6 +111,8 @@ add_executable(hyprcapture-ui
   src/ui/main.cpp
   src/ui/clipboard_utils.cpp
   src/ui/capture_overlay.cpp
+  src/ui/scroll_stitcher.cpp
+  src/ui/scroll_capture.cpp
   src/ui/annotation_editor.cpp
   src/ui/pinned_image.cpp
   src/ui/i18n.cpp
@@ -214,6 +216,13 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-in-place-editor-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
   add_test(NAME in-place-editor COMMAND hyprcapture-in-place-editor-test)
   set_tests_properties(in-place-editor PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+  add_executable(hyprcapture-scroll-live-test tests/scroll_capture_live_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
+  set_target_properties(hyprcapture-scroll-live-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
+  target_include_directories(hyprcapture-scroll-live-test PRIVATE src ${GIO_INCLUDE_DIRS})
+  target_link_libraries(hyprcapture-scroll-live-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
+  add_test(NAME scroll-live COMMAND hyprcapture-scroll-live-test)
+  set_tests_properties(scroll-live PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+
   add_executable(hyprcapture-audio-timeline-test tests/audio_timeline_test.cpp)
   target_include_directories(hyprcapture-audio-timeline-test PRIVATE src)
   target_compile_options(hyprcapture-audio-timeline-test PRIVATE -UNDEBUG)
@@ -229,6 +238,18 @@ if(BUILD_TESTING)
     add_test(NAME hyprcapture-audio-finalize-test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/audio_finalize_test.py $<TARGET_FILE:hyprcapture-ui>)
     set_tests_properties(hyprcapture-audio-finalize-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
   endif()
+  add_executable(hyprcapture-scroll-capture-test tests/scroll_capture_test.cpp src/shared/config.cpp src/shared/protocol.cpp src/ui/scroll_capture.cpp src/ui/scroll_stitcher.cpp src/ui/clipboard_utils.cpp src/ui/i18n.cpp src/shared/process_environment.cpp src/shared/trusted_path.cpp)
+  target_include_directories(hyprcapture-scroll-capture-test PRIVATE src)
+  target_link_libraries(hyprcapture-scroll-capture-test PRIVATE Qt6::Widgets Qt6::Test LayerShellQt::Interface nlohmann_json::nlohmann_json)
+  add_test(NAME scroll-capture COMMAND hyprcapture-scroll-capture-test)
+  set_tests_properties(scroll-capture PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+
+  add_executable(hyprcapture-scroll-stitcher-test tests/scroll_stitcher_test.cpp src/ui/scroll_stitcher.cpp)
+  target_include_directories(hyprcapture-scroll-stitcher-test PRIVATE src)
+  target_link_libraries(hyprcapture-scroll-stitcher-test PRIVATE Qt6::Gui)
+  add_test(NAME scroll-stitcher COMMAND hyprcapture-scroll-stitcher-test)
+  set_tests_properties(scroll-stitcher PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
   add_executable(hyprcapture-mapped-image-test tests/mapped_image_test.cpp)
   target_include_directories(hyprcapture-mapped-image-test PRIVATE src)
   target_link_libraries(hyprcapture-mapped-image-test PRIVATE Qt6::Gui)
