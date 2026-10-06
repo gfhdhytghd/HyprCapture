@@ -1,3 +1,7 @@
+#include "ui/timing.hpp"
+#include "ui/mapped_image.hpp"
+#include "ui/scroll_capture.hpp"
+#include "ui/material_icon.hpp"
 #include <QScrollArea>
 #include <QSlider>
 #include <QCheckBox>
@@ -13,6 +17,8 @@
 #include "ui/remembered_settings.hpp"
 #include "audio/aec_policy.hpp"
 #include "ui/result_thumbnail.hpp"
+#include "ui/annotation_editor.hpp"
+#include "ui/i18n.hpp"
 #include "ui/screenshot_notification.hpp"
 #include "ui/watermark.hpp"
 #include "shared/protocol.hpp"
@@ -41,12 +47,15 @@
 #include <QJsonObject>
 #include <QKeyEvent>
 #include <QLabel>
+#include <QLocalServer>
+#include <QLocalSocket>
 #include <QMouseEvent>
 #include <QMetaObject>
 #include <QPalette>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QPointer>
 #include <QProcess>
 #include <QPropertyAnimation>
 #include <QPushButton>
@@ -69,6 +78,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <memory>
 #include <utility>
 
 class InlineSelect final : public QWidget {
@@ -153,13 +163,6 @@ struct TransparentAutoChoice {
     QString warning;
 };
 
-const char* kFullscreenSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M128 266.666667v490.666666a53.393333 53.393333 0 0 0 53.333333 53.333334h661.333334a53.393333 53.393333 0 0 0 53.333333-53.333334V266.666667a53.393333 53.393333 0 0 0-53.333333-53.333334H181.333333a53.393333 53.393333 0 0 0-53.333333 53.333334z m725.333333 0v490.666666a10.666667 10.666667 0 0 1-10.666666 10.666667H181.333333a10.666667 10.666667 0 0 1-10.666666-10.666667V266.666667a10.666667 10.666667 0 0 1 10.666666-10.666667h661.333334a10.666667 10.666667 0 0 1 10.666666 10.666667z m-597.333333 608a21.333333 21.333333 0 0 1-21.333333 21.333333H96a53.393333 53.393333 0 0 1-53.333333-53.333333v-138.666667a21.333333 21.333333 0 0 1 42.666666 0v138.666667a10.666667 10.666667 0 0 0 10.666667 10.666666h138.666667a21.333333 21.333333 0 0 1 21.333333 21.333334zM42.666667 320V181.333333a53.393333 53.393333 0 0 1 53.333333-53.333333h138.666667a21.333333 21.333333 0 0 1 0 42.666667H96a10.666667 10.666667 0 0 0-10.666667 10.666666v138.666667a21.333333 21.333333 0 0 1-42.666666 0z m938.666666-138.666667v138.666667a21.333333 21.333333 0 0 1-42.666666 0V181.333333a10.666667 10.666667 0 0 0-10.666667-10.666666h-138.666667a21.333333 21.333333 0 0 1 0-42.666667h138.666667a53.393333 53.393333 0 0 1 53.333333 53.333333z m0 522.666667v138.666667a53.393333 53.393333 0 0 1-53.333333 53.333333h-138.666667a21.333333 21.333333 0 0 1 0-42.666667h138.666667a10.666667 10.666667 0 0 0 10.666667-10.666666v-138.666667a21.333333 21.333333 0 0 1 42.666666 0z" fill="#000000"/></svg>)";
-const char* kWindowSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M808.125883 243.195881 134.874315 243.195881c-30.608112 0-55.513338 24.905226-55.513338 55.520501l0 505.178641c0 30.615275 24.905226 55.520501 55.513338 55.520501L808.125883 859.415524c30.607088 0 55.512315-24.905226 55.512315-55.520501L863.638197 298.716382C863.638197 268.101107 838.733994 243.195881 808.125883 243.195881zM835.629283 803.895023c0 15.167444-12.338003 27.510564-27.503401 27.510564L134.874315 831.405587c-15.167444 0-27.504424-12.343119-27.504424-27.510564L107.369891 383.246591l728.259392 0L835.629283 803.895023zM835.629283 355.236654 107.370915 355.236654l0-56.519248c0-15.173584 12.33698-27.510564 27.504424-27.510564L808.125883 271.206842c15.165398 0 27.503401 12.33698 27.503401 27.510564L835.629283 355.236654zM920.166655 131.156132 274.924002 131.156132c-30.608112 0-55.513338 24.905226-55.513338 55.514361l0 28.515451c0 7.734148 6.263657 14.004969 14.005992 14.004969 7.740288 0 14.005992-6.27082 14.005992-14.004969l0-28.515451c0-15.167444 12.33698-27.504424 27.503401-27.504424L920.167678 159.166069c15.165398 0 27.503401 12.33698 27.503401 27.504424l0 519.188726c0 15.167444-12.338003 27.511587-27.503401 27.511587l-28.516474 0c-7.739265 0-14.004969 6.27082-14.004969 14.004969 0 7.736195 6.263657 14.007015 14.004969 14.007015l28.516474 0c30.607088 0 55.512315-24.905226 55.512315-55.521524L975.679993 186.670493C975.67897 156.061358 950.773743 131.156132 920.166655 131.156132zM219.410664 299.216779l-56.019875 0c-7.740288 0-14.005992 6.27082-14.005992 13.998829 0 7.740288 6.263657 14.011108 14.005992 14.011108l56.019875 0c7.740288 0 14.005992-6.27082 14.005992-14.011108C233.415632 305.487599 227.151975 299.216779 219.410664 299.216779zM331.450413 299.216779l-56.019875 0c-7.741311 0-14.005992 6.27082-14.005992 13.998829 0 7.740288 6.262634 14.011108 14.005992 14.011108l56.019875 0c7.739265 0 14.004969-6.27082 14.004969-14.011108C345.455381 305.487599 339.191724 299.216779 331.450413 299.216779zM443.490162 299.216779l-56.018851 0c-7.741311 0-14.007015 6.27082-14.007015 13.998829 0 7.740288 6.263657 14.011108 14.007015 14.011108l56.018851 0c7.740288 0 14.005992-6.27082 14.005992-14.011108C457.49513 305.487599 451.231473 299.216779 443.490162 299.216779z" fill="#000000"/></svg>)";
-const char* kRegionSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M960 256V64H768v64H256V64H64v192h64v512H64v192h192v-64h512v64h192V768h-64V256z m-128 512h-64v64H256v-64h-64V256h64v-64h512v64h64z" fill="#000000"/></svg>)";
-const char* kCancelSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M883.8304 41.01546667L512.00213333 412.84693333 140.1696 41.01546667c-27.38026667-27.3792-71.77386667-27.3792-99.1552 0-27.37813333 27.3792-27.37813333 71.77066667 0 99.1552l371.8336 371.83146666L41.0144 883.82933333c-27.37813333 27.38026667-27.37813333 71.776 0 99.15413334 27.38133333 27.38133333 71.776 27.38133333 99.1552 0L512.00213333 611.15733333l371.82933334 371.82613334c27.37813333 27.38133333 71.77386667 27.38133333 99.15306666 0 27.3792-27.37813333 27.3792-71.77386667 0-99.15413334L611.15733333 512.00213333 982.98453333 140.17066667c27.3792-27.38133333 27.3792-71.776 0-99.1552-27.3792-27.38133333-71.7696-27.38133333-99.15413333 0z m0 0" fill="#333333"/></svg>)";
-const char* kConfirmSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M398.5 741.1 190.9 533.5c-22.2-22.2-22.2-58.2 0-80.4s58.2-22.2 80.4 0l127.2 127.2 354.2-354.2c22.2-22.2 58.2-22.2 80.4 0s22.2 58.2 0 80.4L438.7 701c-11.1 11.1-25.6 16.6-40.2 16.6s-29.1-5.5-40-16.5z" fill="#333333"/></svg>)";
-const char* kRecordSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M507.6 508.2m-229.8 0a229.8 229.8 0 1 0 459.6 0 229.8 229.8 0 1 0-459.6 0Z" fill="#1c1c1c"/><path d="M507.6 952.9c-245.2 0-444.7-199.5-444.7-444.6S262.4 63.6 507.6 63.6s444.7 199.5 444.7 444.7-199.5 444.6-444.7 444.6z m0-837.2C291.2 115.7 115 291.8 115 508.3c0 216.5 176.1 392.6 392.7 392.6s392.7-176.1 392.7-392.6c-0.1-216.5-176.2-392.6-392.8-392.6z" fill="#1c1c1c"/></svg>)";
-const char* kSelectArrowSvg = R"(<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M827.733333 411.733333L526.933333 712.533333c-8.533333 8.533333-21.333333 8.533333-29.866666 0L196.266667 411.733333c-17.066667-17.066667-17.066667-42.666667 0-59.733333 17.066667-17.066667 42.666667-17.066667 59.733333 0l256 256 256-256c17.066667-17.066667 42.666667-17.066667 59.733333 0s17.066667 42.666667 0 59.733333z"/></svg>)";
 
 QString qString(const std::string& value) {
     return QString::fromStdString(value);
@@ -473,32 +476,8 @@ QString recordTemplateWithFormat(const std::string& filenameTemplate, const QStr
     return value + QLatin1Char('.') + normalizedRecordFormat(format);
 }
 
-bool timingEnabled() {
-    return qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING") || qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING_FILE");
-}
-
-void traceTiming(const QString& event, qint64 elapsedMs = -1) {
-    if (!timingEnabled())
-        return;
-
-    QString line = QStringLiteral("%1 pid=%2 %3")
-                       .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
-                       .arg(QCoreApplication::applicationPid())
-                       .arg(event);
-    if (elapsedMs >= 0)
-        line += QStringLiteral(" elapsed_ms=%1").arg(elapsedMs);
-    line += QLatin1Char('\n');
-
-    const QString path = qEnvironmentVariable("HYPRCAPTURE_TIMING_FILE");
-    if (!path.isEmpty()) {
-        QFile file(path);
-        if (hyprcapture::ui::isPrivateRuntimePath(path) && file.open(QIODevice::WriteOnly | QIODevice::Append))
-            file.write(line.toUtf8());
-        return;
-    }
-
-    fputs(line.toLocal8Bit().constData(), stderr);
-}
+using hyprcapture::ui::traceTiming;
+using hyprcapture::ui::ScopedUiTiming;
 
 bool savePng(const QImage& image, const QString& path) {
     QFile file(path);
@@ -778,20 +757,8 @@ double maxScreenDevicePixelRatio() {
     return dpr;
 }
 
-QIcon iconFromSvg(const char* svg, int logicalSize = kModeIconSize, double rotationDegrees = 0.0) {
-    QSvgRenderer renderer{QByteArray(svg)};
-    const double dpr = maxScreenDevicePixelRatio();
-    QPixmap pixmap(QSize(std::max(1, static_cast<int>(std::ceil(logicalSize * dpr))),
-                         std::max(1, static_cast<int>(std::ceil(logicalSize * dpr)))));
-    pixmap.setDevicePixelRatio(dpr);
-    pixmap.fill(Qt::transparent);
-    QPainter painter(&pixmap);
-    painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.translate(logicalSize / 2.0, logicalSize / 2.0);
-    if (rotationDegrees != 0.0)
-        painter.rotate(rotationDegrees);
-    renderer.render(&painter, QRectF(-logicalSize / 2.0, -logicalSize / 2.0, logicalSize, logicalSize));
-    return QIcon(pixmap);
+QIcon toolbarIcon(std::string_view name, double rotationDegrees = 0.0) {
+    return hyprcapture::ui::materialIcon(name, QApplication::palette().color(QPalette::WindowText), rotationDegrees);
 }
 
 QColor followSystemColor() {
@@ -959,14 +926,29 @@ QImage loadRawRgba(const QString& path, int width, int height, bool topDown, qin
         !file.open(QIODevice::ReadOnly))
         return {};
 
-    const QByteArray bytes = file.readAll();
-    if (bytes.size() != expected)
+    if (file.size() != expected)
         return {};
-
-    QImage image(reinterpret_cast<const uchar*>(bytes.constData()), width, height, width * 4, QImage::Format_RGBA8888);
-    QImage copy = image.copy();
+    QImage image = hyprcapture::ui::mapRawRgba(file, width, height);
+    if (!image.isNull()) {
+        remainingSessionBytes -= expected;
+        return topDown ? image : image.flipped(Qt::Vertical);
+    }
+    // Mapping is an optimization, not a prerequisite (e.g. address-space
+    // pressure). Retain the bounded owned-buffer path as a fallback.
+    image = QImage(width, height, QImage::Format_RGBA8888);
+    if (image.isNull())
+        return {};
+    qint64 read = 0;
+    while (read < expected) {
+        const auto count = file.read(reinterpret_cast<char*>(image.bits()) + read, expected - read);
+        if (count <= 0)
+            return {};
+        read += count;
+    }
+    if (!file.atEnd())
+        return {};
     remainingSessionBytes -= expected;
-    return topDown ? copy : copy.flipped(Qt::Vertical);
+    return topDown ? image : std::move(image).flipped(Qt::Vertical);
 }
 
 int inverseRotationDegreesForMonitorTransform(int transform) {
@@ -1320,7 +1302,7 @@ void InlineSelect::addItems(const QStringList& items) {
 
     for (const auto& item : m_items) {
         const auto found = m_labels.find(item);
-        const auto label = found == m_labels.end() ? item : found->second;
+        const auto label = hyprcapture::ui::uiText(found == m_labels.end() ? item : found->second);
         auto* button = new QPushButton(m_button->fontMetrics().elidedText(label, Qt::ElideRight, 380), m_panelLayout->parentWidget());
         button->setToolTip(label);
         button->setProperty("value", item);
@@ -1350,7 +1332,7 @@ void InlineSelect::addItems(const QStringList& items) {
 }
 
 void InlineSelect::setPrefix(const QString& prefix) {
-    m_prefix = prefix;
+    m_prefix = hyprcapture::ui::uiText(prefix);
     if (!m_current.isEmpty())
         m_button->setText(buttonText(m_current));
 }
@@ -1410,7 +1392,7 @@ bool InlineSelect::isPopupVisible() const {
 
 QString InlineSelect::buttonText(const QString& text) const {
     const auto found = m_labels.find(text);
-    const auto label = found == m_labels.end() ? text : found->second;
+    const auto label = hyprcapture::ui::uiText(found == m_labels.end() ? text : found->second);
     if (m_prefix.isEmpty()) return label;
     return m_prefix + QStringLiteral(": ") + label;
 }
@@ -1419,7 +1401,7 @@ void InlineSelect::updateButtonIcon() {
     if (!m_button)
         return;
     const double rotationDegrees = isPopupVisible() ? 180.0 : 0.0;
-    m_button->setIcon(iconFromSvg(kSelectArrowSvg, kSelectArrowIconSize, rotationDegrees));
+    m_button->setIcon(toolbarIcon("keyboard_arrow_down", rotationDegrees));
 }
 
 void InlineSelect::positionPopup() {
@@ -1458,14 +1440,18 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     constructorTimer.start();
     QElapsedTimer parseTimer;
     parseTimer.start();
+    const std::string requestedLanguage = m_defaults.language;
     parseSessionJson(sessionJson);
+    if (!requestedLanguage.empty() && requestedLanguage != "auto" && requestedLanguage != "system")
+        m_defaults.language = requestedLanguage;
+    hyprcapture::ui::installUiTranslations(qString(m_defaults.language));
     hyprcapture::ui::restoreAecPreferences(m_defaults);
     if (!m_quick && !m_recordActive && hyprcapture::ui::restoreSettings(m_defaults)) {
         m_mode = m_defaults.mode;
         m_recordFormatAuto = false;
         m_recordCodecAuto = false;
     }
-    m_confirmBeforeCapture = m_defaults.confirmBeforeCapture && !m_quick && !m_record && !m_recordActive;
+    m_confirmBeforeCapture = m_defaults.confirmBeforeCapture && !m_defaults.inPlaceEditToolbar && !m_quick && !m_record && !m_recordActive;
     beginHymissionCaptureInputSuppression();
     traceTiming(QStringLiteral("parse_session"), parseTimer.elapsed());
 
@@ -1487,8 +1473,10 @@ CaptureOverlay::CaptureOverlay(const CaptureOverlay& source, const QRect& overla
       m_quick(source.m_quick),
       m_record(source.m_record),
       m_recordActive(source.m_recordActive),
+      m_scrollMode(source.m_scrollMode),
       m_recordError(source.m_recordError),
       m_sessionDecoded(source.m_sessionDecoded),
+      m_regionCaptureAvailable(source.m_regionCaptureAvailable),
       m_hymissionOverviewSession(source.m_hymissionOverviewSession),
       m_confirmBeforeCapture(source.m_confirmBeforeCapture),
       m_overlayActive(active),
@@ -1599,6 +1587,8 @@ void CaptureOverlay::setOverlayActive(bool active) {
     }
     if (m_toolbar)
         m_toolbar->setVisible(active);
+    if (m_editor)
+        m_editor->setVisible(active && m_editing);
     if (active) {
         setCursor(Qt::CrossCursor);
         raise();
@@ -1614,6 +1604,9 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
 
     m_mode = source.m_mode;
     m_record = source.m_record;
+    m_scrollMode = source.m_scrollMode;
+    if (m_scrollToggle)
+        m_scrollToggle->setChecked(m_scrollMode);
     m_recordError = source.m_recordError;
     m_recordFormatAuto = source.m_recordFormatAuto;
     m_recordCodecAuto = source.m_recordCodecAuto;
@@ -1640,6 +1633,8 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
         m_fullscreenScope->setCurrentText(qString(hyprcapture::toString(source.currentFullscreenScope())));
     if (m_windowBackground)
         m_windowBackground->setCurrentText(qString(hyprcapture::toString(source.currentWindowBackground())));
+    if (m_record && !m_recordActive)
+        ensureRecordControls();
     if (m_recordFormat)
         m_recordFormat->setCurrentText(source.currentRecordFormat());
     if (m_recordCodec)
@@ -1669,6 +1664,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         return;
 
     m_sessionDecoded = true;
+    m_regionCaptureAvailable = decoded->regionCaptureAvailable;
     m_defaults = decoded->defaults;
     m_mode = m_defaults.mode;
     if (decoded->cursorPosition) {
@@ -1759,30 +1755,10 @@ void CaptureOverlay::captureScreensBeforeOverlay() {
     if (!m_desktopGeometry.isValid())
         return;
 
-    if (!m_monitorArtifacts.empty()) {
-        double scaleX = 1.0;
-        double scaleY = 1.0;
-        for (const auto& artifact : m_monitorArtifacts) {
-            if (!artifact.image.isNull() && artifact.logicalGeometry.isValid()) {
-                scaleX = std::max(scaleX, static_cast<double>(artifact.image.width()) / std::max(1, artifact.logicalGeometry.width()));
-                scaleY = std::max(scaleY, static_cast<double>(artifact.image.height()) / std::max(1, artifact.logicalGeometry.height()));
-            }
-        }
-
-        const QSize imageSize = boundedScaledSize(m_desktopGeometry.width(), m_desktopGeometry.height(), scaleX, scaleY);
-        m_desktopImage = boundedImage(imageSize, QImage::Format_RGBA8888);
-        if (m_desktopImage.isNull())
-            return;
-        m_desktopImage.fill(QColor(30, 34, 38));
-
-        QPainter painter(&m_desktopImage);
-        for (const auto& artifact : m_monitorArtifacts) {
-            const QRect target = logicalRectToOutputRect(artifact.logicalGeometry, m_desktopGeometry, scaleX, scaleY).intersected(m_desktopImage.rect());
-            if (target.isValid())
-                painter.drawImage(target, artifact.image);
-        }
+    // paintDesktop() draws these artifacts directly. Compose a full desktop
+    // only if a later export needs its background/fallback pixels.
+    if (!m_monitorArtifacts.empty())
         return;
-    }
 
     const QString grimProgram = hyprcapture::ui::trustedSystemProgram(QStringLiteral("grim"));
     QProcess      grim;
@@ -1817,6 +1793,35 @@ void CaptureOverlay::captureScreensBeforeOverlay() {
         const QRect target = logicalRectToOutputRect(screen->geometry(), m_desktopGeometry, scale, scale).intersected(m_desktopImage.rect());
         if (target.isValid())
             painter.drawPixmap(target, pixmap);
+    }
+}
+
+void CaptureOverlay::ensureDesktopImage() {
+    if (!m_desktopImage.isNull() || !m_desktopGeometry.isValid())
+        return;
+
+    if (!m_monitorArtifacts.empty()) {
+        double scaleX = 1.0;
+        double scaleY = 1.0;
+        for (const auto& artifact : m_monitorArtifacts) {
+            if (!artifact.image.isNull() && artifact.logicalGeometry.isValid()) {
+                scaleX = std::max(scaleX, static_cast<double>(artifact.image.width()) / std::max(1, artifact.logicalGeometry.width()));
+                scaleY = std::max(scaleY, static_cast<double>(artifact.image.height()) / std::max(1, artifact.logicalGeometry.height()));
+            }
+        }
+
+        const QSize imageSize = boundedScaledSize(m_desktopGeometry.width(), m_desktopGeometry.height(), scaleX, scaleY);
+        m_desktopImage = boundedImage(imageSize, QImage::Format_RGBA8888);
+        if (m_desktopImage.isNull())
+            return;
+        m_desktopImage.fill(QColor(30, 34, 38));
+
+        QPainter painter(&m_desktopImage);
+        for (const auto& artifact : m_monitorArtifacts) {
+            const QRect target = logicalRectToOutputRect(artifact.logicalGeometry, m_desktopGeometry, scaleX, scaleY).intersected(m_desktopImage.rect());
+            if (target.isValid())
+                painter.drawImage(target, artifact.image);
+        }
     }
 }
 
@@ -1891,13 +1896,14 @@ void CaptureOverlay::buildToolbar() {
     const auto addMode = [&](const QString& tooltip, hyprcapture::CaptureMode mode, const QIcon& icon) {
         auto* button = new QPushButton(m_toolbar);
         button->setObjectName("captureModeButton");
+        button->setProperty("captureMode", qString(hyprcapture::toString(mode)));
         button->setFlat(true);
         button->setFocusPolicy(Qt::NoFocus);
         button->setIcon(icon);
         button->setIconSize(QSize(kModeIconSize, kModeIconSize));
         button->setFixedSize(36, 32);
-        button->setToolTip(tooltip);
-        button->setAccessibleName(tooltip);
+        button->setToolTip(hyprcapture::ui::uiText(tooltip));
+        button->setAccessibleName(hyprcapture::ui::uiText(tooltip));
         button->setCheckable(true);
         button->setChecked(mode == m_mode);
         group->addButton(button);
@@ -1908,9 +1914,12 @@ void CaptureOverlay::buildToolbar() {
             button->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
         }
         connect(button, &QPushButton::clicked, this, [this, mode] {
+            if (m_editing && m_mode == mode)
+                return;
+            const bool wasEditing = m_editing;
             const bool wasActiveMode = m_mode == mode;
             setMode(mode);
-            if (mode == hyprcapture::CaptureMode::Fullscreen && (m_defaults.fushionMode || wasActiveMode)) {
+            if (mode == hyprcapture::CaptureMode::Fullscreen && (m_defaults.fushionMode || wasActiveMode || wasEditing)) {
                 if (confirmBeforeCaptureEnabled())
                     beginPendingConfirm(hyprcapture::CaptureMode::Fullscreen);
                 else
@@ -1918,17 +1927,27 @@ void CaptureOverlay::buildToolbar() {
             }
         });
     };
-    addMode("Fullscreen", hyprcapture::CaptureMode::Fullscreen, iconFromSvg(kFullscreenSvg));
-    addMode("Region", hyprcapture::CaptureMode::Region, iconFromSvg(kRegionSvg));
-    addMode("Window", hyprcapture::CaptureMode::Window, iconFromSvg(kWindowSvg));
+    addMode("Fullscreen", hyprcapture::CaptureMode::Fullscreen, toolbarIcon("screenshot_monitor"));
+    addMode("Region", hyprcapture::CaptureMode::Region, toolbarIcon("select_all"));
+    addMode("Window", hyprcapture::CaptureMode::Window, toolbarIcon("select_window"));
 
     m_fullscreenScope = new InlineSelect(this, m_toolbar);
     m_fullscreenScope->setPrefix("Full");
     m_fullscreenScope->addItems(QStringList{"all", "current", "per-monitor"});
     m_fullscreenScope->setCurrentText(qString(hyprcapture::toString(m_defaults.fullscreenScope)));
+        m_fullscreenScope->setOnChanged([this] {
+        if (m_editing) {
+            m_editImageRect = captureRectForMode();
+            if (!rect().contains(m_editImageRect))
+                m_editImageRect = {};
+            refreshInPlaceImage();
+        }
+        update();
+    });
     layout->addWidget(m_fullscreenScope);
 
     m_windowBackground = new InlineSelect(this, m_toolbar);
+    m_windowBackground->setObjectName("windowBackground");
     m_windowBackground->setPrefix("Bg");
     m_windowBackground->addItems(QStringList{"follow-system", "white", "black", "real", "transparent"});
     m_windowBackground->setCurrentText(qString(hyprcapture::toString(m_defaults.windowBackground)));
@@ -1936,19 +1955,41 @@ void CaptureOverlay::buildToolbar() {
         if (m_record)
             applyRecordDefaultsForCurrentBackground();
         updateRecordWarning();
+        if (m_editing)
+            refreshInPlaceImage();
         updateStatus();
     });
     layout->addWidget(m_windowBackground);
+
+    m_scrollToggle = new QPushButton(m_toolbar);
+    m_scrollToggle->setObjectName("scrollCaptureToggle");
+    m_scrollToggle->setFlat(true);
+    m_scrollToggle->setFocusPolicy(Qt::NoFocus);
+    m_scrollToggle->setIcon(toolbarIcon("swap_calls"));
+    m_scrollToggle->setIconSize(QSize(kModeIconSize, kModeIconSize));
+    m_scrollToggle->setFixedSize(36, 32);
+    m_scrollToggle->setToolTip(hyprcapture::ui::uiText("Scrolling capture"));
+    m_scrollToggle->setAccessibleName(hyprcapture::ui::uiText("Scrolling capture"));
+    m_scrollToggle->setCheckable(true);
+    m_scrollToggle->setChecked(m_scrollMode);
+    layout->addWidget(m_scrollToggle);
+    connect(m_scrollToggle, &QPushButton::clicked, this, [this](bool enabled) {
+        m_scrollMode = enabled;
+        m_recordError.clear();
+        m_dragStart = {};
+        m_dragEnd = {};
+        setMode(hyprcapture::CaptureMode::Region);
+    });
 
     m_recordToggle = new QPushButton(m_toolbar);
     m_recordToggle->setObjectName(m_recordActive ? "recordActiveButton" : "recordToggleButton");
     m_recordToggle->setFlat(true);
     m_recordToggle->setFocusPolicy(Qt::NoFocus);
-    m_recordToggle->setIcon(iconFromSvg(kRecordSvg));
+    m_recordToggle->setIcon(toolbarIcon("radio_button_checked"));
     m_recordToggle->setIconSize(QSize(kModeIconSize, kModeIconSize));
     m_recordToggle->setFixedSize(36, 32);
-    m_recordToggle->setToolTip(m_recordActive ? "Stop recording" : "Record");
-    m_recordToggle->setAccessibleName(m_recordActive ? "Stop recording" : "Record");
+    m_recordToggle->setToolTip(hyprcapture::ui::uiText(m_recordActive ? "Stop recording" : "Record"));
+    m_recordToggle->setAccessibleName(hyprcapture::ui::uiText(m_recordActive ? "Stop recording" : "Record"));
     m_recordToggle->setCheckable(true);
     m_recordToggle->setChecked(m_record || m_recordActive);
     layout->addWidget(m_recordToggle);
@@ -1966,7 +2007,10 @@ void CaptureOverlay::buildToolbar() {
         }
 
         m_recordError.clear();
+        if (m_editing)
+            leaveInPlaceEdit();
         m_record = m_recordToggle->isChecked();
+        updateToolbarControlsForMode();
         if (m_record)
             applyRecordDefaultsForCurrentBackground();
         updateRecordOptionsVisibility();
@@ -1975,24 +2019,25 @@ void CaptureOverlay::buildToolbar() {
     });
 
     auto* cancel = new QPushButton(m_toolbar);
+    cancel->setObjectName("captureCancel");
     cancel->setFlat(true);
     cancel->setFocusPolicy(Qt::NoFocus);
-    cancel->setIcon(iconFromSvg(kCancelSvg));
+    cancel->setIcon(toolbarIcon("close"));
     cancel->setIconSize(QSize(kCancelIconSize, kCancelIconSize));
     cancel->setFixedSize(36, 32);
-    cancel->setToolTip("Cancel");
-    cancel->setAccessibleName("Cancel");
+    cancel->setToolTip(hyprcapture::ui::uiText("Cancel"));
+    cancel->setAccessibleName(hyprcapture::ui::uiText("Cancel"));
     layout->addWidget(cancel);
     connect(cancel, &QPushButton::clicked, this, &CaptureOverlay::cancelCapture);
 
     m_confirmButton = new QPushButton(m_toolbar);
     m_confirmButton->setFlat(true);
     m_confirmButton->setFocusPolicy(Qt::NoFocus);
-    m_confirmButton->setIcon(iconFromSvg(kConfirmSvg, kConfirmIconSize));
+    m_confirmButton->setIcon(toolbarIcon("check"));
     m_confirmButton->setIconSize(QSize(kConfirmIconSize, kConfirmIconSize));
     m_confirmButton->setFixedSize(36, 32);
-    m_confirmButton->setToolTip("Capture");
-    m_confirmButton->setAccessibleName("Capture");
+    m_confirmButton->setToolTip(hyprcapture::ui::uiText("Capture"));
+    m_confirmButton->setAccessibleName(hyprcapture::ui::uiText("Capture"));
     layout->addWidget(m_confirmButton);
     connect(m_confirmButton, &QPushButton::clicked, this, &CaptureOverlay::confirmPendingCapture);
 
@@ -2000,6 +2045,19 @@ void CaptureOverlay::buildToolbar() {
     m_status->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     layout->addWidget(m_status);
 
+    if (m_record && !m_recordActive)
+        applyRecordDefaultsForCurrentBackground();
+    updateToolbarControlsForMode();
+    updateRecordOptionsVisibility();
+    updateRecordWarning();
+    updateStatus();
+    relayoutToolbar();
+}
+
+void CaptureOverlay::ensureRecordControls() {
+    if (m_recordOptions)
+        return;
+    auto* rootLayout = qobject_cast<QVBoxLayout*>(m_toolbar->layout());
     m_recordOptions = new QWidget(m_toolbar);
     auto* recordLayout = new QHBoxLayout(m_recordOptions);
     recordLayout->setContentsMargins(0, 0, 0, 0);
@@ -2184,13 +2242,6 @@ void CaptureOverlay::buildToolbar() {
     m_recordWarning->setStyleSheet(QStringLiteral("color: rgba(242, 170, 55, 255); padding: 2px 4px;"));
     rootLayout->addWidget(m_recordWarning);
 
-    if (m_record && !m_recordActive)
-        applyRecordDefaultsForCurrentBackground();
-    updateToolbarControlsForMode();
-    updateRecordOptionsVisibility();
-    updateRecordWarning();
-    updateStatus();
-    relayoutToolbar();
 }
 
 double CaptureOverlay::overlayOpacity() const {
@@ -2229,10 +2280,6 @@ void CaptureOverlay::runOverlayFade(double start, double end, std::function<void
     animation->start();
 }
 
-void CaptureOverlay::startFadeIn() {
-    runOverlayFade(m_overlayOpacity, 1.0, {});
-}
-
 void CaptureOverlay::fadeOutThen(std::function<void()> finished) {
     if (m_fadeOutStarted)
         return;
@@ -2252,11 +2299,26 @@ void CaptureOverlay::enterEvent(QEnterEvent* event) {
     QMainWindow::enterEvent(event);
 }
 
+bool CaptureOverlay::event(QEvent* event) {
+    const bool first = m_firstUpdatePending && event->type() == QEvent::UpdateRequest;
+    if (first)
+        m_firstUpdatePending = false;
+    // QWidget's update processing includes backing-store work, but this is
+    // not a compositor presentation timestamp. Pair it with openlayer externally.
+    if (!first)
+        return QMainWindow::event(event);
+    ScopedUiTiming updateTiming(QStringLiteral("overlay.first_update.%1.%2").arg(x()).arg(y()));
+    return QMainWindow::event(event);
+}
+
 void CaptureOverlay::showEvent(QShowEvent* event) {
+    traceTiming(QStringLiteral("overlay.show.%1.%2").arg(x()).arg(y()));
     QMainWindow::showEvent(event);
-    if (!m_fadeOutStarted && m_overlayOpacity < 1.0)
-        startFadeIn();
-    QTimer::singleShot(0, this, &CaptureOverlay::refreshInitialCursorPosition);
+    // A compositor session already initialized hit testing/status from its
+    // frozen cursor position. Do not schedule another full-screen repaint
+    // immediately after the first frame just to apply the same position.
+    if (!m_hasCursorLogicalPosition)
+        QTimer::singleShot(0, this, &CaptureOverlay::refreshInitialCursorPosition);
 }
 
 void CaptureOverlay::hideOptionPopups() {
@@ -2475,6 +2537,8 @@ QRect CaptureOverlay::regionSelectionForDrag(const QPoint& point) const {
 
 void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
     hideOptionPopups();
+    if (m_editing)
+        leaveInPlaceEdit();
 
     clearPendingConfirm();
     m_fullscreenClientSelected = false;
@@ -2487,16 +2551,36 @@ void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
 }
 
 void CaptureOverlay::updateToolbarControlsForMode() {
+    if (auto* cancel = m_toolbar->findChild<QPushButton*>("captureCancel"))
+        cancel->setVisible(!m_editing);
+    for (auto* button : m_toolbar->findChildren<QPushButton*>("captureModeButton")) {
+        const auto mode = hyprcapture::parseCaptureMode(button->property("captureMode").toString().toStdString());
+        const bool visible = !m_scrollMode && !m_scrollResult && (m_editing || !m_defaults.fushionMode || mode == hyprcapture::CaptureMode::Fullscreen);
+        button->setVisible(visible);
+        button->setFixedSize(visible ? QSize(36, 32) : QSize(0, 0));
+        button->setChecked(mode == m_mode);
+    }
     if (m_fullscreenScope) {
-        const bool visible = hasMultipleMonitors() && (m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Fullscreen);
+        const bool visible = !m_scrollMode && !m_scrollResult && hasMultipleMonitors() && (m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Fullscreen);
         m_fullscreenScope->setControlVisible(visible);
     }
 
     if (m_windowBackground) {
-        const bool visible = m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Window;
+        const bool visible = !m_scrollMode && !m_scrollResult && (m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Window);
         m_windowBackground->setControlVisible(visible);
     }
 
+    if (m_scrollToggle) {
+        const bool visible = !m_record && !m_recordActive && !m_editing && !m_quick &&
+            m_regionCaptureAvailable;
+        m_scrollToggle->setVisible(visible);
+        m_scrollToggle->setFixedSize(visible ? QSize(36, 32) : QSize(0, 0));
+        m_scrollToggle->setChecked(m_scrollMode);
+    }
+    if (m_recordToggle) {
+        m_recordToggle->setVisible(!m_scrollMode && !m_scrollResult);
+        m_recordToggle->setFixedSize(m_scrollMode || m_scrollResult ? QSize(0, 0) : QSize(36, 32));
+    }
     updateRecordOptionsVisibility();
     updateConfirmButtonVisibility();
     relayoutToolbar();
@@ -2576,6 +2660,7 @@ hyprcapture::RecordWindowBackend CaptureOverlay::currentRecordBackend() const {
 }
 
 void CaptureOverlay::applyRecordDefaultsForCurrentBackground() {
+    ensureRecordControls();
     const auto background = currentRecordBackground();
 
     if (background != hyprcapture::WindowBackground::Transparent) {
@@ -2826,6 +2911,8 @@ void CaptureOverlay::updateSoundMeter() {
 }
 
 void CaptureOverlay::updateRecordOptionsVisibility() {
+    if (m_record && !m_recordActive)
+        ensureRecordControls();
     if (!m_recordOptions)
         return;
 
@@ -2938,6 +3025,12 @@ void CaptureOverlay::paintCursorLayers(QPainter& painter, const QRect& outputRec
 }
 
 void CaptureOverlay::paintEvent(QPaintEvent*) {
+    std::optional<ScopedUiTiming> paintTiming;
+    if (std::exchange(m_firstPaintPending, false) && hyprcapture::ui::timingEnabled())
+        paintTiming.emplace(QStringLiteral("overlay.first_paint.%1.%2").arg(x()).arg(y()));
+    std::optional<ScopedUiTiming> visiblePaintTiming;
+    if (m_overlayActive && m_overlayOpacity > 0.0 && std::exchange(m_firstVisiblePaintPending, false) && hyprcapture::ui::timingEnabled())
+        visiblePaintTiming.emplace(QStringLiteral("overlay.first_visible_paint.%1.%2").arg(x()).arg(y()));
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
@@ -2949,8 +3042,10 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
 
     paintDesktop(painter, rect());
     painter.fillRect(rect(), QColor(0, 0, 0, 80));
+    if (m_editing)
+        return;
 
-    const bool fusionGesture = m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen;
+    const bool fusionGesture = !m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen;
     const bool fusionTargetPreview = fusionGesture && !pendingConfirmActive();
     const QRect sel = normalizedSelection().intersected(regionCaptureBounds());
     const bool selectionLargeEnough = sel.width() > 4 && sel.height() > 4;
@@ -3018,6 +3113,8 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
 }
 
 void CaptureOverlay::mousePressEvent(QMouseEvent* event) {
+    if (m_editing || m_finishing)
+        return;
     if (!requestActivation())
         return;
     if (m_toolbar->geometry().contains(event->pos()))
@@ -3059,7 +3156,7 @@ void CaptureOverlay::mousePressEvent(QMouseEvent* event) {
         return;
     }
 
-    if (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
+    if (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
         if (m_record)
             m_recordError.clear();
         m_mode = hyprcapture::CaptureMode::Region;
@@ -3091,6 +3188,8 @@ void CaptureOverlay::mousePressEvent(QMouseEvent* event) {
 }
 
 void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
+    if (m_editing || m_finishing)
+        return;
     if (!requestActivation())
         return;
     rememberCursorLocalPosition(event->position());
@@ -3120,7 +3219,7 @@ void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
         }
     }
 
-    if (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
+    if (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
         if (m_dragging)
             m_dragEnd = clampedToRect(event->pos(), regionCaptureBounds());
         updateStatus();
@@ -3140,6 +3239,8 @@ void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
 }
 
 void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
+    if (m_editing || m_finishing)
+        return;
     if (!requestActivation())
         return;
     rememberCursorLocalPosition(event->position());
@@ -3194,7 +3295,7 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         return;
     }
 
-    if (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
+    if (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
         if (!m_dragging)
             return;
 
@@ -3281,6 +3382,10 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
 }
 
 void CaptureOverlay::wheelEvent(QWheelEvent* event) {
+    if (m_editing || m_finishing) {
+        event->accept();
+        return;
+    }
     if (!requestActivation()) {
         event->accept();
         return;
@@ -3356,6 +3461,15 @@ void CaptureOverlay::wheelEvent(QWheelEvent* event) {
 }
 
 void CaptureOverlay::keyPressEvent(QKeyEvent* event) {
+    if (m_finishing)
+        return;
+    if (m_editing) {
+        if (event->key() == Qt::Key_Escape)
+            cancelCapture();
+        else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)
+            exportInPlaceImage();
+        return;
+    }
     if (event->key() == Qt::Key_Escape) {
         cancelCapture();
     } else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
@@ -3364,7 +3478,7 @@ void CaptureOverlay::keyPressEvent(QKeyEvent* event) {
             return;
         }
 
-        if (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
+        if (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen) {
             const QRect selection = normalizedSelection().intersected(regionCaptureBounds());
             if (selection.width() > 4 && selection.height() > 4) {
                 m_mode = hyprcapture::CaptureMode::Region;
@@ -3795,7 +3909,7 @@ bool CaptureOverlay::windowWheelSelectionEnabled() const {
     if (pendingConfirmActive())
         return m_mode == hyprcapture::CaptureMode::Window;
     return m_mode == hyprcapture::CaptureMode::Window ||
-        (m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen);
+        (!m_scrollMode && m_defaults.fushionMode && m_mode != hyprcapture::CaptureMode::Fullscreen);
 }
 
 std::vector<int> CaptureOverlay::currentMonitorWindowCandidates() const {
@@ -3866,7 +3980,10 @@ void CaptureOverlay::updateStatus() {
         m_status->setMinimumSize(0, 0);
         m_status->setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
         m_status->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-        m_status->setText(text);
+        const auto translated = hyprcapture::ui::uiText(text);
+        m_status->setToolTip(translated);
+        m_status->setAccessibleName(translated);
+        m_status->setText(m_status->fontMetrics().elidedText(translated, Qt::ElideRight, std::max(100, width() / 3)));
         m_status->adjustSize();
     };
     const auto setMissingWindowCaptureStatus = [&] {
@@ -3888,6 +4005,18 @@ void CaptureOverlay::updateStatus() {
 
     if (!m_recordError.isEmpty()) {
         setStatusText(m_recordError);
+        relayoutToolbar();
+        return;
+    }
+
+    if (m_scrollMode) {
+        setStatusText("Select scrolling content, excluding fixed headers");
+        updateConfirmButtonVisibility();
+        relayoutToolbar();
+        return;
+    }
+    if (m_scrollResult) {
+        setStatusText("Long screenshot");
         relayoutToolbar();
         return;
     }
@@ -3962,8 +4091,16 @@ void CaptureOverlay::relayoutToolbar() {
         m_toolbar->setFixedWidth(maxWidth);
     else
         m_toolbar->setFixedWidth(m_toolbar->sizeHint().width());
-    const int y = std::max(16, height() - m_toolbar->height() - 40);
-    m_toolbar->move(std::max(16, (width() - m_toolbar->width()) / 2), y);
+    if (m_editing && m_editor) {
+        m_editor->setGeometry(rect());
+        m_editor->setImageDisplayRect(m_editImageRect);
+        m_editor->setCaptureToolbarSize(m_toolbar->size());
+        m_toolbar->move(m_editor->captureToolbarGeometry().topLeft());
+        m_toolbar->raise();
+    } else {
+        m_toolbar->move(std::max(16, (width() - m_toolbar->width()) / 2),
+                        std::max(16, height() - m_toolbar->height() - 40));
+    }
 }
 
 QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalRect) const {
@@ -4104,6 +4241,7 @@ QImage CaptureOverlay::renderResultImage() {
                                  .intersected(windowArtifact->image.rect());
         }
 
+        ensureDesktopImage();
         QImage repairedArtifact = windowArtifact->image;
         repairMissingWindowTail(repairedArtifact, windowArtifact->fullGeometry, windowArtifact->visibleGeometry, m_desktopImage, m_desktopGeometry);
 
@@ -4158,6 +4296,7 @@ QImage CaptureOverlay::renderResultImage() {
             return highResolution;
     }
 
+    ensureDesktopImage();
     const QRect desktopSource = localToDesktopSourceRect(cap);
     const QSize outputSize = desktopSource.isValid() ? desktopSource.size() : cap.size();
     QImage image = boundedImage(outputSize.expandedTo(QSize(1, 1)), QImage::Format_ARGB32_Premultiplied);
@@ -4319,9 +4458,310 @@ bool CaptureOverlay::stopRecording() {
     return dispatchRecordingStop().success;
 }
 
-void CaptureOverlay::finishCapture() {
-    if (m_finishing)
+void CaptureOverlay::beginScrollCapture() {
+    if (m_scrolling || m_editing)
         return;
+    if (m_hymissionOverviewSession) {
+        m_recordError = tr("Exit overview before scrolling capture");
+        updateStatus();
+        return;
+    }
+    if (m_mode != hyprcapture::CaptureMode::Region || !regionSelectionValid(normalizedSelection())) {
+        m_mode = hyprcapture::CaptureMode::Region;
+        m_recordError = tr("Select scrolling content, excluding fixed headers");
+        updateStatus();
+        return;
+    }
+    auto* controller = new hyprcapture::ui::ScrollCaptureController;
+    QString error;
+    if (!controller->prepare(localToDesktopLogicalRect(normalizedSelection().intersected(regionCaptureBounds())), error)) {
+        delete controller;
+        m_recordError = error;
+        updateStatus();
+        return;
+    }
+    connect(this, &QObject::destroyed, controller, &QObject::deleteLater);
+    connect(controller, &hyprcapture::ui::ScrollCaptureController::completed, this, [this, controller](const QImage& image) {
+        m_scrolling = false;
+        m_scrollMode = false;
+        m_scrollResult = true;
+        emit scrollingChanged(false);
+        beginInPlaceEdit(image);
+        activateWindow();
+        if (m_editor) m_editor->setFocus();
+        controller->deleteLater();
+    });
+    connect(controller, &hyprcapture::ui::ScrollCaptureController::cancelled, this, [this, controller] {
+        m_scrolling = false;
+        m_recordError.clear();
+        clearPendingConfirm();
+        emit scrollingChanged(false);
+        updateToolbarControlsForMode();
+        updateStatus();
+        activateWindow();
+        setFocus();
+        controller->deleteLater();
+    });
+    m_scrolling = true;
+    m_pendingConfirm = false;
+    m_dragging = false;
+    hideOptionPopups();
+    endHymissionCaptureInputSuppression();
+    emit scrollingChanged(true);
+    controller->start();
+}
+
+void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
+    if (m_editing || m_record || m_recordActive)
+        return;
+    // Once a window is chosen, toolbar pointer movement must not retarget it.
+    if (m_mode == hyprcapture::CaptureMode::Window && !selectedWindow())
+        m_selectedWindowIndex = hoveredWindowIndex();
+    auto image = capturedImage.isNull() ? renderResultImage() : capturedImage;
+    if (image.isNull()) {
+        m_recordError = tr("Could not capture the selected target");
+        updateStatus();
+        return;
+    }
+    hyprcapture::ui::applyWatermark(image, m_defaults);
+    hideOptionPopups();
+    m_editImageRect = captureRectForMode();
+    if (m_mode == hyprcapture::CaptureMode::Window) {
+        if (const auto* window = selectedWindow()) {
+            const bool crop = currentWindowBorder() == hyprcapture::DecorationPolicy::Remove ||
+                currentWindowShadow() == hyprcapture::DecorationPolicy::Remove;
+            m_editImageRect = globalToLocalRect(crop && window->fullGeometry.contains(window->visibleGeometry)
+                                                   ? window->visibleGeometry : window->fullGeometry);
+        }
+    }
+    // Window captures stay at their original desktop position, including
+    // windows crossing output edges. Only a full-desktop capture auto-fits.
+    if (m_scrollResult || (m_mode != hyprcapture::CaptureMode::Window && !rect().contains(m_editImageRect)))
+        m_editImageRect = {};
+    if (!m_editor) {
+        m_editor = new AnnotationEditor(this);
+        m_editor->setObjectName("inPlaceEditor");
+        connect(m_editor, &AnnotationEditor::captureRectChangeRequested, this, [this](const QRect& requested) {
+            if (!m_editing || m_finishing || m_scrollResult || m_mode != hyprcapture::CaptureMode::Region) return;
+            const QRect target = requested.intersected(regionCaptureBounds());
+            if (!regionSelectionValid(target)) return;
+            const QPoint previousStart = m_dragStart, previousEnd = m_dragEnd;
+            m_dragStart = target.topLeft();
+            m_dragEnd = target.bottomRight();
+            auto image = renderResultImage();
+            if (image.isNull()) { m_dragStart = previousStart; m_dragEnd = previousEnd; return; }
+            hyprcapture::ui::applyWatermark(image, m_defaults);
+            m_editImageRect = target;
+            m_editor->replaceCaptureImage(image, target);
+            updateStatus();
+            update();
+        });
+        connect(m_editor, &AnnotationEditor::confirmRequested, this,
+                [this] { exportInPlaceImage(); });
+        connect(m_editor, &AnnotationEditor::cancelRequested, this, &CaptureOverlay::cancelCapture);
+        connect(m_editor, &AnnotationEditor::pinRequested, this, &CaptureOverlay::pinInPlaceImage);
+        connect(m_editor, &AnnotationEditor::reselectRequested, this, &CaptureOverlay::leaveInPlaceEdit);
+        connect(m_editor, &AnnotationEditor::toolbarGeometryChanged, this, [this] {
+            if (m_editing && m_toolbar) {
+                m_toolbar->move(m_editor->captureToolbarGeometry().topLeft());
+                m_toolbar->raise();
+            }
+        });
+    }
+    m_editing = true;
+    m_pendingConfirm = false;
+    m_dragging = false;
+    m_recordError.clear();
+    m_editor->setGeometry(rect());
+    m_editor->setRegionResizeBounds(!m_scrollResult && m_mode == hyprcapture::CaptureMode::Region ? regionCaptureBounds() : QRect());
+    m_editor->setImage(image, false);
+    m_editor->setImageDisplayRect(m_editImageRect);
+    m_editor->show();
+    m_editor->raise();
+    m_editor->setFocus();
+    updateToolbarControlsForMode();
+    updateStatus();
+    update();
+    emit editingChanged(true);
+}
+
+void CaptureOverlay::refreshInPlaceImage() {
+    if (!m_editing || !m_editor || m_scrollResult)
+        return;
+    auto image = renderResultImage();
+    if (image.isNull()) {
+        m_recordError = tr("Could not capture the selected target");
+        updateStatus();
+        return;
+    }
+    hyprcapture::ui::applyWatermark(image, m_defaults);
+    m_editor->setImage(image, true);
+    m_editor->setImageDisplayRect(m_editImageRect);
+    m_recordError.clear();
+}
+
+void CaptureOverlay::leaveInPlaceEdit() {
+    if (!m_editing)
+        return;
+    m_editing = false;
+    m_scrollResult = false;
+    m_editor->hide();
+    m_editedOutput = {};
+    m_fullscreenClientSelected = false;
+    m_dragStart = {};
+    m_dragEnd = {};
+    clearPendingConfirm();
+    m_recordError.clear();
+    updateToolbarControlsForMode();
+    updateStatus();
+    setFocus();
+    update();
+    emit editingChanged(false);
+}
+
+void CaptureOverlay::exportInPlaceImage() {
+    if (!m_editing || m_finishing || !m_editor)
+        return;
+    m_editedOutput = m_editor->resultImage();
+    if (m_editedOutput.isNull())
+        return;
+    m_finishing = true;
+    m_editor->setEnabled(false);
+    m_toolbar->setEnabled(false);
+    renderAndSaveCapture();
+}
+
+void CaptureOverlay::pinInPlaceImage() {
+    if (!m_editing || m_finishing || !m_editor)
+        return;
+    const auto image = m_editor->resultImage();
+    const auto path = hyprcapture::ui::runtimeFile("pin", ".png");
+    if (image.isNull() || !hyprcapture::ui::savePrivatePng(image, path)) {
+        m_recordError = tr("Could not prepare the pinned image");
+        updateStatus();
+        return;
+    }
+    const auto socketPath = hyprcapture::ui::runtimeFile("pin-ready", ".socket");
+    auto* server = new QLocalServer(this);
+    server->setSocketOptions(QLocalServer::UserAccessOption);
+    if (socketPath.isEmpty() || !server->listen(socketPath)) {
+        server->deleteLater();
+        QFile::remove(path);
+        m_recordError = tr("Could not open the pinned image");
+        updateStatus();
+        return;
+    }
+    struct PendingPin {
+        bool finished = false;
+        QPointer<QLocalSocket> socket;
+        QByteArray reply;
+        QMetaObject::Connection destroyedConnection;
+    };
+    auto pending = std::make_shared<PendingPin>();
+    auto* timeout = new QTimer(this);
+    timeout->setSingleShot(true);
+    const auto complete = [this, pending, server, timeout, path, socketPath](bool success, const QString& error) {
+        if (pending->finished)
+            return;
+        pending->finished = true;
+        QObject::disconnect(pending->destroyedConnection);
+        timeout->stop();
+        server->close();
+        if (pending->socket) {
+            if (success) {
+                pending->socket->write("accepted\n");
+                pending->socket->flush();
+                success = pending->socket->bytesToWrite() == 0 || pending->socket->waitForBytesWritten(250);
+            }
+            if (!success)
+                pending->socket->abort();
+            pending->socket->deleteLater();
+        }
+        QFile::remove(path);
+        QFile::remove(socketPath);
+        server->deleteLater();
+        timeout->deleteLater();
+        m_finishing = false;
+        if (m_editor)
+            m_editor->setEnabled(true);
+        if (m_toolbar)
+            m_toolbar->setEnabled(true);
+        if (success) {
+            // Pin adds a desktop reference; it still completes the same
+            // configured save, clipboard and thumbnail pipeline as Confirm.
+            exportInPlaceImage();
+        } else {
+            m_recordError = error.isEmpty() ? tr("Could not open the pinned image") : error;
+            updateStatus();
+        }
+    };
+    pending->destroyedConnection = connect(this, &QObject::destroyed, qApp, [pending, path, socketPath] {
+        if (!pending->finished) {
+            pending->finished = true;
+            QFile::remove(path);
+            QFile::remove(socketPath);
+        }
+    });
+    connect(timeout, &QTimer::timeout, this, [complete] { complete(false, {}); });
+    connect(server, &QLocalServer::newConnection, this, [this, pending, server, complete] {
+        while (server->hasPendingConnections()) {
+            auto* socket = server->nextPendingConnection();
+            if (pending->finished || pending->socket) {
+                socket->abort();
+                socket->deleteLater();
+                continue;
+            }
+            pending->socket = socket;
+            const auto readReply = [pending, socket, complete] {
+                pending->reply += socket->readAll();
+                if (pending->reply.size() > 4096) {
+                    complete(false, {});
+                    return;
+                }
+                const auto newline = pending->reply.indexOf('\n');
+                if (newline < 0)
+                    return;
+                const auto reply = pending->reply.left(newline);
+                if (reply == "ready")
+                    complete(true, {});
+                else
+                    complete(false, reply.startsWith("error:") ? QString::fromUtf8(reply.mid(6)) : QString{});
+            };
+            connect(socket, &QLocalSocket::readyRead, this, readReply);
+            connect(socket, &QLocalSocket::disconnected, this, [pending, complete] {
+                if (!pending->finished)
+                    complete(false, {});
+            });
+            readReply();
+        }
+    });
+    m_recordError.clear();
+    m_finishing = true;
+    m_editor->setEnabled(false);
+    if (m_toolbar)
+        m_toolbar->setEnabled(false);
+    timeout->start(5000);
+    QStringList args{"--pin-image", path, "--pin-consume-source", "--pin-ready-socket", socketPath,
+                     "--language", qString(m_defaults.language)};
+    if (auto* screen = overlayScreen())
+        args << "--pin-monitor" << screen->name();
+    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args)) {
+        complete(false, {});
+        return;
+    }
+}
+
+void CaptureOverlay::finishCapture() {
+    if (m_finishing || m_scrolling)
+        return;
+    if (m_scrollMode && !m_record && !m_recordActive) {
+        beginScrollCapture();
+        return;
+    }
+    if (m_defaults.inPlaceEditToolbar && !m_record && !m_recordActive) {
+        beginInPlaceEdit();
+        return;
+    }
     m_finishing = true;
 
     if (m_record) {
@@ -4349,7 +4789,8 @@ void CaptureOverlay::finishCapture() {
 void CaptureOverlay::renderAndSaveCapture() {
     QElapsedTimer renderTimer;
     renderTimer.start();
-    auto image = renderResultImage();
+    const bool edited = !m_editedOutput.isNull();
+    auto image = edited ? m_editedOutput : renderResultImage();
     traceTiming(QStringLiteral("render_result"), renderTimer.elapsed());
     if (image.isNull()) {
         m_finishing = false;
@@ -4363,7 +4804,8 @@ void CaptureOverlay::renderAndSaveCapture() {
 
     QElapsedTimer watermarkTimer;
     watermarkTimer.start();
-    hyprcapture::ui::applyWatermark(image, m_defaults);
+    if (!edited)
+        hyprcapture::ui::applyWatermark(image, m_defaults);
     traceTiming(QStringLiteral("apply_watermark"), watermarkTimer.elapsed());
 
     const auto filenameMetadata = resolvedFilenameMetadata();
@@ -4374,7 +4816,7 @@ void CaptureOverlay::renderAndSaveCapture() {
     const QString restoreClipboardPath =
         (m_defaults.clipboard && m_defaults.showThumbnail) ? hyprcapture::ui::runtimeFile("clipboard", ".json") : QString{};
     bool thumbnailStarted = false;
-    if (m_defaults.showThumbnail) {
+    if (m_defaults.showThumbnail && !edited) {
         const QString previewPath = saveThumbnailPreview(image);
         if (!previewPath.isEmpty()) {
             showThumbnail(previewPath, targetPath, restoreClipboardPath);
@@ -4382,7 +4824,7 @@ void CaptureOverlay::renderAndSaveCapture() {
         }
     }
 
-    if (!m_fadeOutStarted) {
+    if (!m_fadeOutStarted && !edited) {
         traceTiming(QStringLiteral("fade_start"));
         fadeOutThen({});
     }
@@ -4412,9 +4854,11 @@ void CaptureOverlay::saveImage(const QImage& image,
                                hyprcapture::CaptureMode mode,
                                hyprcapture::FilenameMetadata filenameMetadata) {
     const auto defaults = m_defaults;
+    const bool edited = !m_editedOutput.isNull();
     auto*      worker = QThread::create([this,
                                          image,
                                          defaults,
+                                         edited,
                                          outputPath,
                                          restoreClipboardPath,
                                          thumbnailStarted,
@@ -4427,19 +4871,32 @@ void CaptureOverlay::saveImage(const QImage& image,
         traceTiming(QStringLiteral("output_worker_total"), totalTimer.elapsed());
         QMetaObject::invokeMethod(
             this,
-            [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata] {
+            [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata, edited, outputPath] {
                 traceTiming(QStringLiteral("output_ready"));
-                endHymissionCaptureInputSuppression();
-                if (result.clipboardRequested && !result.clipboardCopied)
-                    hyprcapture::ui::copyImageToClipboard(image);
-                if (defaults.save)
-                    hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
-                if (result.showThumbnail && !thumbnailStarted) {
-                    showThumbnail(result.savedPath, result.savedPath, result.restoreClipboardPath);
-                    qApp->quit();
+                if (edited && defaults.save && result.savedPath != outputPath) {
+                    m_finishing = false;
+                    m_editor->setEnabled(true);
+                    m_toolbar->setEnabled(true);
+                    m_recordError = tr("Could not save the image. Check the output directory and try again.");
+                    updateStatus();
                     return;
                 }
-                qApp->quit();
+                const auto complete = [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata] {
+                    endHymissionCaptureInputSuppression();
+                    if (result.clipboardRequested && !result.clipboardCopied)
+                        hyprcapture::ui::copyImageToClipboard(image);
+                    if (defaults.save)
+                        hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
+                    if (result.showThumbnail && !thumbnailStarted)
+                        showThumbnail(result.savedPath, result.savedPath, result.restoreClipboardPath);
+                    qApp->quit();
+                };
+                if (edited) {
+                    emit finishingStarted();
+                    fadeOutThen(complete);
+                } else {
+                    complete();
+                }
             },
             Qt::QueuedConnection);
     });
@@ -4453,6 +4910,7 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
 
     QStringList args{"--thumbnail-window", previewPath, "--thumbnail-timeout-ms", QString::number(m_defaults.thumbnailTimeoutMs)};
     args << "--thumbnail-monitor" << qString(m_defaults.thumbnailMonitor);
+    args << "--language" << qString(m_defaults.language);
     if (!targetPath.isEmpty())
         args << "--thumbnail-target" << targetPath;
     const QString deleteRoot = thumbnailDeleteRoot(m_defaults);
@@ -4466,6 +4924,11 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
 }
 
 void CaptureOverlay::cancelCapture() {
+    m_finishing = true;
+    if (m_editing && m_editor) {
+        m_editor->setEnabled(false);
+        m_toolbar->setEnabled(false);
+    }
     emit finishingStarted();
     fadeOutThen([this] {
         endHymissionCaptureInputSuppression();

@@ -1,6 +1,8 @@
 #include "plugin/session_launcher.hpp"
 
 #include "plugin/artifact_capture.hpp"
+#include "plugin/timing.hpp"
+#include "shared/session_startup.hpp"
 #include "shared/process_environment.hpp"
 #include "shared/protocol.hpp"
 #include "shared/trusted_path.hpp"
@@ -32,7 +34,6 @@ extern char** environ;
 namespace hyprcapture {
 namespace {
 
-constexpr std::size_t MAX_INLINE_SESSION_JSON_BYTES = 64 * 1024;
 constexpr int EXEC_FAILURE_PIPE_TIMEOUT_MS = 2000;
 
 std::string boolArg(bool value) {
@@ -164,18 +165,6 @@ std::vector<std::string> childEnvironment() {
             env.push_back(entry);
     }
     return env;
-}
-
-bool hasCompositorArtifactPaths(const CaptureSession& session) {
-    for (const auto& monitor : session.monitors) {
-        if (!monitor.artifactPath.empty())
-            return true;
-    }
-    for (const auto& window : session.windows) {
-        if (!window.artifactPath.empty() || !window.realBackgroundPath.empty())
-            return true;
-    }
-    return false;
 }
 
 bool setCloseOnExec(int fd) {
@@ -326,17 +315,10 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     CaptureDefaults captureDefaults = request.defaults;
     captureDefaults.mode = request.requestedMode;
     captureDefaults.thumbnailMonitor = resolvedThumbnailMonitor(captureDefaults.thumbnailMonitor);
-    CaptureSession session = captureCompositorArtifacts(captureDefaults, request.quick || request.record || request.recordActive);
-    session.defaults.mode = request.requestedMode;
-
-    const auto sessionJson = encodeSessionJson(session);
-    const bool sessionHasArtifacts = hasCompositorArtifactPaths(session);
-    const auto sessionJsonFile = writeCompositorSessionJsonFile(session, sessionJson);
-    const bool useSessionJsonFile = !sessionJsonFile.empty();
-    if (!useSessionJsonFile && (sessionHasArtifacts || sessionJson.size() > MAX_INLINE_SESSION_JSON_BYTES)) {
-        cleanupCompositorArtifacts(session);
-        return {.success = false, .error = "failed to write bounded session metadata"};
-    }
+    ScopedTiming launchTiming("startup.launch");
+    SessionStartupChannel startup;
+    if (!startup.valid())
+        return {.success = false, .error = std::string("startup channel failed: ") + std::strerror(errno)};
 
     std::vector<std::string> args;
     args.push_back(*helper);
@@ -360,6 +342,10 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(boolArg(request.defaults.clipboard));
     args.push_back("--thumbnail");
     args.push_back(boolArg(request.defaults.showThumbnail));
+    args.push_back("--in-place-edit-toolbar");
+    args.push_back(boolArg(request.defaults.inPlaceEditToolbar));
+    args.push_back("--language");
+    args.push_back(request.defaults.language);
     args.push_back("--screenshot-notification");
     args.push_back(boolArg(request.defaults.screenshotNotification));
     args.push_back("--include-cursor");
@@ -446,13 +432,7 @@ LaunchResult launchHelper(const LaunchRequest& request) {
         args.push_back("--record");
     if (request.recordActive)
         args.push_back("--record-active");
-    if (useSessionJsonFile) {
-        args.push_back("--session-json-file");
-        args.push_back(sessionJsonFile);
-    } else {
-        args.push_back("--session-json");
-        args.push_back(sessionJson);
-    }
+    args.push_back("--session-json-stdin");
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
@@ -467,51 +447,46 @@ LaunchResult launchHelper(const LaunchRequest& request) {
         envp.push_back(env.data());
     envp.push_back(nullptr);
 
-    auto execErrorPipe = makeExecErrorPipe();
-    if (!execErrorPipe) {
-        cleanupCompositorArtifacts(session);
-        return {.success = false, .error = std::string("pipe failed: ") + std::strerror(errno)};
-    }
-
     SpawnFileActions fileActions;
     if (const auto error = initSpawnFileActions(fileActions)) {
-        cleanupCompositorArtifacts(session);
-        closeFd(execErrorPipe->read);
-        closeFd(execErrorPipe->write);
         return {.success = false, .error = std::string("spawn setup failed: ") + std::strerror(*error)};
     }
 
     SpawnAttributes attrs;
     if (const auto error = initSpawnAttributes(attrs)) {
-        cleanupCompositorArtifacts(session);
-        closeFd(execErrorPipe->read);
-        closeFd(execErrorPipe->write);
         return {.success = false, .error = std::string("spawn setup failed: ") + std::strerror(*error)};
     }
 
+    // Keep only the startup socket on stdin. Apply the normal close-from policy
+    // after dup2, so unrelated compositor descriptors are never inherited.
+    const int startupFdError = posix_spawn_file_actions_adddup2(&fileActions.value, startup.childFd(), STDIN_FILENO);
+    if (startupFdError != 0) {
+        return {.success = false, .error = std::string("startup fd setup failed: ") + std::strerror(startupFdError)};
+    }
     if (const auto error = configureSpawnFileDescriptorPolicy(fileActions, attrs)) {
-        cleanupCompositorArtifacts(session);
-        closeFd(execErrorPipe->read);
-        closeFd(execErrorPipe->write);
         return {.success = false, .error = std::string("spawn setup failed: ") + std::strerror(*error)};
     }
 
     pid_t     pid = -1;
     const int spawnError = posix_spawn(&pid, argv[0], &fileActions.value, &attrs.value, argv.data(), envp.data());
-    closeFd(execErrorPipe->write);
+    startup.closeChild();
     if (spawnError != 0) {
-        cleanupCompositorArtifacts(session);
-        closeFd(execErrorPipe->read);
         return {.success = false, .error = std::string("exec failed: ") + std::strerror(spawnError)};
     }
 
-    const auto execFailure = readExecFailure(execErrorPipe->read);
-    closeFd(execErrorPipe->read);
-    if (execFailure) {
-        cleanupCompositorArtifacts(session);
-        return {.success = false, .error = std::string("exec failed: ") + std::strerror(*execFailure)};
+    traceTiming("startup.helper_spawned");
+    CaptureSession session;
+    {
+        ScopedTiming captureTiming("startup.capture_artifacts");
+        session = captureCompositorArtifacts(captureDefaults, request.quick || request.record || request.recordActive);
     }
-
+    session.defaults.mode = request.requestedMode;
+    const auto sessionJsonFile = writeCompositorSessionJsonFile(session, encodeSessionJson(session));
+    if (sessionJsonFile.empty() || !startup.publish(sessionJsonFile)) {
+        cleanupCompositorArtifacts(session);
+        return {.success = false, .error = "failed to deliver bounded session metadata"};
+    }
+    traceTiming("startup.session_published");
     return {.success = true};
 }
 
@@ -535,6 +510,8 @@ LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const 
     args.push_back(boolArg(defaults.clipboard));
     args.push_back("--thumbnail");
     args.push_back(boolArg(defaults.showThumbnail));
+    args.push_back("--language");
+    args.push_back(defaults.language);
     args.push_back("--record-save-dir");
     args.push_back(defaults.recordSaveDir);
     args.push_back("--thumbnail-timeout-ms");
@@ -621,6 +598,8 @@ LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
     args.push_back(boolArg(defaults.clipboard));
     args.push_back("--thumbnail");
     args.push_back(boolArg(defaults.showThumbnail));
+    args.push_back("--language");
+    args.push_back(defaults.language);
     args.push_back("--record-save-dir");
     args.push_back(defaults.recordSaveDir);
     args.push_back("--thumbnail-timeout-ms");

@@ -111,6 +111,11 @@ add_executable(hyprcapture-ui
   src/ui/main.cpp
   src/ui/clipboard_utils.cpp
   src/ui/capture_overlay.cpp
+  src/ui/scroll_stitcher.cpp
+  src/ui/scroll_capture.cpp
+  src/ui/annotation_editor.cpp
+  src/ui/pinned_image.cpp
+  src/ui/i18n.cpp
   src/ui/remembered_settings.cpp
   src/ui/overlay_paint.cpp
   src/ui/result_thumbnail.cpp
@@ -168,9 +173,6 @@ install(PROGRAMS scripts/build-aec-runtime.sh DESTINATION ${CMAKE_INSTALL_BINDIR
 install(PROGRAMS scripts/install-aec.sh DESTINATION ${CMAKE_INSTALL_BINDIR} RENAME hyprcapture-install-aec)
 install(FILES resources/aec/DTLN-LICENSE.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/hyprcapture)
 
-option(HYPRCAPTURE_ENABLE_NIX_SANDBOX_INCOMPATIBLE_TESTS
-    "Enable tests requiring root-owned executables to be visible as root"
-    ON)
 if(BUILD_TESTING)
   add_library(hyprcapture-fake-tflite SHARED tests/aec_fake_tflite.cpp)
   add_executable(hyprcapture-aec-spa-test tests/aec_spa_test.cpp)
@@ -185,40 +187,93 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-aec-policy-test PRIVATE Qt6::Core)
   add_test(NAME aec-policy COMMAND hyprcapture-aec-policy-test)
   find_package(Qt6 REQUIRED COMPONENTS Test)
+  add_executable(hyprcapture-annotation-editor-test tests/annotation_editor_test.cpp src/ui/annotation_editor.cpp)
+  target_include_directories(hyprcapture-annotation-editor-test PRIVATE src)
+  target_link_libraries(hyprcapture-annotation-editor-test PRIVATE Qt6::Widgets Qt6::Test Qt6::Svg)
+  add_test(NAME annotation-editor COMMAND hyprcapture-annotation-editor-test)
+  set_tests_properties(annotation-editor PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+  add_executable(hyprcapture-i18n-test tests/i18n_test.cpp src/ui/i18n.cpp)
+  target_include_directories(hyprcapture-i18n-test PRIVATE src)
+  target_link_libraries(hyprcapture-i18n-test PRIVATE Qt6::Core)
+  add_test(NAME i18n COMMAND hyprcapture-i18n-test)
+  add_executable(hyprcapture-pinned-image-test tests/pinned_image_test.cpp src/ui/pinned_image.cpp src/ui/clipboard_utils.cpp src/shared/process_environment.cpp src/shared/trusted_path.cpp)
+  target_include_directories(hyprcapture-pinned-image-test PRIVATE src)
+  target_link_libraries(hyprcapture-pinned-image-test PRIVATE Qt6::Widgets LayerShellQt::Interface)
+  add_test(NAME pinned-image COMMAND hyprcapture-pinned-image-test)
+  set_tests_properties(pinned-image PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
   get_target_property(HYPRCAPTURE_UI_TEST_SOURCES hyprcapture-ui SOURCES)
   list(REMOVE_ITEM HYPRCAPTURE_UI_TEST_SOURCES src/ui/main.cpp)
   add_executable(hyprcapture-sound-ui-test tests/sound_ui_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
   # Isolate UI tests from an installed AEC worker and network/model downloads.
   set_target_properties(hyprcapture-sound-ui-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
   target_include_directories(hyprcapture-sound-ui-test PRIVATE src ${GIO_INCLUDE_DIRS})
-  target_link_libraries(hyprcapture-sound-ui-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
+  target_link_libraries(hyprcapture-sound-ui-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
   add_test(NAME hyprcapture-sound-ui-test COMMAND hyprcapture-sound-ui-test)
   set_tests_properties(hyprcapture-sound-ui-test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+  add_executable(hyprcapture-in-place-editor-test tests/in_place_editor_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
+  set_target_properties(hyprcapture-in-place-editor-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
+  target_include_directories(hyprcapture-in-place-editor-test PRIVATE src ${GIO_INCLUDE_DIRS})
+  target_link_libraries(hyprcapture-in-place-editor-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
+  add_test(NAME in-place-editor COMMAND hyprcapture-in-place-editor-test)
+  set_tests_properties(in-place-editor PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+  add_executable(hyprcapture-scroll-live-test tests/scroll_capture_live_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
+  set_target_properties(hyprcapture-scroll-live-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
+  target_include_directories(hyprcapture-scroll-live-test PRIVATE src ${GIO_INCLUDE_DIRS})
+  target_link_libraries(hyprcapture-scroll-live-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
+  add_test(NAME scroll-live COMMAND hyprcapture-scroll-live-test)
+  set_tests_properties(scroll-live PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+
   add_executable(hyprcapture-audio-timeline-test tests/audio_timeline_test.cpp)
   target_include_directories(hyprcapture-audio-timeline-test PRIVATE src)
   target_compile_options(hyprcapture-audio-timeline-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-audio-timeline-test COMMAND hyprcapture-audio-timeline-test)
   find_package(Python3 COMPONENTS Interpreter)
-
-  if(HYPRCAPTURE_ENABLE_NIX_SANDBOX_INCOMPATIBLE_TESTS)
-    if(Python3_Interpreter_FOUND)
-      add_test(NAME hyprcapture-audio-finalize-test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/audio_finalize_test.py $<TARGET_FILE:hyprcapture-ui>)
-      set_tests_properties(hyprcapture-audio-finalize-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
-
-      add_test(NAME hyprcapture-recording-timestamps-test COMMAND ${Python3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_timestamps_test.py
-        $<TARGET_FILE:hyprcapture-timestamped-rgba-fixture> $<TARGET_FILE:hyprcapture-ui>)
-      set_tests_properties(hyprcapture-recording-timestamps-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
-    endif()
-
-    add_executable(hyprcapture-supervised-process-test
-      tests/supervised_process_test.cpp
-      src/shared/supervised_process.cpp
-    )
-    target_include_directories(hyprcapture-supervised-process-test PRIVATE src)
-    add_test(NAME hyprcapture-supervised-process-test COMMAND hyprcapture-supervised-process-test)
-    set_tests_properties(hyprcapture-supervised-process-test PROPERTIES TIMEOUT 10)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME session-startup-ui COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_startup_ui_test.py $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(session-startup-ui PROPERTIES TIMEOUT 40)
+    add_test(NAME pin-launch COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/pin_launch_test.py $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(pin-launch PROPERTIES TIMEOUT 20)
   endif()
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME hyprcapture-audio-finalize-test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/audio_finalize_test.py $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(hyprcapture-audio-finalize-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
+  endif()
+  add_executable(hyprcapture-scroll-capture-test tests/scroll_capture_test.cpp src/shared/config.cpp src/shared/protocol.cpp src/ui/scroll_capture.cpp src/ui/scroll_stitcher.cpp src/ui/clipboard_utils.cpp src/ui/i18n.cpp src/shared/process_environment.cpp src/shared/trusted_path.cpp)
+  target_include_directories(hyprcapture-scroll-capture-test PRIVATE src)
+  target_link_libraries(hyprcapture-scroll-capture-test PRIVATE Qt6::Widgets Qt6::Test LayerShellQt::Interface nlohmann_json::nlohmann_json)
+  add_test(NAME scroll-capture COMMAND hyprcapture-scroll-capture-test)
+  set_tests_properties(scroll-capture PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+
+  add_executable(hyprcapture-scroll-stitcher-test tests/scroll_stitcher_test.cpp src/ui/scroll_stitcher.cpp)
+  target_include_directories(hyprcapture-scroll-stitcher-test PRIVATE src)
+  target_link_libraries(hyprcapture-scroll-stitcher-test PRIVATE Qt6::Gui)
+  add_test(NAME scroll-stitcher COMMAND hyprcapture-scroll-stitcher-test)
+  set_tests_properties(scroll-stitcher PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
+  add_executable(hyprcapture-mapped-image-test tests/mapped_image_test.cpp)
+  target_include_directories(hyprcapture-mapped-image-test PRIVATE src)
+  target_link_libraries(hyprcapture-mapped-image-test PRIVATE Qt6::Gui)
+  add_test(NAME mapped-image COMMAND hyprcapture-mapped-image-test)
+  set_tests_properties(mapped-image PROPERTIES TIMEOUT 10)
+
+  add_executable(hyprcapture-material-icon-test tests/material_icon_test.cpp)
+  target_include_directories(hyprcapture-material-icon-test PRIVATE src)
+  target_link_libraries(hyprcapture-material-icon-test PRIVATE Qt6::Gui Qt6::Svg)
+  add_test(NAME material-icon COMMAND hyprcapture-material-icon-test)
+  set_tests_properties(material-icon PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+
+  add_executable(hyprcapture-session-startup-test tests/session_startup_test.cpp)
+  target_include_directories(hyprcapture-session-startup-test PRIVATE src)
+  add_test(NAME session-startup COMMAND hyprcapture-session-startup-test)
+  set_tests_properties(session-startup PROPERTIES TIMEOUT 10)
+
+  add_executable(hyprcapture-supervised-process-test
+    tests/supervised_process_test.cpp
+    src/shared/supervised_process.cpp
+  )
+  target_include_directories(hyprcapture-supervised-process-test PRIVATE src)
+  add_test(NAME hyprcapture-supervised-process-test COMMAND hyprcapture-supervised-process-test)
+  set_tests_properties(hyprcapture-supervised-process-test PROPERTIES TIMEOUT 10)
 
   add_executable(hyprcapture-config-test
     tests/config_test.cpp
@@ -279,6 +334,12 @@ if(BUILD_TESTING)
   add_executable(hyprcapture-timestamped-rgba-fixture tests/timestamped_rgba_fixture.cpp src/plugin/timestamped_rgba.cpp)
   target_include_directories(hyprcapture-timestamped-rgba-fixture PRIVATE src)
   target_link_libraries(hyprcapture-timestamped-rgba-fixture PRIVATE PkgConfig::FFMPEG_MUX)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME hyprcapture-recording-timestamps-test COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_timestamps_test.py
+      $<TARGET_FILE:hyprcapture-timestamped-rgba-fixture> $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(hyprcapture-recording-timestamps-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
+  endif()
 
   add_executable(hyprcapture-rgba-transform-test
     tests/rgba_transform_test.cpp
@@ -293,6 +354,11 @@ if(BUILD_TESTING)
   )
   target_include_directories(hyprcapture-trusted-path-test PRIVATE src)
   add_test(NAME hyprcapture-trusted-path-test COMMAND hyprcapture-trusted-path-test)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME hyprcapture-trusted-path-namespace-test COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/trusted_path_namespace_test.py $<TARGET_FILE:hyprcapture-trusted-path-test>)
+    set_tests_properties(hyprcapture-trusted-path-namespace-test PROPERTIES TIMEOUT 20 SKIP_RETURN_CODE 77)
+  endif()
 
   add_executable(hyprcapture-window-stream-test
     tests/window_stream_test.cpp

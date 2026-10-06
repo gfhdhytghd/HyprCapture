@@ -41,6 +41,7 @@ constexpr std::array  kLuaFunctionNames = {
     "record_stop",
     "record_start",
     "window_capture",
+    "region_capture",
     "window_stream_start",
     "window_stream_stop",
     "export_pipe",
@@ -140,6 +141,8 @@ void registerConfigValues() {
     addBoolConfig("save", "Save captures to disk", true);
     addBoolConfig("clipboard", "Copy captures to the clipboard", true);
     addBoolConfig("show_thumbnail", "Show a result thumbnail after capture", true);
+    addBoolConfig("in_place_edit_toolbar", "Keep the screenshot overlay open for editing after capture", false);
+    addStringConfig("language", "UI language (auto or a supported locale code)", "auto");
     addBoolConfig("include_cursor", "Include the cursor in captures", false);
     addBoolConfig("remember_settings", "Restore the previous interactive capture settings", false);
     addBoolConfig("allow_quick", "Enable no-confirmation quick capture calls", false);
@@ -208,6 +211,8 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.save = configBool("save", defaults.save);
     defaults.clipboard = configBool("clipboard", defaults.clipboard);
     defaults.showThumbnail = configBool("show_thumbnail", defaults.showThumbnail);
+    defaults.inPlaceEditToolbar = configBool("in_place_edit_toolbar", defaults.inPlaceEditToolbar);
+    defaults.language = configString("language", defaults.language);
     defaults.screenshotNotification = configBool("screenshot_notification", defaults.screenshotNotification);
     defaults.includeCursor = configBool("include_cursor", defaults.includeCursor);
     defaults.rememberSettings = configBool("remember_settings", defaults.rememberSettings);
@@ -425,6 +430,10 @@ int luaRecordStart(lua_State* L) {
     return luaDispatchResult(L, dispatchRecordStart(luaOptionalString(L, 1)));
 }
 
+int luaRegionCapture(lua_State* L) {
+    return luaDispatchResult(L, dispatchResult(hyprcapture::captureRegionArtifactFromRequestFile(luaOptionalString(L, 1))));
+}
+
 int luaWindowCapture(lua_State* L) {
     return luaDispatchResult(L, dispatchWindowCapture(luaOptionalString(L, 1)));
 }
@@ -461,6 +470,8 @@ int luaDispatch(lua_State* L) {
         return luaDispatchResult(L, dispatchRecordStop(args));
     if (action == "record_start")
         return luaDispatchResult(L, dispatchRecordStart(args));
+    if (action == "region_capture")
+        return luaDispatchResult(L, dispatchResult(hyprcapture::captureRegionArtifactFromRequestFile(args)));
     if (action == "window_capture")
         return luaDispatchResult(L, dispatchWindowCapture(args));
     if (action == "export_pipe")
@@ -508,6 +519,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         registerLuaFunction("record_stop", luaRecordStop);
         registerLuaFunction("record_start", luaRecordStart);
         registerLuaFunction("window_capture", luaWindowCapture);
+        registerLuaFunction("region_capture", luaRegionCapture);
         registerLuaFunction("export_pipe", luaExportPipe);
         registerLuaFunction("window_stream_start", luaWindowStreamStart);
         registerLuaFunction("window_stream_stop", luaWindowStreamStop);

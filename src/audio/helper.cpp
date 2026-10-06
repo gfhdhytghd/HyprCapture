@@ -162,6 +162,10 @@ struct Recorder {
         if (t.fd >= 0) { close(t.fd); t.fd = -1; }
     }
     void scanApplication() {
+        // Window selection also supplies the AEC playback context in microphone
+        // mode. Sink-input events must not create a System track in that mode:
+        // its shared recovery file (and meter) was never initialized.
+        if (mode != "system" && mode != "mix") return;
         if (!initialized || !applicationSource || applicationPid <= 1 || serverFailed || tracks[0].failed) return;
         if (scanning) { scanAgain = true; return; }
         if (processIdentity(applicationPid).start != applicationStart) {

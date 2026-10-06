@@ -67,6 +67,7 @@ struct WindowInfo {
 
 struct CaptureSession {
     std::string              id;
+    bool                     regionCaptureAvailable = false;
     CaptureDefaults          defaults;
     std::optional<Point>     cursorPosition;
     std::vector<MonitorInfo> monitors;

@@ -45,5 +45,20 @@ int main(int argc,char** argv){
     QSettings legacy(root.path()+"/hyprcapture/last-settings.ini",QSettings::IniFormat);legacy.setValue("version",1);legacy.setValue("recordAudioEchoCancellation",false);legacy.sync();
     QFile::remove(root.path()+"/hyprcapture/aec.ini");CaptureDefaults old;old.rememberSettings=true;ui::restoreAecPreferences(old);require(ui::restoreSettings(old),"load valid legacy settings");
     require(old.recordAudioEchoCancellation==-1,"legacy ambiguous bool migrates to automatic");
+    legacy.setValue("mode", "fullscreen");
+    legacy.setValue("recordAudioSystemGain", 20);
+    legacy.setValue("recordAudioMicGain", 20);
+    legacy.setValue("recordFps", 30);
+    legacy.sync();
+    CaptureDefaults dropdowns; dropdowns.rememberSettings = true;
+    dropdowns.mode = CaptureMode::Region;
+    dropdowns.recordAudioSystemGain = -5; dropdowns.recordAudioMicGain = -6;
+    require(ui::restoreSettings(dropdowns), "restore dropdown settings");
+    require(dropdowns.mode == CaptureMode::Region, "legacy fullscreen must not override launch mode");
+    require(dropdowns.recordAudioSystemGain == -5 && dropdowns.recordAudioMicGain == -6, "sliders must not be restored");
+    require(dropdowns.recordFps == 30, "dropdown choice still restored");
+    require(ui::saveSettings(dropdowns), "save dropdown settings");
+    legacy.sync();
+    require(!legacy.contains("mode") && !legacy.contains("recordAudioSystemGain") && !legacy.contains("recordAudioMicGain"), "remove legacy non-dropdown keys");
     std::cout<<"AEC cache identity, pending state, runtime change, affinity and explicit preferences passed\n";
 }

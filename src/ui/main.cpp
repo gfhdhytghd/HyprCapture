@@ -1,8 +1,13 @@
+#include "shared/session_startup.hpp"
+#include "shared/protocol.hpp"
+#include "ui/timing.hpp"
 #include "audio/helper.hpp"
 #include "shared/config.hpp"
 #include "ui/capture_overlay.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/result_thumbnail.hpp"
+#include "ui/i18n.hpp"
+#include "ui/pinned_image.hpp"
 
 #include <LayerShellQt/Shell>
 #include <LayerShellQt/Window>
@@ -11,6 +16,7 @@
 #include <QCommandLineParser>
 #include <QCursor>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QDBusConnection>
 #include <QDBusMessage>
 #include <QDBusVirtualObject>
@@ -790,8 +796,10 @@ int main(int argc, char** argv) {
     LayerShellQt::Shell::useLayerShell();
 #endif
 
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.entry"));
     QApplication app(argc, argv);
     QApplication::setApplicationName("hyprcapture-ui");
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.app_ready"));
 
     QCommandLineParser parser;
     parser.addHelpOption();
@@ -810,6 +818,12 @@ int main(int argc, char** argv) {
         {"include-cursor", "Include cursor.", "0|1", "0"},
         {"remember-settings", "Restore previous interactive settings.", "0|1", "0"},
         {"confirm-before-capture", "Require explicit confirmation after target selection for normal open captures.", "0|1", "0"},
+        {"in-place-edit-toolbar", "Edit the captured image in the overlay before output.", "0|1", "0"},
+        {"language", "Interface language, or auto for environment/system language.", "locale", "auto"},
+        {"pin-image", "Show an image as a desktop pin.", "path"},
+        {"pin-monitor", "Initial output for a desktop pin.", "name"},
+        {"pin-consume-source", "Consume a validated private runtime image after loading a pin."},
+        {"pin-ready-socket", "Private socket for acknowledging a desktop pin launch.", "path"},
         {{"fushion-mode", "fusion-mode"}, "Enable fushion toolbar behavior.", "0|1", "0"},
         {"capture-fullscreen-clients-as-monitor", "Capture fullscreen clients as their monitor in window/fusion mode.", "0|1", "0"},
         {"dynamic-window-metadata", "Use capture-aware window metadata in screenshot filename templates.", "0|1", "1"},
@@ -852,6 +866,7 @@ int main(int argc, char** argv) {
         {"watermark-offset", "Watermark x/y offset in pixels or percent.", "vec2", "0 0"},
         {"session-json", "Compositor session metadata.", "json", "{}"},
         {"session-json-file", "Private compositor session metadata file.", "path"},
+        {"session-json-stdin", "Receive a private session filename from the compositor startup socket."},
         {"thumbnail-window", "Show a normal thumbnail window for an image path.", "path"},
         {"thumbnail-target", "Path opened or deleted by a thumbnail preview.", "path"},
         {"record-countdown-request", "Show an input-transparent recording countdown for a private request file.", "path"},
@@ -868,6 +883,54 @@ int main(int argc, char** argv) {
         {"record-active", "Show recording controls as active."},
     });
     parser.process(app);
+    hyprcapture::ui::installUiTranslations(parser.value("language"));
+
+    if (parser.isSet("pin-image")) {
+        QLocalSocket readySocket;
+        const QString readyPath = parser.value("pin-ready-socket");
+        if (!readyPath.isEmpty()) {
+            if (!hyprcapture::ui::isPrivateRuntimePath(readyPath))
+                return 1;
+            readySocket.connectToServer(readyPath);
+            if (!readySocket.waitForConnected(1500))
+                return 1;
+        }
+        QString error;
+        QScreen* pinScreen = nullptr;
+        for (QScreen* screen : QGuiApplication::screens())
+            if (screen->name() == parser.value("pin-monitor"))
+                pinScreen = screen;
+        std::unique_ptr<QWidget> pin(createPinnedImage(parser.value("pin-image"), parser.isSet("pin-consume-source"), &error, pinScreen));
+        if (!pin) {
+            if (!readyPath.isEmpty()) {
+                readySocket.write("error:" + error.toUtf8().replace('\n', ' ').left(1000) + '\n');
+                readySocket.flush();
+                if (readySocket.bytesToWrite() != 0)
+                    readySocket.waitForBytesWritten(500);
+            }
+            qWarning("HyprCapture: %s", qPrintable(error));
+            return 1;
+        }
+        if (!readyPath.isEmpty()) {
+            readySocket.write("ready\n");
+            readySocket.flush();
+            if (readySocket.bytesToWrite() != 0 && !readySocket.waitForBytesWritten(500))
+                return 1;
+            QByteArray accepted;
+            QElapsedTimer responseTimer;
+            responseTimer.start();
+            while (!accepted.contains('\n') && responseTimer.elapsed() < 1500) {
+                accepted += readySocket.readAll();
+                if (accepted.contains('\n'))
+                    break;
+                if (!readySocket.waitForReadyRead(std::max(1, 1500 - int(responseTimer.elapsed()))))
+                    break;
+            }
+            if (accepted != "accepted\n")
+                return 1;
+        }
+        return app.exec();
+    }
 
     if (hasArgument(argc, argv, "--thumbnail-window")) {
         const QString thumbnailPath = parser.value("thumbnail-window");
@@ -902,6 +965,8 @@ int main(int argc, char** argv) {
     defaults.includeCursor = flagValue(parser, "include-cursor", defaults.includeCursor);
     defaults.rememberSettings = flagValue(parser, "remember-settings", defaults.rememberSettings);
     defaults.confirmBeforeCapture = flagValue(parser, "confirm-before-capture", defaults.confirmBeforeCapture);
+    defaults.inPlaceEditToolbar = flagValue(parser, "in-place-edit-toolbar", defaults.inPlaceEditToolbar);
+    defaults.language = parser.value("language").toStdString();
     defaults.fushionMode = flagValue(parser, "fushion-mode", defaults.fushionMode);
     defaults.captureFullscreenClientsAsMonitor =
         flagValue(parser, "capture-fullscreen-clients-as-monitor", defaults.captureFullscreenClientsAsMonitor);
@@ -969,17 +1034,35 @@ int main(int argc, char** argv) {
     if (hasArgument(argc, argv, "--recording-result"))
         return showRecordingResult(defaults, parser.value("recording-result"));
 
-    cancelRecordingCountdown();
-
     QString sessionJson = parser.value("session-json");
-    if (parser.isSet("session-json-file")) {
-        const QString path = parser.value("session-json-file");
-        QFile         file(path);
-        if (hyprcapture::ui::isPrivateRuntimeFile(path, MAX_SESSION_JSON_BYTES) && file.open(QIODevice::ReadOnly))
-            sessionJson = QString::fromUtf8(file.readAll());
-        if (hyprcapture::ui::isPrivateRuntimePath(path))
-            QFile::remove(path);
+    QString sessionPath = parser.value("session-json-file");
+    if (parser.isSet("session-json-stdin")) {
+        hyprcapture::ui::ScopedUiTiming waitTiming(QStringLiteral("ui.session_wait"));
+        const auto received = hyprcapture::receiveStartupPath(STDIN_FILENO);
+        close(STDIN_FILENO);
+        if (!received) {
+            qWarning("HyprCapture: compositor session startup failed or timed out");
+            return 1;
+        }
+        sessionPath = QString::fromStdString(*received);
     }
+    // The snapshot must already be frozen before dismissing any countdown.
+    cancelRecordingCountdown();
+    if (!sessionPath.isEmpty()) {
+        QFile file(sessionPath);
+        const bool loaded = hyprcapture::ui::isPrivateRuntimeFile(sessionPath, MAX_SESSION_JSON_BYTES) && file.open(QIODevice::ReadOnly);
+        if (loaded)
+            sessionJson = QString::fromUtf8(file.readAll());
+        if (hyprcapture::ui::isPrivateRuntimePath(sessionPath))
+            QFile::remove(sessionPath);
+        // An interrupted prelaunch must never fall through to a live grim
+        // capture: that would lose the original frozen snapshot semantics.
+        if (parser.isSet("session-json-stdin") && (!loaded || !hyprcapture::decodeSessionJson(sessionJson.toStdString()))) {
+            qWarning("HyprCapture: invalid compositor startup session");
+            return 1;
+        }
+    }
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.session_loaded"));
 
     const bool quick = parser.isSet("quick");
     CaptureOverlay overlay(defaults, quick, parser.isSet("record"), parser.isSet("record-active"), sessionJson);
@@ -1003,6 +1086,8 @@ int main(int argc, char** argv) {
     if (overlayScope == hyprcapture::OverlayScope::Focus) {
         for (CaptureOverlay* candidate : overlays) {
             QObject::connect(candidate, &CaptureOverlay::activationRequested, &app, [&, candidate] {
+                if (activeOverlay->isEditing())
+                    return;
                 if (activeOverlay == candidate)
                     return;
                 candidate->adoptInteractionState(*activeOverlay);
@@ -1014,6 +1099,14 @@ int main(int argc, char** argv) {
     }
     if (overlays.size() > 1) {
         for (CaptureOverlay* candidate : overlays) {
+            QObject::connect(candidate, &CaptureOverlay::editingChanged, &app, [&, candidate](bool editing) {
+                if (editing)
+                    activeOverlay = candidate;
+                for (CaptureOverlay* peer : overlays) {
+                    if (peer != candidate)
+                        peer->setOverlayActive(!editing && overlayScope == hyprcapture::OverlayScope::All);
+                }
+            });
             QObject::connect(candidate, &CaptureOverlay::finishingStarted, &app, [&, candidate] {
                 for (CaptureOverlay* peer : overlays)
                     if (peer != candidate)
@@ -1023,11 +1116,29 @@ int main(int argc, char** argv) {
     }
 
     for (CaptureOverlay* candidate : overlays) {
+        QObject::connect(candidate, &CaptureOverlay::scrollingChanged, &app, [&, candidate](bool scrolling) {
+            activeOverlay = candidate;
+            for (CaptureOverlay* peer : overlays) {
+                if (scrolling)
+                    peer->hide();
+                else
+                    peer->show();
+            }
+            if (!scrolling) {
+                candidate->raise();
+                candidate->activateWindow();
+            }
+        });
+    }
+
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.show_begin"));
+    for (CaptureOverlay* candidate : overlays) {
         candidate->show();
         candidate->raise();
     }
     overlay.activateWindow();
     overlay.raise();
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.show_end"));
 
     return app.exec();
 }

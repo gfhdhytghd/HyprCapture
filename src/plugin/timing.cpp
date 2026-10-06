@@ -130,6 +130,7 @@ void traceTiming(std::string_view event, long long elapsedUs) {
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
 
     std::string line = "time_ms=" + std::to_string(ms) + " event=" + std::string(event);
+    line += " monotonic_us=" + std::to_string(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
     if (elapsedUs >= 0)
         line += " elapsed_us=" + std::to_string(elapsedUs);
     line += "\n";

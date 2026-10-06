@@ -119,11 +119,23 @@ void receiveAndVerify(Socket& client, std::uint64_t expectedSequence) {
     close(fd);
 }
 
+void submitFrame(WindowStreamSender& sender, std::uint64_t sequence) {
+    // submit() intentionally drops on mutex contention instead of blocking the
+    // compositor. Delivery tests retry that documented case with a deadline.
+    const auto deadline = std::chrono::steady_clock::now() + 300ms;
+    while (!sender.submit(metadata(sequence), std::vector<unsigned char>(8, static_cast<unsigned char>(sequence)))) {
+        assert(sender.state() != WindowStreamSenderState::Disconnected);
+        assert(sender.state() != WindowStreamSenderState::Stopped);
+        assert(std::chrono::steady_clock::now() < deadline);
+        std::this_thread::sleep_for(1ms);
+    }
+}
+
 void sendsSealedFrame() {
     const auto path = tempSocketPath();
     auto listener = listenerAt(path);
     WindowStreamSender sender({.socketPath = path, .connectDeadline = 300ms, .retryInterval = 5ms});
-    assert(sender.submit(metadata(7), std::vector<unsigned char>(8, 7)));
+    submitFrame(sender, 7);
     auto client = acceptClient(listener);
     receiveAndVerify(client, 7);
     sender.stop();
@@ -150,9 +162,9 @@ void connectsBeforeFirstFrame() {
 void replacementWinsWhileEndpointIsAbsent() {
     const auto path = tempSocketPath();
     WindowStreamSender sender({.socketPath = path, .connectDeadline = 500ms, .retryInterval = 5ms});
-    assert(sender.submit(metadata(1), std::vector<unsigned char>(8, 1)));
+    submitFrame(sender, 1);
     std::this_thread::sleep_for(25ms);
-    assert(sender.submit(metadata(2), std::vector<unsigned char>(8, 2)));
+    submitFrame(sender, 2);
     auto listener = listenerAt(path);
     auto client = acceptClient(listener);
     receiveAndVerify(client, 2);
@@ -165,12 +177,12 @@ void oneConnectionCarriesThreeFrames() {
     const auto path = tempSocketPath();
     auto listener = listenerAt(path);
     WindowStreamSender sender({.socketPath = path, .connectDeadline = 300ms, .retryInterval = 5ms});
-    assert(sender.submit(metadata(11), std::vector<unsigned char>(8, 11)));
+    submitFrame(sender, 11);
     auto client = acceptClient(listener);
     receiveAndVerify(client, 11);
-    assert(sender.submit(metadata(12), std::vector<unsigned char>(8, 12)));
+    submitFrame(sender, 12);
     receiveAndVerify(client, 12);
-    assert(sender.submit(metadata(13), std::vector<unsigned char>(8, 13)));
+    submitFrame(sender, 13);
     receiveAndVerify(client, 13);
     sender.stop();
     unlink(path.c_str());
@@ -181,10 +193,12 @@ void eagainDropsThenDrainingAllowsTheSameConnectionToRecover() {
     const auto path = tempSocketPath();
     auto listener = listenerAt(path);
     WindowStreamSender sender({.socketPath = path, .connectDeadline = 300ms, .retryInterval = 1ms, .socketSendBufferBytes = 1024});
-    assert(sender.submit(metadata(20), std::vector<unsigned char>(8, 20)));
+    submitFrame(sender, 20);
     auto client = acceptClient(listener);
     for (std::uint64_t sequence = 21; sequence < 180; ++sequence) {
-        assert(sender.submit(metadata(sequence), std::vector<unsigned char>(8, static_cast<unsigned char>(sequence))));
+        // Filling the socket can also contend with the worker. Keep offering
+        // frames until the socket itself reports SendWouldBlock below.
+        (void)sender.submit(metadata(sequence), std::vector<unsigned char>(8, static_cast<unsigned char>(sequence)));
         std::this_thread::sleep_for(1ms);
         if (sender.failure() == WindowStreamSenderFailure::SendWouldBlock)
             break;
@@ -196,7 +210,7 @@ void eagainDropsThenDrainingAllowsTheSameConnectionToRecover() {
     std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES> discarded{};
     while (recv(client.fd, discarded.data(), discarded.size(), 0) > 0) {}
     assert(fcntl(client.fd, F_SETFL, flags) == 0);
-    assert(sender.submit(metadata(250), std::vector<unsigned char>(8, 250)));
+    submitFrame(sender, 250);
     receiveAndVerify(client, 250);
     assert(sender.state() == WindowStreamSenderState::Connected);
     sender.stop();
@@ -208,7 +222,7 @@ void slowConsumerStopIsBounded() {
     const auto path = tempSocketPath();
     auto listener = listenerAt(path);
     WindowStreamSender sender({.socketPath = path, .connectDeadline = 2s, .retryInterval = 50ms});
-    assert(sender.submit(metadata(3), std::vector<unsigned char>(8, 3)));
+    submitFrame(sender, 3);
     std::this_thread::sleep_for(10ms);
     const auto started = std::chrono::steady_clock::now();
     sender.stop();

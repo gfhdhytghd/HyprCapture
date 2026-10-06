@@ -29,6 +29,7 @@ class InlineSelect;
 class AudioMeter;
 class QSlider;
 class QProcess;
+class AnnotationEditor;
 
 namespace hyprcapture::ui {
 struct ClipboardSnapshotData;
@@ -46,14 +47,18 @@ class CaptureOverlay final : public QMainWindow {
     QScreen* overlayScreen() const;
     hyprcapture::OverlayScope overlayScope() const;
     bool isOverlayActive() const;
+    bool isEditing() const { return m_editing; }
     void setOverlayActive(bool active);
     void adoptInteractionState(const CaptureOverlay& source);
 
   signals:
     void activationRequested();
     void finishingStarted();
+    void editingChanged(bool editing);
+    void scrollingChanged(bool scrolling);
 
   protected:
+    bool event(QEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
@@ -99,10 +104,12 @@ class CaptureOverlay final : public QMainWindow {
     };
 
     void buildToolbar();
+    void ensureRecordControls();
     void initializeOverlay(const QRect& overlayGeometry);
     bool requestActivation();
     void parseSessionJson(const QString& json);
     void captureScreensBeforeOverlay();
+    void ensureDesktopImage();
     QRect preferredOverlayLogicalGeometry() const;
     QScreen* screenForOverlayGeometry(const QRect& logicalGeometry) const;
     void setMode(hyprcapture::CaptureMode mode);
@@ -120,6 +127,12 @@ class CaptureOverlay final : public QMainWindow {
     void updateConfirmCursor(const QPoint& point);
     QRect regionSelectionForDrag(const QPoint& point) const;
     void finishCapture();
+    void beginInPlaceEdit(const QImage& capturedImage = {});
+    void beginScrollCapture();
+    void refreshInPlaceImage();
+    void leaveInPlaceEdit();
+    void exportInPlaceImage();
+    void pinInPlaceImage();
     void cancelCapture();
     QString prepareRecordingRequest();
     void launchRecordingCountdown(const QString& requestPath);
@@ -202,7 +215,6 @@ class CaptureOverlay final : public QMainWindow {
     void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath);
     double overlayOpacity() const;
     void setOverlayOpacity(double opacity);
-    void startFadeIn();
     void fadeOutThen(std::function<void()> finished);
     void runOverlayFade(double start, double end, std::function<void()> finished);
 
@@ -211,8 +223,12 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_quick = false;
     bool                      m_record = false;
     bool                      m_recordActive = false;
+    bool                      m_scrollMode = false;
+    bool                      m_scrolling = false;
+    bool                      m_scrollResult = false;
     QString                   m_recordError;
     bool                      m_sessionDecoded = false;
+    bool                      m_regionCaptureAvailable = false;
     bool                      m_hymissionOverviewSession = false;
     bool                      m_hymissionCaptureInputSuppressed = false;
     bool                      m_confirmBeforeCapture = false;
@@ -220,9 +236,17 @@ class CaptureOverlay final : public QMainWindow {
     ConfirmDragMode           m_confirmDragMode = ConfirmDragMode::None;
     bool                      m_dragging = false;
     bool                      m_finishing = false;
+    bool                      m_editing = false;
+    AnnotationEditor*         m_editor = nullptr;
+    QImage                    m_editedOutput;
+    QRect                     m_editImageRect;
     bool                      m_fadeOutStarted = false;
     bool                      m_overlayActive = true;
-    double                    m_overlayOpacity = 0.0;
+    bool                      m_firstPaintPending = true;
+    bool                      m_firstVisiblePaintPending = true;
+    bool                      m_firstUpdatePending = true;
+    // A mapped overlay must already contain the frozen desktop, not a transparent warm-up frame.
+    double                    m_overlayOpacity = 1.0;
     QPoint                    m_dragStart;
     QPoint                    m_dragEnd;
     QPoint                    m_confirmDragStart;
@@ -235,6 +259,7 @@ class CaptureOverlay final : public QMainWindow {
     QString                   m_hymissionCaptureInputToken;
 
     QWidget*     m_toolbar = nullptr;
+    QPushButton* m_scrollToggle = nullptr;
     QGraphicsOpacityEffect* m_toolbarOpacity = nullptr;
     QPropertyAnimation* m_fadeAnimation = nullptr;
     InlineSelect* m_fullscreenScope = nullptr;
