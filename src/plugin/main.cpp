@@ -35,6 +35,7 @@ constexpr const char* kOverlayLayerRuleName = "hyprcapture-ui-no-compositor-anim
 constexpr auto        kMinDispatchInterval = std::chrono::milliseconds(750);
 constexpr std::array  kLuaFunctionNames = {
     "open",
+    "open_editor",
     "quick",
     "record",
     "record_toggle",
@@ -141,7 +142,6 @@ void registerConfigValues() {
     addBoolConfig("save", "Save captures to disk", true);
     addBoolConfig("clipboard", "Copy captures to the clipboard", true);
     addBoolConfig("show_thumbnail", "Show a result thumbnail after capture", true);
-    addBoolConfig("in_place_edit_toolbar", "Keep the screenshot overlay open for editing after capture", false);
     addStringConfig("language", "UI language (auto or a supported locale code)", "auto");
     addBoolConfig("include_cursor", "Include the cursor in captures", false);
     addBoolConfig("remember_settings", "Restore the previous interactive capture settings", false);
@@ -211,7 +211,6 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.save = configBool("save", defaults.save);
     defaults.clipboard = configBool("clipboard", defaults.clipboard);
     defaults.showThumbnail = configBool("show_thumbnail", defaults.showThumbnail);
-    defaults.inPlaceEditToolbar = configBool("in_place_edit_toolbar", defaults.inPlaceEditToolbar);
     defaults.language = configString("language", defaults.language);
     defaults.screenshotNotification = configBool("screenshot_notification", defaults.screenshotNotification);
     defaults.includeCursor = configBool("include_cursor", defaults.includeCursor);
@@ -279,7 +278,7 @@ void installOverlayLayerRule() {
     ruleEngine()->registerRule(SP<IRule>{rule});
 }
 
-SDispatchResult openCapture(const std::string& args, bool quick, bool record) {
+SDispatchResult openCapture(const std::string& args, bool quick, bool record, bool inPlaceEditToolbar = false) {
     const auto now = std::chrono::steady_clock::now();
     if (g_lastCaptureDispatch.time_since_epoch().count() != 0 && now - g_lastCaptureDispatch < kMinDispatchInterval) {
         const std::string error = "capture dispatch rate-limited";
@@ -288,6 +287,7 @@ SDispatchResult openCapture(const std::string& args, bool quick, bool record) {
     }
 
     auto defaults = readDefaults();
+    defaults.inPlaceEditToolbar = inPlaceEditToolbar;
     if (quick && !defaults.allowQuick) {
         const std::string error = "quick capture disabled; set plugin.hyprcapture.allow_quick = true to enable no-confirmation capture";
         if (g_lastQuickRejectNotification.time_since_epoch().count() == 0 || now - g_lastQuickRejectNotification >= kMinDispatchInterval) {
@@ -312,6 +312,10 @@ SDispatchResult openCapture(const std::string& args, bool quick, bool record) {
 
 SDispatchResult dispatchOpen(const std::string& args) {
     return openCapture(args, false, false);
+}
+
+SDispatchResult dispatchOpenEditor(const std::string& args) {
+    return openCapture(args, false, false, true);
 }
 
 SDispatchResult dispatchQuick(const std::string& args) {
@@ -387,6 +391,8 @@ std::string normalizeHyprcaptureAction(std::string action) {
     if (action.starts_with(prefix))
         action.erase(0, prefix.size());
 
+    if (action == "openEditor")
+        return "open_editor";
     if (action == "recordToggle")
         return "record_toggle";
     if (action == "recordStop")
@@ -408,6 +414,10 @@ std::string normalizeHyprcaptureAction(std::string action) {
 
 int luaOpen(lua_State* L) {
     return luaDispatchResult(L, dispatchOpen(luaOptionalString(L, 1)));
+}
+
+int luaOpenEditor(lua_State* L) {
+    return luaDispatchResult(L, dispatchOpenEditor(luaOptionalString(L, 1)));
 }
 
 int luaQuick(lua_State* L) {
@@ -460,6 +470,8 @@ int luaDispatch(lua_State* L) {
 
     if (action == "open")
         return luaDispatchResult(L, dispatchOpen(args));
+    if (action == "open_editor")
+        return luaDispatchResult(L, dispatchOpenEditor(args));
     if (action == "quick")
         return luaDispatchResult(L, dispatchQuick(args));
     if (action == "record")
@@ -513,6 +525,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         };
 
         registerLuaFunction("open", luaOpen);
+        registerLuaFunction("open_editor", luaOpenEditor);
         registerLuaFunction("quick", luaQuick);
         registerLuaFunction("record", luaRecord);
         registerLuaFunction("record_toggle", luaRecordToggle);
