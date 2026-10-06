@@ -47,7 +47,7 @@ https://github.com/user-attachments/assets/2c986639-7a3d-44ee-9f33-1b9b79ad9f1d
 - `pkg-config`
 - a C++23-capable compiler
 - nlohmann-json
-- Qt 6 Core, Gui, and Widgets
+- Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
 - libpipewire-0.3 development headers (`libpipewire` on Arch, `libpipewire-0.3-dev` on Debian/Ubuntu)
 - PipeWire development files, FFTW3 and FFmpeg libswresample/libavutil for the native DTLN-AEC candidate
@@ -77,14 +77,69 @@ hl.permission("/usr/(bin|local/bin)/hyprpm", "plugin", "allow")
 
 Do not also manually `hyprctl plugin load` the same `.so` if you manage it through `hyprpm`.
 
+### Install on Arch Linux
+
+These steps target Arch's official `hyprland` package and Hyprland 0.56 or later. If you use `hyprland-git` or a custom build, keep its matching development headers instead of replacing it with the repository package.
+
+#### 1. Install dependencies
+
+Perform a full system upgrade while installing the build tools and libraries:
+
+```sh
+sudo pacman -Syu --needed base-devel cmake git cpio \
+    hyprland nlohmann-json lua glib2 \
+    qt6-base qt6-svg qt6-wayland layer-shell-qt \
+    pipewire libpipewire fftw libpulse ffmpeg wl-clipboard
+```
+
+`base-devel` supplies GCC, Make, and `pkgconf` (the `pkg-config` command), but not CMake. [Qt SVG](https://archlinux.org/packages/extra/x86_64/qt6-svg/) is a separate package; `qt6-wayland` supplies the helper's native Wayland support. `libpipewire` supplies the PipeWire development files, and `ffmpeg` supplies both the recording tools and the required FFmpeg libraries. `git` and `cpio` are used by `hyprpm` when preparing sources and headers.
+
+For sound recording, use a running PulseAudio server or PipeWire's PulseAudio compatibility service. If your desktop uses PipeWire, install the service and session manager if missing:
+
+```sh
+sudo pacman -S --needed pipewire-pulse wireplumber
+```
+
+Keep your existing PulseAudio setup if you use it; `pipewire-pulse` replaces the PulseAudio server. If the upgrade changed Hyprland or you changed audio services, log out and back in before continuing so the running session matches the installed packages.
+
+#### 2. Build and enable the plugin
+
+Run these commands as your normal desktop user, inside the Hyprland session:
+
+```sh
+hyprpm update
+hyprpm add https://github.com/gfhdhytghd/HyprCapture
+hyprpm enable hyprcapture
+hyprpm reload
+```
+
+If you use Hyprland's permission system, first add the `hyprpm` permission shown in [Install with `hyprpm`](#install-with-hyprpm). The manifest builds and tests the plugin and installs `hyprcapture-ui` to `~/.local/bin`; no separate manual helper installation is needed.
+
+The installer also attempts to prepare the optional DTLN-AEC runtime. If it reports that AEC is pending, normal capture remains available; retry later with `~/.local/bin/hyprcapture-install-aec`.
+
+#### 3. Configure and check capture
+
+Add the Lua shortcuts from [Lua actions and key bindings](#lua-actions-and-key-bindings) to your Hyprland Lua configuration and reload the config. The examples bind **Super + Shift + S** to the overlay, **Super + Shift + W** to window capture, and **Super + Shift + F** to fullscreen capture.
+
+Check that the plugin is loaded and the helper was installed:
+
+```sh
+hyprctl plugin list
+test -x "$HOME/.local/bin/hyprcapture-ui" && echo "HyprCapture helper installed"
+```
+
+Press **Super + Shift + S**, take a screenshot, and verify saving or copying it. If the build reports missing `Qt6Svg`, install `qt6-svg`; if it reports missing `libpipewire-0.3`, install `libpipewire`. For a Hyprland version/header mismatch after an upgrade, restart into the updated Hyprland session, run `hyprpm update`, then `hyprpm reload`.
+
 ### Install on NixOS
+
+Use the [latest official Hyprland release](https://github.com/hyprwm/Hyprland/releases/latest) and pin its release tag in your flake. Hyprland's development `main` branch is not supported. The example below uses `v0.56.2`; update this tag when a newer official release is available. An untagged `github:hyprwm/Hyprland` input tracks the development branch.
 
 Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
 
 ```nix
 {
   inputs = {
-    hyprland.url = "github:hyprwm/Hyprland";
+    hyprland.url = "github:hyprwm/Hyprland/v0.56.2";
     hyprcapture = {
       url = "github:gfhdhytghd/HyprCapture";
       inputs.hyprland.follows = "hyprland";
@@ -92,6 +147,8 @@ Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow
   };
 }
 ```
+
+After changing the release tag, run `nix flake update hyprland hyprcapture` from your configuration's flake directory and rebuild. Ensure the system's Hyprland package also uses this same input; setting Home Manager's `package = null` does not automatically make the plugin build against the system compositor. Log out and back in after upgrading Hyprland so the running compositor matches the rebuilt plugin.
 
 With the Home Manager Hyprland module:
 
