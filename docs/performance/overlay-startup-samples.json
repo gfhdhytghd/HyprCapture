@@ -1,0 +1,180 @@
+{
+  "date": "2026-10-05 America/New_York",
+  "endpoint": "virtual Super+S key injection to two openlayer events",
+  "plugin": "installed v0.2.8 unchanged; measures UI changes only",
+  "baseline": "working-tree snapshot taken before startup edits, including existing audio work",
+  "binary_sha256": {
+    "before": "101db38b9bf7e523d0c7c26e35d6c6383cecbeca32c389ac0a4631f19572d38b",
+    "after": "20ad1210c04fe60563dd2d83e78588a3a8c6e30aa0d1dda8ffb05579b0086049"
+  },
+  "samples": [
+    {
+      "variant": "before",
+      "run": 1,
+      "first_map_ms": 280.62642,
+      "all_map_ms": 285.312547,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 2,
+      "first_map_ms": 230.588714,
+      "all_map_ms": 235.550585,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 3,
+      "first_map_ms": 275.106141,
+      "all_map_ms": 279.818711,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 4,
+      "first_map_ms": 242.587131,
+      "all_map_ms": 246.211378,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 5,
+      "first_map_ms": 269.971977,
+      "all_map_ms": 274.816469,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 6,
+      "first_map_ms": 238.66189,
+      "all_map_ms": 243.681878,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 7,
+      "first_map_ms": 280.058329,
+      "all_map_ms": 284.579696,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 8,
+      "first_map_ms": 231.692184,
+      "all_map_ms": 236.101271,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 9,
+      "first_map_ms": 268.242288,
+      "all_map_ms": 273.015935,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 10,
+      "first_map_ms": 240.020281,
+      "all_map_ms": 244.675104,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 11,
+      "first_map_ms": 280.135002,
+      "all_map_ms": 284.436784,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 12,
+      "first_map_ms": 234.391255,
+      "all_map_ms": 238.381426,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 13,
+      "first_map_ms": 274.62073,
+      "all_map_ms": 278.875472,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 14,
+      "first_map_ms": 249.820757,
+      "all_map_ms": 253.736912,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 15,
+      "first_map_ms": 268.932551,
+      "all_map_ms": 273.714244,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 16,
+      "first_map_ms": 232.709501,
+      "all_map_ms": 237.568138,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 17,
+      "first_map_ms": 251.981319,
+      "all_map_ms": 256.718742,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 18,
+      "first_map_ms": 223.757457,
+      "all_map_ms": 228.449889,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 19,
+      "first_map_ms": 265.505375,
+      "all_map_ms": 270.262629,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 20,
+      "first_map_ms": 244.964168,
+      "all_map_ms": 248.382864,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 21,
+      "first_map_ms": 262.036511,
+      "all_map_ms": 266.499489,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 22,
+      "first_map_ms": 235.051318,
+      "all_map_ms": 239.619006,
+      "layer_count": 2
+    },
+    {
+      "variant": "before",
+      "run": 23,
+      "first_map_ms": 265.691743,
+      "all_map_ms": 269.870255,
+      "layer_count": 2
+    },
+    {
+      "variant": "after",
+      "run": 24,
+      "first_map_ms": 216.958329,
+      "all_map_ms": 221.474342,
+      "layer_count": 2
+    }
+  ]
+}

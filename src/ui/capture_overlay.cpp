@@ -1,3 +1,4 @@
+#include "ui/timing.hpp"
 #include "ui/material_icon.hpp"
 #include <QScrollArea>
 #include <QSlider>
@@ -473,32 +474,8 @@ QString recordTemplateWithFormat(const std::string& filenameTemplate, const QStr
     return value + QLatin1Char('.') + normalizedRecordFormat(format);
 }
 
-bool timingEnabled() {
-    return qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING") || qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING_FILE");
-}
-
-void traceTiming(const QString& event, qint64 elapsedMs = -1) {
-    if (!timingEnabled())
-        return;
-
-    QString line = QStringLiteral("%1 pid=%2 %3")
-                       .arg(QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs))
-                       .arg(QCoreApplication::applicationPid())
-                       .arg(event);
-    if (elapsedMs >= 0)
-        line += QStringLiteral(" elapsed_ms=%1").arg(elapsedMs);
-    line += QLatin1Char('\n');
-
-    const QString path = qEnvironmentVariable("HYPRCAPTURE_TIMING_FILE");
-    if (!path.isEmpty()) {
-        QFile file(path);
-        if (hyprcapture::ui::isPrivateRuntimePath(path) && file.open(QIODevice::WriteOnly | QIODevice::Append))
-            file.write(line.toUtf8());
-        return;
-    }
-
-    fputs(line.toLocal8Bit().constData(), stderr);
-}
+using hyprcapture::ui::traceTiming;
+using hyprcapture::ui::ScopedUiTiming;
 
 bool savePng(const QImage& image, const QString& path) {
     QFile file(path);
@@ -947,14 +924,24 @@ QImage loadRawRgba(const QString& path, int width, int height, bool topDown, qin
         !file.open(QIODevice::ReadOnly))
         return {};
 
-    const QByteArray bytes = file.readAll();
-    if (bytes.size() != expected)
+    // Read into the final owned buffer: readAll() followed by copy() duplicated
+    // every full-resolution monitor image before the first overlay frame.
+    if (file.size() != expected)
         return {};
-
-    QImage image(reinterpret_cast<const uchar*>(bytes.constData()), width, height, width * 4, QImage::Format_RGBA8888);
-    QImage copy = image.copy();
+    QImage image(width, height, QImage::Format_RGBA8888);
+    if (image.isNull())
+        return {};
+    qint64 read = 0;
+    while (read < expected) {
+        const auto count = file.read(reinterpret_cast<char*>(image.bits()) + read, expected - read);
+        if (count <= 0)
+            return {};
+        read += count;
+    }
+    if (!file.atEnd())
+        return {};
     remainingSessionBytes -= expected;
-    return topDown ? copy : copy.flipped(Qt::Vertical);
+    return topDown ? image : std::move(image).flipped(Qt::Vertical);
 }
 
 int inverseRotationDegreesForMonitorTransform(int transform) {
@@ -1634,6 +1621,8 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
         m_fullscreenScope->setCurrentText(qString(hyprcapture::toString(source.currentFullscreenScope())));
     if (m_windowBackground)
         m_windowBackground->setCurrentText(qString(hyprcapture::toString(source.currentWindowBackground())));
+    if (m_record && !m_recordActive)
+        ensureRecordControls();
     if (m_recordFormat)
         m_recordFormat->setCurrentText(source.currentRecordFormat());
     if (m_recordCodec)
@@ -1753,30 +1742,10 @@ void CaptureOverlay::captureScreensBeforeOverlay() {
     if (!m_desktopGeometry.isValid())
         return;
 
-    if (!m_monitorArtifacts.empty()) {
-        double scaleX = 1.0;
-        double scaleY = 1.0;
-        for (const auto& artifact : m_monitorArtifacts) {
-            if (!artifact.image.isNull() && artifact.logicalGeometry.isValid()) {
-                scaleX = std::max(scaleX, static_cast<double>(artifact.image.width()) / std::max(1, artifact.logicalGeometry.width()));
-                scaleY = std::max(scaleY, static_cast<double>(artifact.image.height()) / std::max(1, artifact.logicalGeometry.height()));
-            }
-        }
-
-        const QSize imageSize = boundedScaledSize(m_desktopGeometry.width(), m_desktopGeometry.height(), scaleX, scaleY);
-        m_desktopImage = boundedImage(imageSize, QImage::Format_RGBA8888);
-        if (m_desktopImage.isNull())
-            return;
-        m_desktopImage.fill(QColor(30, 34, 38));
-
-        QPainter painter(&m_desktopImage);
-        for (const auto& artifact : m_monitorArtifacts) {
-            const QRect target = logicalRectToOutputRect(artifact.logicalGeometry, m_desktopGeometry, scaleX, scaleY).intersected(m_desktopImage.rect());
-            if (target.isValid())
-                painter.drawImage(target, artifact.image);
-        }
+    // paintDesktop() draws these artifacts directly. Compose a full desktop
+    // only if a later export needs its background/fallback pixels.
+    if (!m_monitorArtifacts.empty())
         return;
-    }
 
     const QString grimProgram = hyprcapture::ui::trustedSystemProgram(QStringLiteral("grim"));
     QProcess      grim;
@@ -1811,6 +1780,35 @@ void CaptureOverlay::captureScreensBeforeOverlay() {
         const QRect target = logicalRectToOutputRect(screen->geometry(), m_desktopGeometry, scale, scale).intersected(m_desktopImage.rect());
         if (target.isValid())
             painter.drawPixmap(target, pixmap);
+    }
+}
+
+void CaptureOverlay::ensureDesktopImage() {
+    if (!m_desktopImage.isNull() || !m_desktopGeometry.isValid())
+        return;
+
+    if (!m_monitorArtifacts.empty()) {
+        double scaleX = 1.0;
+        double scaleY = 1.0;
+        for (const auto& artifact : m_monitorArtifacts) {
+            if (!artifact.image.isNull() && artifact.logicalGeometry.isValid()) {
+                scaleX = std::max(scaleX, static_cast<double>(artifact.image.width()) / std::max(1, artifact.logicalGeometry.width()));
+                scaleY = std::max(scaleY, static_cast<double>(artifact.image.height()) / std::max(1, artifact.logicalGeometry.height()));
+            }
+        }
+
+        const QSize imageSize = boundedScaledSize(m_desktopGeometry.width(), m_desktopGeometry.height(), scaleX, scaleY);
+        m_desktopImage = boundedImage(imageSize, QImage::Format_RGBA8888);
+        if (m_desktopImage.isNull())
+            return;
+        m_desktopImage.fill(QColor(30, 34, 38));
+
+        QPainter painter(&m_desktopImage);
+        for (const auto& artifact : m_monitorArtifacts) {
+            const QRect target = logicalRectToOutputRect(artifact.logicalGeometry, m_desktopGeometry, scaleX, scaleY).intersected(m_desktopImage.rect());
+            if (target.isValid())
+                painter.drawImage(target, artifact.image);
+        }
     }
 }
 
@@ -2013,6 +2011,19 @@ void CaptureOverlay::buildToolbar() {
     m_status->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     layout->addWidget(m_status);
 
+    if (m_record && !m_recordActive)
+        applyRecordDefaultsForCurrentBackground();
+    updateToolbarControlsForMode();
+    updateRecordOptionsVisibility();
+    updateRecordWarning();
+    updateStatus();
+    relayoutToolbar();
+}
+
+void CaptureOverlay::ensureRecordControls() {
+    if (m_recordOptions)
+        return;
+    auto* rootLayout = qobject_cast<QVBoxLayout*>(m_toolbar->layout());
     m_recordOptions = new QWidget(m_toolbar);
     auto* recordLayout = new QHBoxLayout(m_recordOptions);
     recordLayout->setContentsMargins(0, 0, 0, 0);
@@ -2197,13 +2208,6 @@ void CaptureOverlay::buildToolbar() {
     m_recordWarning->setStyleSheet(QStringLiteral("color: rgba(242, 170, 55, 255); padding: 2px 4px;"));
     rootLayout->addWidget(m_recordWarning);
 
-    if (m_record && !m_recordActive)
-        applyRecordDefaultsForCurrentBackground();
-    updateToolbarControlsForMode();
-    updateRecordOptionsVisibility();
-    updateRecordWarning();
-    updateStatus();
-    relayoutToolbar();
 }
 
 double CaptureOverlay::overlayOpacity() const {
@@ -2242,10 +2246,6 @@ void CaptureOverlay::runOverlayFade(double start, double end, std::function<void
     animation->start();
 }
 
-void CaptureOverlay::startFadeIn() {
-    runOverlayFade(m_overlayOpacity, 1.0, {});
-}
-
 void CaptureOverlay::fadeOutThen(std::function<void()> finished) {
     if (m_fadeOutStarted)
         return;
@@ -2265,11 +2265,26 @@ void CaptureOverlay::enterEvent(QEnterEvent* event) {
     QMainWindow::enterEvent(event);
 }
 
+bool CaptureOverlay::event(QEvent* event) {
+    const bool first = m_firstUpdatePending && event->type() == QEvent::UpdateRequest;
+    if (first)
+        m_firstUpdatePending = false;
+    // QWidget's update processing includes backing-store work, but this is
+    // not a compositor presentation timestamp. Pair it with openlayer externally.
+    if (!first)
+        return QMainWindow::event(event);
+    ScopedUiTiming updateTiming(QStringLiteral("overlay.first_update.%1.%2").arg(x()).arg(y()));
+    return QMainWindow::event(event);
+}
+
 void CaptureOverlay::showEvent(QShowEvent* event) {
+    traceTiming(QStringLiteral("overlay.show.%1.%2").arg(x()).arg(y()));
     QMainWindow::showEvent(event);
-    if (!m_fadeOutStarted && m_overlayOpacity < 1.0)
-        startFadeIn();
-    QTimer::singleShot(0, this, &CaptureOverlay::refreshInitialCursorPosition);
+    // A compositor session already initialized hit testing/status from its
+    // frozen cursor position. Do not schedule another full-screen repaint
+    // immediately after the first frame just to apply the same position.
+    if (!m_hasCursorLogicalPosition)
+        QTimer::singleShot(0, this, &CaptureOverlay::refreshInitialCursorPosition);
 }
 
 void CaptureOverlay::hideOptionPopups() {
@@ -2600,6 +2615,7 @@ hyprcapture::RecordWindowBackend CaptureOverlay::currentRecordBackend() const {
 }
 
 void CaptureOverlay::applyRecordDefaultsForCurrentBackground() {
+    ensureRecordControls();
     const auto background = currentRecordBackground();
 
     if (background != hyprcapture::WindowBackground::Transparent) {
@@ -2850,6 +2866,8 @@ void CaptureOverlay::updateSoundMeter() {
 }
 
 void CaptureOverlay::updateRecordOptionsVisibility() {
+    if (m_record && !m_recordActive)
+        ensureRecordControls();
     if (!m_recordOptions)
         return;
 
@@ -2962,6 +2980,12 @@ void CaptureOverlay::paintCursorLayers(QPainter& painter, const QRect& outputRec
 }
 
 void CaptureOverlay::paintEvent(QPaintEvent*) {
+    std::optional<ScopedUiTiming> paintTiming;
+    if (std::exchange(m_firstPaintPending, false) && hyprcapture::ui::timingEnabled())
+        paintTiming.emplace(QStringLiteral("overlay.first_paint.%1.%2").arg(x()).arg(y()));
+    std::optional<ScopedUiTiming> visiblePaintTiming;
+    if (m_overlayActive && m_overlayOpacity > 0.0 && std::exchange(m_firstVisiblePaintPending, false) && hyprcapture::ui::timingEnabled())
+        visiblePaintTiming.emplace(QStringLiteral("overlay.first_visible_paint.%1.%2").arg(x()).arg(y()));
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
@@ -4160,6 +4184,7 @@ QImage CaptureOverlay::renderResultImage() {
                                  .intersected(windowArtifact->image.rect());
         }
 
+        ensureDesktopImage();
         QImage repairedArtifact = windowArtifact->image;
         repairMissingWindowTail(repairedArtifact, windowArtifact->fullGeometry, windowArtifact->visibleGeometry, m_desktopImage, m_desktopGeometry);
 
@@ -4214,6 +4239,7 @@ QImage CaptureOverlay::renderResultImage() {
             return highResolution;
     }
 
+    ensureDesktopImage();
     const QRect desktopSource = localToDesktopSourceRect(cap);
     const QSize outputSize = desktopSource.isValid() ? desktopSource.size() : cap.size();
     QImage image = boundedImage(outputSize.expandedTo(QSize(1, 1)), QImage::Format_ARGB32_Premultiplied);

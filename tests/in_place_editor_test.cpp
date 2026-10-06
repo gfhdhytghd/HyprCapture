@@ -171,6 +171,45 @@ class InPlaceEditorTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void rawRowsRemainOwnedAfterArtifactCleanup_data() {
+        QTest::addColumn<bool>("topDown");
+        QTest::newRow("top-down") << true;
+        QTest::newRow("bottom-up") << false;
+    }
+
+    void rawRowsRemainOwnedAfterArtifactCleanup() {
+        QFETCH(bool, topDown);
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        defaults.inPlaceEditToolbar = true;
+        QImage expected(QSize(kLogicalWidth, kLogicalHeight) * 2, QImage::Format_RGBA8888);
+        for (int y = 0; y < expected.height(); ++y)
+            for (int x = 0; x < expected.width(); ++x)
+                expected.setPixelColor(x, y, QColor(x % 251, y % 253, (x + y) % 255));
+        const QString path = writeArtifact(topDown ? expected : expected.flipped(Qt::Vertical));
+        QVERIFY(!path.isEmpty());
+        hyprcapture::CaptureSession session;
+        session.id = "raw-row-ownership-test";
+        session.defaults = defaults;
+        hyprcapture::MonitorInfo monitor;
+        monitor.logicalGeometry = {0, 0, kLogicalWidth, kLogicalHeight};
+        monitor.scale = 2;
+        monitor.artifactPath = path.toStdString();
+        monitor.artifactWidth = expected.width();
+        monitor.artifactHeight = expected.height();
+        monitor.artifactTopDown = topDown;
+        session.monitors.push_back(monitor);
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(session)));
+        QVERIFY(!QFile::exists(path));
+        QCOMPARE(overlay.property("overlayOpacity").toDouble(), 1.0);
+        overlay.show();
+        QTest::qWait(30);
+        selectRegion(overlay, QPoint(200, 180), QPoint(349, 279));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor && editor->isVisible());
+        QCOMPARE(editor->resultImage().convertToFormat(QImage::Format_RGBA8888), expected.copy(QRect(400, 360, 300, 200)));
+    }
+
     void windowBackgroundRetainsNativeImageAndAnnotations() {
         QTemporaryDir output;
         QVERIFY(output.isValid());

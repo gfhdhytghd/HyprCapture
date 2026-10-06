@@ -1,3 +1,6 @@
+#include "shared/session_startup.hpp"
+#include "shared/protocol.hpp"
+#include "ui/timing.hpp"
 #include "audio/helper.hpp"
 #include "shared/config.hpp"
 #include "ui/capture_overlay.hpp"
@@ -793,8 +796,10 @@ int main(int argc, char** argv) {
     LayerShellQt::Shell::useLayerShell();
 #endif
 
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.entry"));
     QApplication app(argc, argv);
     QApplication::setApplicationName("hyprcapture-ui");
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.app_ready"));
 
     QCommandLineParser parser;
     parser.addHelpOption();
@@ -861,6 +866,7 @@ int main(int argc, char** argv) {
         {"watermark-offset", "Watermark x/y offset in pixels or percent.", "vec2", "0 0"},
         {"session-json", "Compositor session metadata.", "json", "{}"},
         {"session-json-file", "Private compositor session metadata file.", "path"},
+        {"session-json-stdin", "Receive a private session filename from the compositor startup socket."},
         {"thumbnail-window", "Show a normal thumbnail window for an image path.", "path"},
         {"thumbnail-target", "Path opened or deleted by a thumbnail preview.", "path"},
         {"record-countdown-request", "Show an input-transparent recording countdown for a private request file.", "path"},
@@ -1028,17 +1034,35 @@ int main(int argc, char** argv) {
     if (hasArgument(argc, argv, "--recording-result"))
         return showRecordingResult(defaults, parser.value("recording-result"));
 
-    cancelRecordingCountdown();
-
     QString sessionJson = parser.value("session-json");
-    if (parser.isSet("session-json-file")) {
-        const QString path = parser.value("session-json-file");
-        QFile         file(path);
-        if (hyprcapture::ui::isPrivateRuntimeFile(path, MAX_SESSION_JSON_BYTES) && file.open(QIODevice::ReadOnly))
-            sessionJson = QString::fromUtf8(file.readAll());
-        if (hyprcapture::ui::isPrivateRuntimePath(path))
-            QFile::remove(path);
+    QString sessionPath = parser.value("session-json-file");
+    if (parser.isSet("session-json-stdin")) {
+        hyprcapture::ui::ScopedUiTiming waitTiming(QStringLiteral("ui.session_wait"));
+        const auto received = hyprcapture::receiveStartupPath(STDIN_FILENO);
+        close(STDIN_FILENO);
+        if (!received) {
+            qWarning("HyprCapture: compositor session startup failed or timed out");
+            return 1;
+        }
+        sessionPath = QString::fromStdString(*received);
     }
+    // The snapshot must already be frozen before dismissing any countdown.
+    cancelRecordingCountdown();
+    if (!sessionPath.isEmpty()) {
+        QFile file(sessionPath);
+        const bool loaded = hyprcapture::ui::isPrivateRuntimeFile(sessionPath, MAX_SESSION_JSON_BYTES) && file.open(QIODevice::ReadOnly);
+        if (loaded)
+            sessionJson = QString::fromUtf8(file.readAll());
+        if (hyprcapture::ui::isPrivateRuntimePath(sessionPath))
+            QFile::remove(sessionPath);
+        // An interrupted prelaunch must never fall through to a live grim
+        // capture: that would lose the original frozen snapshot semantics.
+        if (parser.isSet("session-json-stdin") && (!loaded || !hyprcapture::decodeSessionJson(sessionJson.toStdString()))) {
+            qWarning("HyprCapture: invalid compositor startup session");
+            return 1;
+        }
+    }
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.session_loaded"));
 
     const bool quick = parser.isSet("quick");
     CaptureOverlay overlay(defaults, quick, parser.isSet("record"), parser.isSet("record-active"), sessionJson);
@@ -1091,12 +1115,14 @@ int main(int argc, char** argv) {
         }
     }
 
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.show_begin"));
     for (CaptureOverlay* candidate : overlays) {
         candidate->show();
         candidate->raise();
     }
     overlay.activateWindow();
     overlay.raise();
+    hyprcapture::ui::traceTiming(QStringLiteral("ui.show_end"));
 
     return app.exec();
 }

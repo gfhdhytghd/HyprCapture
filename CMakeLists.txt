@@ -220,6 +220,8 @@ if(BUILD_TESTING)
   add_test(NAME hyprcapture-audio-timeline-test COMMAND hyprcapture-audio-timeline-test)
   find_package(Python3 COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
+    add_test(NAME session-startup-ui COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_startup_ui_test.py $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(session-startup-ui PROPERTIES TIMEOUT 40)
     add_test(NAME pin-launch COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/pin_launch_test.py $<TARGET_FILE:hyprcapture-ui>)
     set_tests_properties(pin-launch PROPERTIES TIMEOUT 20)
   endif()
@@ -227,6 +229,17 @@ if(BUILD_TESTING)
     add_test(NAME hyprcapture-audio-finalize-test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/audio_finalize_test.py $<TARGET_FILE:hyprcapture-ui>)
     set_tests_properties(hyprcapture-audio-finalize-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
   endif()
+  add_executable(hyprcapture-material-icon-test tests/material_icon_test.cpp)
+  target_include_directories(hyprcapture-material-icon-test PRIVATE src)
+  target_link_libraries(hyprcapture-material-icon-test PRIVATE Qt6::Gui Qt6::Svg)
+  add_test(NAME material-icon COMMAND hyprcapture-material-icon-test)
+  set_tests_properties(material-icon PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+
+  add_executable(hyprcapture-session-startup-test tests/session_startup_test.cpp)
+  target_include_directories(hyprcapture-session-startup-test PRIVATE src)
+  add_test(NAME session-startup COMMAND hyprcapture-session-startup-test)
+  set_tests_properties(session-startup PROPERTIES TIMEOUT 10)
+
   add_executable(hyprcapture-supervised-process-test
     tests/supervised_process_test.cpp
     src/shared/supervised_process.cpp

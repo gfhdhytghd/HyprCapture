@@ -57,6 +57,7 @@ class CaptureOverlay final : public QMainWindow {
     void editingChanged(bool editing);
 
   protected:
+    bool event(QEvent* event) override;
     void enterEvent(QEnterEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
@@ -102,10 +103,12 @@ class CaptureOverlay final : public QMainWindow {
     };
 
     void buildToolbar();
+    void ensureRecordControls();
     void initializeOverlay(const QRect& overlayGeometry);
     bool requestActivation();
     void parseSessionJson(const QString& json);
     void captureScreensBeforeOverlay();
+    void ensureDesktopImage();
     QRect preferredOverlayLogicalGeometry() const;
     QScreen* screenForOverlayGeometry(const QRect& logicalGeometry) const;
     void setMode(hyprcapture::CaptureMode mode);
@@ -210,7 +213,6 @@ class CaptureOverlay final : public QMainWindow {
     void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath);
     double overlayOpacity() const;
     void setOverlayOpacity(double opacity);
-    void startFadeIn();
     void fadeOutThen(std::function<void()> finished);
     void runOverlayFade(double start, double end, std::function<void()> finished);
 
@@ -234,7 +236,11 @@ class CaptureOverlay final : public QMainWindow {
     QRect                     m_editImageRect;
     bool                      m_fadeOutStarted = false;
     bool                      m_overlayActive = true;
-    double                    m_overlayOpacity = 0.0;
+    bool                      m_firstPaintPending = true;
+    bool                      m_firstVisiblePaintPending = true;
+    bool                      m_firstUpdatePending = true;
+    // A mapped overlay must already contain the frozen desktop, not a transparent warm-up frame.
+    double                    m_overlayOpacity = 1.0;
     QPoint                    m_dragStart;
     QPoint                    m_dragEnd;
     QPoint                    m_confirmDragStart;
