@@ -1,4 +1,5 @@
 #include "ui/timing.hpp"
+#include "ui/mapped_image.hpp"
 #include "ui/material_icon.hpp"
 #include <QScrollArea>
 #include <QSlider>
@@ -924,11 +925,16 @@ QImage loadRawRgba(const QString& path, int width, int height, bool topDown, qin
         !file.open(QIODevice::ReadOnly))
         return {};
 
-    // Read into the final owned buffer: readAll() followed by copy() duplicated
-    // every full-resolution monitor image before the first overlay frame.
     if (file.size() != expected)
         return {};
-    QImage image(width, height, QImage::Format_RGBA8888);
+    QImage image = hyprcapture::ui::mapRawRgba(file, width, height);
+    if (!image.isNull()) {
+        remainingSessionBytes -= expected;
+        return topDown ? image : image.flipped(Qt::Vertical);
+    }
+    // Mapping is an optimization, not a prerequisite (e.g. address-space
+    // pressure). Retain the bounded owned-buffer path as a fallback.
+    image = QImage(width, height, QImage::Format_RGBA8888);
     if (image.isNull())
         return {};
     qint64 read = 0;

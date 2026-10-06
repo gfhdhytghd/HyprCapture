@@ -99,3 +99,49 @@ helper in `finally`. Do not run it during compilation or other heavy workloads.
 For timing, set `HYPRCAPTURE_TIMING_FILE` for the helper to a private runtime path;
 enable plugin `timing`/`timing_file` separately. Compare `monotonic_us` timestamps
 with a CLOCK_MONOTONIC key timestamp. Keep instrumented runs separate from A/B data.
+
+
+## Round 2: read-only mapped artifacts
+
+After installing the startup-prelaunch plugin, a six-capture profile still spent
+29.5 ms in session parsing/image loading. The producer creates RGBA artifacts
+with O_EXCL, closes them before publishing metadata, and does not modify them
+subsequently. The UI now maps these completed private artifacts read-only instead
+of copying all pixels into another buffer. Existing path, size and total session
+budget checks remain in place. A failed mmap falls back to the owned-buffer reader.
+
+The mapping survives close/unlink and is released with the final shared QImage.
+The const-data QImage constructor ensures pixel edits detach into writable memory.
+Bottom-up/rotated artifacts still require an orientation conversion. This is not
+a general loader for files another process continues to write or truncate.
+
+With the updated production plugin held constant, 24 alternating trials (12 each)
+measured the installed pre-mapping helper against the new Release helper:
+
+| Helper | Mean both layers mapped | Median | Min–max |
+| --- | ---: | ---: | ---: |
+| Before read-only mapping | 227.28 ms | 225.31 ms | 214.25–240.80 ms |
+| With read-only mapping | 195.45 ms | 194.99 ms | 183.19–220.25 ms |
+
+Reduction: **31.83 ms / 14.01%**. [All samples and binary hashes](performance/overlay-startup-mmap-samples.json).
+Only helper selection was changed temporarily, restored after testing; the plugin
+was not reloaded. The new helper has not been installed. As above, mapping events
+are not display presentation. Do not attribute differences between this baseline
+and older runs solely to code: scene content and background load can also vary.
+
+A separate three-capture profile reduced parse_session to 1 ms on average. Combined
+first-paint CPU time remained about 61 ms (previous profile about 60 ms), so the
+saved loading time was not simply deferred into a slower first paint. A resident
+Qt helper and first-frame rendering remain possible future work, not implemented
+or assigned speculative performance numbers here.
+
+The mapped-image test covers exact size validation, invalid dimensions, RGBA/alpha,
+sharing, close/unlink lifetime, writable detach through QPainter and bits(), and
+vertical orientation. Existing in-place editor tests verify crop pixels after
+artifact cleanup. Working-tree mapped-image, in-place-editor, session-startup-ui
+and overlay-paint tests passed. Local evidence and the alternating measurement
+script are in `~/.cache/hyprcapture-startup-round2/`.
+
+The independently exported staged source also built successfully and passed
+mapped-image, in-place-editor and session-startup-ui (3/3), without the unrelated
+uncommitted audio changes.
