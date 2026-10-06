@@ -4,6 +4,8 @@ HyprCapture is a Hyprland-only screenshot tool split into a compositor plugin an
 
 All Hyprland configuration examples in this document use the Lua config API available in Hyprland 0.56 and later.
 
+See the [changelog](https://gfhdhytghd.github.io/HyprCapture/) for release history and unreleased changes.
+
 > [!IMPORTANT]
 > `hyprpm` builds the compositor plugin and installs the helper to `~/.local/bin/hyprcapture-ui`. Set `plugin.hyprcapture.helper` with `hl.config` only when you want to override that default helper path.
 
