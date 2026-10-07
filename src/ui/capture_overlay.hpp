@@ -91,6 +91,7 @@ class CaptureOverlay final : public QMainWindow {
         QRect   fullGeometry;
         QRect   visibleGeometry;
         QRect   selectionGeometry;
+        std::optional<double> selectionRounding;
         QRect   selectionClipGeometry;
         bool    stagePreview = false;
         double  rounding = 0.0;
@@ -98,6 +99,7 @@ class CaptureOverlay final : public QMainWindow {
         double  borderSize = 0.0;
         QImage  image;
         QImage  realBackground;
+        bool    realBackgroundAttempted = false;
         QString address;
         QString title;
         QString appClass;

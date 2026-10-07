@@ -318,7 +318,7 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (stable(m_previous, frame))
     return {Status::Unchanged};
   const auto previous = gray(m_previous), current = gray(frame);
-  const QRect content =
+  QRect content =
       m_layoutLocked ? m_layout.content : detectContent(previous, current);
   if (content.width() < 64 || content.height() < 96)
     return {Status::NoOverlap};
@@ -349,6 +349,26 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   }
   if (!alignment.found)
     return {alignment.ambiguous ? Status::Ambiguous : Status::NoOverlap};
+  if (!m_layoutLocked && alignment.position != 0) {
+    // Tiny scrolls can leave a glyph edge unchanged at the viewport boundary.
+    // A proposed fixed band that also matches the translated page belongs to
+    // the document. Compare every pixel, including alpha, before retaining it
+    // as moving content; stationary chrome must keep its original geometry.
+    const int d = std::abs(alignment.position);
+    const QImage& upper = alignment.position > 0 ? m_previous : frame;
+    const QImage& lower = alignment.position > 0 ? frame : m_previous;
+    const auto translatedBand = [&](int y, int height) {
+      if (height <= 0 || y < 0 || y + height + d > frame.height())
+        return false;
+      return upper.copy(content.x(), y + d, content.width(), height) ==
+             lower.copy(content.x(), y, content.width(), height);
+    };
+    if (translatedBand(0, content.top()))
+      content.setTop(0);
+    const int footer = frame.height() - content.bottom() - 1;
+    if (translatedBand(frame.height() - footer - d, footer))
+      content.setBottom(frame.height() - 1);
+  }
   const int minY = std::min(m_layout.minimumY, position),
             maxY = std::max(m_layout.maximumY, position);
   const int added = (maxY - minY) - (m_layout.maximumY - m_layout.minimumY);

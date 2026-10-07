@@ -14,6 +14,7 @@ struct StageCaptureTarget {
     std::string address;
     Rect selection;
     Rect clip;
+    std::optional<double> selectionRounding;
 };
 
 // Optional, versioned Hymission capability. Preserve bottom-to-top preview
@@ -53,6 +54,14 @@ inline std::vector<StageCaptureTarget> parseStageCaptureTargets(std::string_view
         if (std::max(target.selection.x, target.clip.x) >= std::min(target.selection.x + target.selection.width, target.clip.x + target.clip.width) ||
             std::max(target.selection.y, target.clip.y) >= std::min(target.selection.y + target.selection.height, target.clip.y + target.clip.height))
             continue;
+        if (item.contains("selectionRounding")) {
+            if (!item["selectionRounding"].is_number())
+                continue;
+            const double radius = item["selectionRounding"].get<double>();
+            if (!std::isfinite(radius) || radius < 0 || radius > 1000000)
+                continue;
+            target.selectionRounding = radius;
+        }
         result.push_back(std::move(target));
     }
     return result;

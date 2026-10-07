@@ -2339,6 +2339,8 @@ void* findFunctionByDemangledName(const std::string& lookupName, const std::stri
 }
 
 void* findRenderWindowFunction() {
+    if (auto* renderer = findFunctionByDemangledName("renderWindow", "IHyprRenderer::renderWindow("))
+        return renderer;
     return findFunctionByDemangledName("renderWindow", "CHyprRenderer::renderWindow(");
 }
 
@@ -2484,6 +2486,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
         return readbacks;
     }
 
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
     g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     g_pHyprRenderer->renderWorkspace(monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
     g_pHyprRenderer->m_renderData.blockScreenShader = true;
@@ -2561,6 +2564,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
         return false;
     }
 
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
     g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     {
         ScopedTiming timing("realbg.render_workspace");
@@ -3580,6 +3584,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
             info.selectionGeometry = overviewSelectionIt->second;
         if (candidate.stage) {
             info.stagePreview = true;
+            info.selectionRounding = candidate.stage->selectionRounding;
             info.selectionGeometry = candidate.stage->selection;
             info.selectionClipGeometry = candidate.stage->clip;
         } else if (isScrollingTiledWindow(window))
@@ -3754,6 +3759,14 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     info.artifactPath = artifactPath.string();
     info.fullGeometry = toRect(artifactBox);
     session.windows.push_back(std::move(info));
+
+    if (request->defaults.windowBackground == WindowBackground::Real) {
+        PendingRealBackgroundCapture background{
+            .window = window, .monitor = monitor, .artifactBox = artifactBox,
+            .path = root / ("window-real-" + pointerId(window.get()) + ".rgba"), .windowIndex = 0,
+        };
+        renderRealBackgroundArtifactsForMonitor(monitor, Time::steadyNow(), {&background}, session, artifactBudget);
+    }
 
     const auto responseJson = encodeSessionJson(session);
     if (!writePrivateResponseFile(path, responseJson)) {

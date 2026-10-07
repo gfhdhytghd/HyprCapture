@@ -1,0 +1,15 @@
+Test project /home/wilf/data/hyprland_plugins/hymission/build-cmake
+    Start 1: hymission-stage-edge-render-test
+1/5 Test #1: hymission-stage-edge-render-test ......   Passed    0.40 sec
+    Start 2: hymission-stage-logic-test
+2/5 Test #2: hymission-stage-logic-test ............   Passed    0.00 sec
+    Start 3: hymission-search-child-process-test
+3/5 Test #3: hymission-search-child-process-test ...   Passed    0.53 sec
+    Start 4: hymission-mission-layout-test
+4/5 Test #4: hymission-mission-layout-test .........   Passed    0.48 sec
+    Start 5: hymission-overview-logic-test
+5/5 Test #5: hymission-overview-logic-test .........   Passed    0.02 sec
+
+100% tests passed out of 5
+
+Total Test time (real) =   1.44 sec

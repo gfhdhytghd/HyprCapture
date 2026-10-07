@@ -1,0 +1,71 @@
+{
+  "scale": 2.0,
+  "cases": [
+    {
+      "configured_radius": 17,
+      "expected_logical_radius": 17.5,
+      "previews": [
+        {
+          "address": "0x5591cb3d5e60",
+          "selectionClipGeometry": {
+            "height": 225.0,
+            "width": 256.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "selectionGeometry": {
+            "height": 150.0,
+            "width": 200.0,
+            "x": -39.0,
+            "y": 30.0
+          },
+          "selectionRounding": 17.5
+        }
+      ]
+    },
+    {
+      "configured_radius": 0,
+      "expected_logical_radius": 0,
+      "previews": [
+        {
+          "address": "0x5591cb3d5e60",
+          "selectionClipGeometry": {
+            "height": 225.0,
+            "width": 256.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "selectionGeometry": {
+            "height": 150.0,
+            "width": 200.0,
+            "x": -39.0,
+            "y": 30.0
+          },
+          "selectionRounding": 0.0
+        }
+      ]
+    },
+    {
+      "configured_radius": -1,
+      "expected_logical_radius": 20.5,
+      "previews": [
+        {
+          "address": "0x5591cb3d5e60",
+          "selectionClipGeometry": {
+            "height": 225.0,
+            "width": 256.0,
+            "x": 0.0,
+            "y": 0.0
+          },
+          "selectionGeometry": {
+            "height": 150.0,
+            "width": 200.0,
+            "x": -39.0,
+            "y": 30.0
+          },
+          "selectionRounding": 20.5
+        }
+      ]
+    }
+  ]
+}

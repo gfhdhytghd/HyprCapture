@@ -22,6 +22,28 @@ QImage texture(int width, int height, unsigned seed = 42) {
 }
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
+    // A small movement at 2x scale leaves some top-row glyph stems unchanged.
+    // They still belong to the document, not to a fixed header.
+    QImage textPage(1600, 6000, QImage::Format_ARGB32);
+    textPage.fill(QColor(250, 249, 246));
+    {
+        QPainter p(&textPage); p.scale(2, 2); p.setFont(QFont("sans-serif", 13));
+        for (int y = 30, row = 0; y < 3000; y += 37, ++row) {
+            p.fillRect(12, y-18, 24, 24, QColor(row*71%220,row*43%220,row*113%220));
+            p.setPen(QColor(22,30,43));
+            p.drawText(48,y,QString("Row %1 | native scroll fixture | value %2").arg(row).arg(row*7919));
+        }
+    }
+    for (int direction : {-1, 1}) {
+        ScrollStitcher tiny;
+        int lo = 550, hi = 550;
+        for (int offset : {550, 550+3*direction, 610, 490, 550, 630, 670, 490}) {
+            tiny.append(textPage.copy(360, offset*2, 680, 500));
+            lo = std::min(lo, offset); hi = std::max(hi, offset);
+            require(tiny.image() == textPage.copy(360,lo*2,680,(250+hi-lo)*2),
+                    "tiny scaled scroll retains document edges in both directions");
+        }
+    }
     const auto document = texture(360, 2400);
     const auto frame = [&](int offset) { return document.copy(0, offset, 360, 600); };
     ScrollStitcher stitcher;

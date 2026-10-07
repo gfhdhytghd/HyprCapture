@@ -17,6 +17,7 @@ struct ScrollSession {
   PHLMONITOR monitor;
   PHLWINDOW window;
   SP<CWLSurfaceResource> surface;
+  WP<CWLSurfaceResource> inputRoot;
   Rect windowGeometry;
   double scale = 1;
   int transform = 0, control = -1;
@@ -127,6 +128,7 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     s.failed = true;
     return;
   }
+  s.inputRoot = window->wlSurface()->resource();
   g_pSeatManager->setPointerFocus(surface, local);
   g_pSeatManager->sendPointerMotion(input.event.timeMs, local);
   // GTK 3 flushes either pointer motion or scroll data for a wl_pointer.frame.
@@ -304,6 +306,16 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                   {"reason", "Target or display changed; finish or cancel"}});
     s->paused = true;
     return;
+  }
+  // Offscreen reads intentionally suppress presentation feedback. A client
+  // obscured by the editor may otherwise wait forever for its next frame
+  // callback, leaving every capture identical to the baseline. Pace only the
+  // actual scroll recipient at the capture cadence; do not fake presentation.
+  if (s->released) {
+    if (auto root = s->inputRoot.lock())
+      root->breadthfirst([](SP<CWLSurfaceResource> surface, const Vector2D&, void*) {
+        surface->frame(Time::steadyNow());
+      }, nullptr);
   }
   g_pHyprOpenGL->makeEGLCurrent();
   GLint previousPack = 0, previousRead = 0, previousAlignment = 0;

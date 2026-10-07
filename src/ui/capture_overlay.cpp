@@ -1097,19 +1097,15 @@ QPainterPath roundedWindowFramePath(const QRectF& rawRect, double radius, double
     return path;
 }
 
-bool paintWindowBackground(QImage& background,
-                           hyprcapture::WindowBackground bg,
-                           const QImage& desktopImage,
-                           const QRect& desktopSource) {
+bool paintWindowBackground(QImage& background, hyprcapture::WindowBackground bg) {
     if (background.isNull() || bg == hyprcapture::WindowBackground::Transparent)
         return false;
 
     QPainter backgroundPainter(&background);
     if (bg == hyprcapture::WindowBackground::Real) {
-        if (desktopImage.isNull() || !desktopSource.isValid())
-            return false;
-        backgroundPainter.drawImage(background.rect(), desktopImage, desktopSource);
-        return true;
+        // A monitor image already contains the foreground. It cannot supply
+        // an independent background, especially after a scrolling extension.
+        return false;
     }
 
     if (bg == hyprcapture::WindowBackground::White)
@@ -1121,40 +1117,6 @@ bool paintWindowBackground(QImage& background,
     else
         backgroundPainter.fillRect(background.rect(), QColor(30, 34, 38));
     return true;
-}
-
-void reconstructRealWindowBackground(QImage& background, const QImage& artifact, const QRect& artifactSource) {
-    if (background.format() != QImage::Format_RGBA8888 || artifact.format() != QImage::Format_RGBA8888 || background.isNull() || artifact.isNull())
-        return;
-
-    // The desktop snapshot already contains the selected window. Invert the
-    // source-over blend so the window artifact is not composited twice.
-    for (int y = 0; y < background.height(); ++y) {
-        auto* dst = background.scanLine(y);
-        const int sy = artifactSource.y() + y;
-        if (sy < 0 || sy >= artifact.height())
-            continue;
-
-        const auto* src = artifact.constScanLine(sy);
-        for (int x = 0; x < background.width(); ++x) {
-            const int sx = artifactSource.x() + x;
-            if (sx < 0 || sx >= artifact.width())
-                continue;
-
-            auto* dstPx = dst + static_cast<qsizetype>(x) * 4;
-            const auto* srcPx = src + static_cast<qsizetype>(sx) * 4;
-            const int alpha = srcPx[3];
-            if (alpha <= 0 || alpha >= 255)
-                continue;
-
-            const int inverseAlpha = 255 - alpha;
-            for (int channel = 0; channel < 3; ++channel) {
-                const int value = (dstPx[channel] * 255 - srcPx[channel] * alpha + inverseAlpha / 2) / inverseAlpha;
-                dstPx[channel] = static_cast<uchar>(std::clamp(value, 0, 255));
-            }
-            dstPx[3] = 255;
-        }
-    }
 }
 
 void clipWindowBackgroundToFrame(QImage& background,
@@ -1723,6 +1685,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.title = qString(info.title);
         artifact.appClass = qString(info.appClass);
         artifact.stagePreview = info.stagePreview;
+        artifact.selectionRounding = info.selectionRounding;
         artifact.zIndex = info.zIndex;
         artifact.focused = info.focused;
         artifact.fullscreen = info.fullscreen;
@@ -3723,13 +3686,22 @@ void CaptureOverlay::endHymissionCaptureInputSuppression() {
 }
 
 double CaptureOverlay::windowFrameRadius(const WindowArtifact& window) const {
+    if (window.stagePreview && window.selectionRounding)
+        return *window.selectionRounding;
     if (window.rounding <= 0.0)
         return 0.0;
 
     const double power = std::clamp(window.roundingPower, 1.0, 10.0);
     const double border = std::max(0.0, window.borderSize);
     const double correction = border * (std::sqrt(2.0) - 1.0) * std::max(2.0 - power, 0.0);
-    return std::max(0.0, window.rounding + border - correction);
+    double radius = std::max(0.0, window.rounding + border - correction);
+    if (window.stagePreview && window.selectionGeometry.isValid() && window.visibleGeometry.isValid()) {
+        // Use the un-clipped preview: clipping a card does not change its scale.
+        const double scale = std::min(double(window.selectionGeometry.width()) / window.visibleGeometry.width(),
+                                      double(window.selectionGeometry.height()) / window.visibleGeometry.height());
+        radius *= scale;
+    }
+    return radius;
 }
 
 int CaptureOverlay::rawHoveredWindowIndex() const {
@@ -3827,8 +3799,12 @@ hyprcapture::FilenameMetadata CaptureOverlay::resolvedFilenameMetadata() const {
 }
 
 bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
-    if (!window.image.isNull())
+    const bool keepImage = !window.image.isNull();
+    const bool needsBackground = currentWindowBackground() == hyprcapture::WindowBackground::Real && window.realBackground.isNull();
+    if (keepImage && (!needsBackground || window.realBackgroundAttempted))
         return true;
+    if (needsBackground)
+        window.realBackgroundAttempted = true;
     if (window.address.isEmpty() || !window.visibleGeometry.isValid())
         return false;
 
@@ -3892,6 +3868,7 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         capturedWindow.visibleGeometry = protocolRect(info.visibleGeometry);
         capturedWindow.fullGeometry = protocolRect(info.fullGeometry);
         capturedWindow.stagePreview = window.stagePreview;
+        capturedWindow.selectionRounding = window.selectionRounding;
         capturedWindow.selectionGeometry = window.selectionGeometry;
         capturedWindow.selectionClipGeometry = window.selectionClipGeometry;
         capturedWindow.rounding = info.rounding;
@@ -3910,7 +3887,14 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         if (capturedWindow.image.isNull() || !capturedWindow.fullGeometry.isValid())
             return false;
 
-        window = std::move(capturedWindow);
+        if (keepImage) {
+            // Changing the background must not replace the frozen foreground or
+            // the geometry used by existing annotations / scrolling results.
+            window.realBackground = capturedWindow.realBackground.scaled(window.image.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        } else {
+            capturedWindow.realBackgroundAttempted = needsBackground;
+            window = std::move(capturedWindow);
+        }
         return true;
     }
 
@@ -4236,7 +4220,7 @@ QImage CaptureOverlay::renderResultImage() {
         auto* windowArtifact = selectedWindow() ? selectedWindow() : hoveredWindow();
         if (!windowArtifact)
             return {};
-        if (windowArtifact->image.isNull() && !hydrateWindowArtifact(*windowArtifact)) {
+        if (!hydrateWindowArtifact(*windowArtifact) && windowArtifact->image.isNull()) {
             if (hasOverviewSelectionGeometry(*windowArtifact))
                 return {};
             return renderDesktopRectAtDisplayResolution(windowFrameGeometry(*windowArtifact));
@@ -4269,8 +4253,6 @@ QImage CaptureOverlay::renderResultImage() {
             return {};
         background.fill(Qt::transparent);
         const QRect logicalSource = artifactRectToLogicalRect(artifactSource, repairedArtifact.size(), windowArtifact->fullGeometry);
-        const QRect desktopSource = desktopSourceRectForGlobalRect(logicalSource);
-        const QImage maskArtifact = repairedArtifact.format() == QImage::Format_RGBA8888 ? repairedArtifact : repairedArtifact.convertToFormat(QImage::Format_RGBA8888);
         bool         paintedBackground = false;
         if (bg == hyprcapture::WindowBackground::Real && !windowArtifact->realBackground.isNull() && logicalSource.isValid()) {
             const QRect backgroundSource = projectedImageRect(logicalSource, windowArtifact->fullGeometry, windowArtifact->realBackground.size());
@@ -4280,9 +4262,7 @@ QImage CaptureOverlay::renderResultImage() {
                 paintedBackground = true;
             }
         }
-        if (!paintedBackground && paintWindowBackground(background, bg, m_desktopImage, desktopSource)) {
-            if (bg == hyprcapture::WindowBackground::Real)
-                reconstructRealWindowBackground(background, maskArtifact, artifactSource);
+        if (!paintedBackground && paintWindowBackground(background, bg)) {
             paintedBackground = true;
         }
         if (paintedBackground) {
@@ -4472,11 +4452,12 @@ bool CaptureOverlay::stopRecording() {
 }
 
 QImage CaptureOverlay::scrollWindowBackground(const QImage& frame, const QRect& geometry) {
-    const auto* window = selectedWindow();
+    auto* window = selectedWindow();
     const auto backgroundMode = currentWindowBackground();
     if (!window || backgroundMode == hyprcapture::WindowBackground::Transparent)
         return QImage{};
-    ensureDesktopImage();
+    if (backgroundMode == hyprcapture::WindowBackground::Real)
+        hydrateWindowArtifact(*window);
     QImage background(frame.size(), QImage::Format_RGBA8888);
     background.fill(Qt::transparent);
     bool painted = false;
@@ -4488,10 +4469,7 @@ QImage CaptureOverlay::scrollWindowBackground(const QImage& frame, const QRect& 
             painted = true;
         }
     }
-    if (!painted && paintWindowBackground(background, backgroundMode, m_desktopImage,
-                                           desktopSourceRectForGlobalRect(geometry))) {
-        if (backgroundMode == hyprcapture::WindowBackground::Real)
-            reconstructRealWindowBackground(background, frame.convertToFormat(QImage::Format_RGBA8888), frame.rect());
+    if (!painted && paintWindowBackground(background, backgroundMode)) {
         painted = true;
     }
     if (!painted)

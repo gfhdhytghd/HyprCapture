@@ -54,6 +54,12 @@ int main() {
         auto targets = parseStageCaptureTargets(response.dump());
         require(targets.size() == 2 && targets[0].address == "0x123" && targets[1].address == "0x456", "Stage preserves stacking order");
         require(targets[0].selection.x == -80, "Stage supports negative output coordinates");
+        require(!targets[0].selectionRounding, "old Stage has no authoritative radius");
+        response["captureWindows"][0]["selectionRounding"] = 17.5;
+        require(parseStageCaptureTargets(response.dump())[0].selectionRounding == 17.5, "Stage exposes rendered radius");
+        response["captureWindows"][0]["selectionRounding"] = -1;
+        require(parseStageCaptureTargets(response.dump()).size() == 1, "negative preview radius rejected");
+        response["captureWindows"][0].erase("selectionRounding");
         require(parseStageCaptureTargets("unknown command").empty(), "old Hymission has no Stage capability");
         response["captureVersion"] = 2;
         require(parseStageCaptureTargets(response.dump()).empty(), "unsupported Stage capability fails closed");
@@ -248,6 +254,7 @@ int main() {
     session.windows.back().artifactPath = "/tmp/window.rgba";
     session.windows.back().artifactWidth = 200;
     session.windows.back().artifactHeight = 100;
+    session.windows.back().selectionRounding = 17.5;
     session.windows.back().selectionGeometry = Rect{.x = 30, .y = 40, .width = 120, .height = 80};
     session.windows.back().selectionClipGeometry = Rect{.x = 0, .y = 0, .width = 100, .height = 100};
     session.windows.back().stagePreview = true;
@@ -345,6 +352,7 @@ int main() {
     require(decoded->monitors.front().singleWorkspaceWindowTitle == "Title", "decoded single workspace window title");
     require(decoded->windows.front().artifactPath == "/tmp/window.rgba", "decoded artifact path");
     require(decoded->windows.front().stagePreview, "Stage selection marker survives round trip");
+    require(decoded->windows.front().selectionRounding == 17.5, "preview radius round trip");
     require(decoded->windows.front().selectionGeometry.has_value(), "decoded selection geometry exists");
     require(decoded->windows.front().selectionClipGeometry.has_value(), "decoded selection clip geometry exists");
     require(decoded->windows.front().focused && decoded->windows.front().fullscreen, "decoded window state");

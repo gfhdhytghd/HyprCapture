@@ -21,6 +21,7 @@
 #include <QToolButton>
 #include <QWheelEvent>
 #include <QWindow>
+#include <array>
 #include <iostream>
 QImage document(int width, int height, qreal scale) {
   QImage out(qRound(width * scale), qRound(height * scale),
@@ -46,6 +47,9 @@ public:
   int offset = 400;
   QImage page;
   Fixture() {
+    bool hasOffset = false;
+    const int requestedOffset = qEnvironmentVariableIntValue("HYPRCAPTURE_SCROLL_FIXTURE_OFFSET", &hasOffset);
+    if (hasOffset) offset = std::clamp(requestedOffset, 0, 2000);
     if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_ALPHA"))
       setAttribute(Qt::WA_TranslucentBackground);
     resize(800, 600);
@@ -109,6 +113,11 @@ int main(int argc, char **argv) {
   bool passed = false;
   const bool continuous = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_CONTINUOUS");
   bool continuousDone = !continuous, continuousGrowth = false;
+  const bool partialRegion = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_PARTIAL_REGION");
+  const std::array<int, 6> offsets = partialRegion ? std::array<int, 6>{460,340,400,480,520,340}
+                                                   : std::array<int, 6>{520,200,450,700,920,200};
+  const int minimumOffset = *std::min_element(offsets.begin(), offsets.end());
+  const int maximumOffset = *std::max_element(offsets.begin(), offsets.end());
   int phase = 0;
   qreal scale = screen->devicePixelRatio();
   {
@@ -147,11 +156,13 @@ int main(int argc, char **argv) {
       return;
     }
     const auto at = client["at"].toArray(), sz = client["size"].toArray();
-    const QRect capture(at[0].toInt(), at[1].toInt(), sz[0].toInt(),
-                        sz[1].toInt());
-    const auto full = document(capture.width(), 3000, scale);
-    auto expected = full.copy(0, qRound(200 * scale), full.width(),
-                                    qRound((capture.height() + 720) * scale));
+    const QRect fixtureGeometry(at[0].toInt(), at[1].toInt(), sz[0].toInt(), sz[1].toInt());
+    const QRect capture = partialRegion ? fixtureGeometry.adjusted(180,150,-280,-200) : fixtureGeometry;
+    const QPoint inset = capture.topLeft() - fixtureGeometry.topLeft();
+    const auto full = document(fixtureGeometry.width(), 3000, scale);
+    auto expected = full.copy(qRound(inset.x() * scale), qRound((minimumOffset + inset.y()) * scale),
+                              qRound(capture.width() * scale),
+                              qRound((capture.height() + maximumOffset - minimumOffset) * scale));
     const bool alphaFixture = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_ALPHA");
     if (alphaFixture) {
       QImage background(expected.size(), QImage::Format_ARGB32);
@@ -184,12 +195,12 @@ int main(int argc, char **argv) {
     frozen.fill(Qt::darkGray);
     {
       QPainter p(&frozen);
-      p.drawImage(QRect(qRound((capture.x() - screen->geometry().x()) * scale),
-                        qRound((capture.y() - screen->geometry().y()) * scale),
-                        full.width(), qRound(capture.height() * scale)),
+      p.drawImage(QRect(qRound((fixtureGeometry.x() - screen->geometry().x()) * scale),
+                        qRound((fixtureGeometry.y() - screen->geometry().y()) * scale),
+                        full.width(), qRound(fixtureGeometry.height() * scale)),
                   full,
                   QRect(0, qRound(400 * scale), full.width(),
-                        qRound(capture.height() * scale)));
+                        qRound(fixtureGeometry.height() * scale)));
     }
     const QString artifact =
         hyprcapture::ui::runtimeFile("scroll-test", ".rgba");
@@ -335,7 +346,7 @@ int main(int argc, char **argv) {
             if (phase == 0)
               std::cout << "progress: " << current << " " << size.width() << "x"
                         << size.height() << std::endl;
-            const int expectedOffsets[] = {520, 200, 450, 700, 920, 200};
+            const auto& expectedOffsets = offsets;
             if (phase >= 6 || current != expectedOffsets[phase])
               return;
             if (phase == 0 && continuous && (!continuousDone || !continuousGrowth)) {
@@ -421,7 +432,7 @@ int main(int argc, char **argv) {
               auto marked = ed->resultImage();
               marked.save(dir + "/annotated.png");
               if (marked.pixelColor(qRound(130 * scale) + padding.x(),
-                                    qRound(280 * scale) + padding.y()) !=
+                                    qRound((480 - minimumOffset) * scale) + padding.y()) !=
                   QColor("#ff5252")) {
                 fail("annotation document position mismatch");
                 return;
@@ -454,13 +465,40 @@ int main(int argc, char **argv) {
                 if (!choose("transparent")) { fail("transparent background unavailable"); return; }
                 const auto raw=ed->resultImage();
                 if (raw.size()!=marked.size() || raw.pixelColor(padding+QPoint(3,3)).alpha()!=128 ||
-                    raw.pixelColor(padding+QPoint(qRound(130*scale),qRound(280*scale)))!=QColor("#ff5252")) {
+                    raw.pixelColor(padding+QPoint(qRound(130*scale),qRound((480-minimumOffset)*scale)))!=QColor("#ff5252")) {
                   fail("background change lost native alpha, dimensions or annotations"); return;
                 }
                 if (!choose("black")) { fail("black background unavailable"); return; }
                 const auto black=ed->resultImage().pixelColor(padding+QPoint(3,3));
                 if (black.alpha()!=255 || black.red()>=200) {
                   fail("black background did not recompose native pixels"); return;
+                }
+                if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_REAL_BG")) {
+                  if (!choose("real")) { fail("real background unavailable"); return; }
+                  QImage realExpected(raw.size(), QImage::Format_ARGB32);
+                  realExpected.fill(Qt::transparent);
+                  {
+                    QPainter painter(&realExpected);
+                    painter.fillRect(realExpected.rect().adjusted(padding.x(),padding.y(),-padding.x(),-padding.y()), QColor("#204060"));
+                    painter.drawImage(QPoint{}, raw);
+                  }
+                  const auto realActual = ed->resultImage();
+                  realActual.save(dir + "/real-background.png");
+                  realExpected.save(dir + "/real-background-expected.png");
+                  // Editor alpha conversion and raster composition can differ
+                  // by one channel value at antialiased glyphs. Larger errors
+                  // indicate a wrong/contaminated background.
+                  int maxError = 0;
+                  for (int y = 0; y < realActual.height(); ++y)
+                    for (int x = 0; x < realActual.width(); ++x) {
+                      const auto a = realActual.pixelColor(x,y), b = realExpected.pixelColor(x,y);
+                      maxError = std::max({maxError, std::abs(a.red()-b.red()), std::abs(a.green()-b.green()),
+                                           std::abs(a.blue()-b.blue()), std::abs(a.alpha()-b.alpha())});
+                    }
+                  qInfo("real background maximum channel error=%d", maxError);
+                  if (realActual.size() != realExpected.size() || maxError > 1) {
+                    fail("native real background did not recompose the full scrolling result"); return;
+                  }
                 }
                 if (!choose("white") || ed->resultImage()!=marked) {
                   ed->resultImage().save(dir + "/background-roundtrip.png");
@@ -488,11 +526,13 @@ int main(int argc, char **argv) {
                                             {"maximum_rgb_error", maximumError},
                                             {"alpha_verified", alphaFixture},
                                             {"background_controls_round_trip", alphaFixture},
+                                            {"real_background_recomposed", qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_REAL_BG")},
                                             {"continuous_input", continuous},
                                             {"grew_during_input", continuousGrowth},
                                             {"annotation_exact", true},
                                             {"undo_redo", true},
                                             {"scale", scale},
+                                            {"partial_region", partialRegion},
                                             {"width", expected.width()},
                                             {"height", expected.height()},
                                             {"phases", phase}})
@@ -504,7 +544,7 @@ int main(int argc, char **argv) {
       QTimer::singleShot(400, controller, [&, controller, capture] {
         if (continuous) {
           auto* timer = new QTimer(controller);
-          auto remaining = std::make_shared<int>(40);
+          auto remaining = std::make_shared<int>((offsets[0] - 400) / 3);
           QObject::connect(timer, &QTimer::timeout, controller, [&, controller, capture, timer, remaining] {
             controller->scroll(capture.center(), 3, 0, true, false);
             if (--*remaining == 0) {
@@ -529,12 +569,12 @@ int main(int argc, char **argv) {
               {QString::number(capture.center().x() - screen->geometry().x()),
                QString::number(capture.center().y() - screen->geometry().y()),
                QString::number(screen->geometry().width()),
-               QString::number(screen->geometry().height()), "120"});
+               QString::number(screen->geometry().height()), QString::number(offsets[0] - 400)});
           QObject::connect(
               input, qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
               input, &QObject::deleteLater);
         } else
-          controller->scroll(capture.center(), 120, 960, false, false);
+          controller->scroll(capture.center(), offsets[0] - 400, (offsets[0] - 400) * 8, false, false);
       });
     });
   });

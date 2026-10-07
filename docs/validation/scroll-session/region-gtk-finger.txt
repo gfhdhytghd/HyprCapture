@@ -1,0 +1,7 @@
+fixture offset=460 source=touchpad
+fixture offset=340 source=wheel
+fixture offset=340 source=touchpad
+fixture offset=400 source=wheel
+fixture offset=480 source=wheel
+fixture offset=520 source=wheel
+fixture offset=340 source=wheel

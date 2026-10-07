@@ -1,0 +1,16 @@
+{
+    "alpha_verified": true,
+    "annotation_exact": true,
+    "background_controls_round_trip": true,
+    "continuous_input": false,
+    "grew_during_input": false,
+    "height": 1324,
+    "maximum_rgb_error": 0,
+    "partial_region": false,
+    "phases": 6,
+    "pixel_exact": true,
+    "real_background_recomposed": true,
+    "scale": 1,
+    "undo_redo": true,
+    "width": 804
+}

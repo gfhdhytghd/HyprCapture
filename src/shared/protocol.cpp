@@ -393,6 +393,12 @@ bool windowValue(const Json& obj, WindowInfo& out) {
             return false;
         window.selectionClipGeometry = clip;
     }
+    if (obj.contains("selectionRounding")) {
+        double radius = 0;
+        if (!doubleValue(obj, "selectionRounding", radius, 0.0, 1000000.0, true))
+            return false;
+        window.selectionRounding = radius;
+    }
     if (window.stagePreview && (!window.selectionGeometry || !window.selectionClipGeometry))
         return false;
     out = std::move(window);
@@ -474,6 +480,8 @@ std::string encodeSessionJson(const CaptureSession& session) {
         };
         if (win.stagePreview)
             windowJson["stagePreview"] = true;
+        if (win.selectionRounding)
+            windowJson["selectionRounding"] = boundedDouble(*win.selectionRounding, 0.0, 1000000.0, 0.0);
         if (win.selectionGeometry)
             windowJson["selectionGeometry"] = rectJson(*win.selectionGeometry);
         if (win.selectionClipGeometry)

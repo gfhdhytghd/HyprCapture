@@ -1,0 +1,84 @@
+Test project /home/wilf/data/hyprland_plugins/hyprcapture/build-scroll
+      Start  1: aec-overload
+ 1/38 Test  #1: aec-overload ..............................   Passed    2.25 sec
+      Start  2: aec-delay
+ 2/38 Test  #2: aec-delay .................................   Passed    0.00 sec
+      Start  3: aec-policy
+ 3/38 Test  #3: aec-policy ................................   Passed    0.20 sec
+      Start  4: annotation-editor
+ 4/38 Test  #4: annotation-editor .........................   Passed    0.30 sec
+      Start  5: i18n
+ 5/38 Test  #5: i18n ......................................   Passed    0.01 sec
+      Start  6: pinned-image
+ 6/38 Test  #6: pinned-image ..............................   Passed    0.10 sec
+      Start  7: hyprcapture-sound-ui-test
+ 7/38 Test  #7: hyprcapture-sound-ui-test .................   Passed    9.70 sec
+      Start  8: in-place-editor
+ 8/38 Test  #8: in-place-editor ...........................   Passed    3.26 sec
+      Start  9: scroll-live
+ 9/38 Test  #9: scroll-live ...............................***Skipped   0.03 sec
+      Start 10: hyprcapture-audio-timeline-test
+10/38 Test #10: hyprcapture-audio-timeline-test ...........   Passed    0.00 sec
+      Start 11: session-startup-ui
+11/38 Test #11: session-startup-ui ........................   Passed    0.47 sec
+      Start 12: pin-launch
+12/38 Test #12: pin-launch ................................   Passed    2.03 sec
+      Start 13: aec-ui-feedback
+13/38 Test #13: aec-ui-feedback ...........................   Passed    7.22 sec
+      Start 14: hyprcapture-audio-finalize-test
+14/38 Test #14: hyprcapture-audio-finalize-test ...........   Passed    4.82 sec
+      Start 15: scroll-capture
+15/38 Test #15: scroll-capture ............................   Passed    0.14 sec
+      Start 16: scroll-stitcher
+16/38 Test #16: scroll-stitcher ...........................   Passed    0.42 sec
+      Start 17: mapped-image
+17/38 Test #17: mapped-image ..............................   Passed    0.02 sec
+      Start 18: material-icon
+18/38 Test #18: material-icon .............................   Passed    0.08 sec
+      Start 19: session-startup
+19/38 Test #19: session-startup ...........................   Passed    0.02 sec
+      Start 20: hyprcapture-supervised-process-test
+20/38 Test #20: hyprcapture-supervised-process-test .......   Passed    0.05 sec
+      Start 21: hyprcapture-config-test
+21/38 Test #21: hyprcapture-config-test ...................   Passed    0.01 sec
+      Start 22: hyprcapture-watermark-test
+22/38 Test #22: hyprcapture-watermark-test ................   Passed    0.09 sec
+      Start 23: hyprcapture-security-test
+23/38 Test #23: hyprcapture-security-test .................   Passed    0.05 sec
+      Start 24: hyprcapture-process-environment-test
+24/38 Test #24: hyprcapture-process-environment-test ......   Passed    0.00 sec
+      Start 25: hyprcapture-overlay-paint-test
+25/38 Test #25: hyprcapture-overlay-paint-test ............   Passed    0.06 sec
+      Start 26: hyprcapture-recording-state-test
+26/38 Test #26: hyprcapture-recording-state-test ..........   Passed    0.05 sec
+      Start 27: hyprcapture-recording-codec-test
+27/38 Test #27: hyprcapture-recording-codec-test ..........   Passed    0.00 sec
+      Start 28: hyprcapture-recording-timestamps-test
+28/38 Test #28: hyprcapture-recording-timestamps-test .....   Passed    0.84 sec
+      Start 29: hyprcapture-rgba-transform-test
+29/38 Test #29: hyprcapture-rgba-transform-test ...........   Passed    0.00 sec
+      Start 30: hyprcapture-trusted-path-test
+30/38 Test #30: hyprcapture-trusted-path-test .............   Passed    0.00 sec
+      Start 31: hyprcapture-trusted-path-namespace-test
+31/38 Test #31: hyprcapture-trusted-path-namespace-test ...   Passed    0.07 sec
+      Start 32: hyprcapture-window-stream-test
+32/38 Test #32: hyprcapture-window-stream-test ............   Passed    0.00 sec
+      Start 33: hyprcapture-window-stream-sender-test
+33/38 Test #33: hyprcapture-window-stream-sender-test .....   Passed    0.05 sec
+      Start 34: hyprcapture-window-gpu-wire-test
+34/38 Test #34: hyprcapture-window-gpu-wire-test ..........   Passed    0.00 sec
+      Start 35: hyprcapture-window-gpu-sender-test
+35/38 Test #35: hyprcapture-window-gpu-sender-test ........   Passed    5.96 sec
+      Start 36: hyprcapture-window-stream-control-test
+36/38 Test #36: hyprcapture-window-stream-control-test ....   Passed    0.00 sec
+      Start 37: hyprcapture-window-stream-extent-test
+37/38 Test #37: hyprcapture-window-stream-extent-test .....   Passed    0.00 sec
+      Start 38: hyprcapture-window-stream-cadence-test
+38/38 Test #38: hyprcapture-window-stream-cadence-test ....   Passed    0.00 sec
+
+100% tests passed out of 38
+
+Total Test time (real) =  38.33 sec
+
+The following tests did not run:
+	  9 - scroll-live (Skipped)
