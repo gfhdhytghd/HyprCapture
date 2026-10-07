@@ -1,4 +1,5 @@
 #include "plugin/artifact_capture.hpp"
+#include "plugin/hymission_capture.hpp"
 
 #include "plugin/session_launcher.hpp"
 #include "plugin/timing.hpp"
@@ -1835,6 +1836,47 @@ class HymissionRawWindowRenderScope {
     bool        m_active = false;
 };
 
+// A Stage target can live on an invisible workspace. Rendering its window
+// directly must not inherit that workspace's slide offset or fade-to-zero.
+// Change only sampled values for this synchronous capture; never switch the
+// active workspace, alter animation goals, or reset the user's opacity rule.
+class InactiveWorkspaceCaptureScope {
+  public:
+    explicit InactiveWorkspaceCaptureScope(const PHLWINDOW& window) : m_window(window) {
+        if (!window || window->m_pinned || !window->m_workspace || window->m_workspace->isVisible())
+            return;
+        m_workspace = window->m_workspace;
+        m_offset = m_workspace->m_renderOffset->value();
+        m_workspace->m_renderOffset->value() = {};
+        overrideAlpha(m_workspace->m_alpha);
+        for (const auto kind : {Desktop::View::WINDOW_ALPHA_LAYOUT, Desktop::View::WINDOW_ALPHA_FULLSCREEN,
+                                Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE, Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE})
+            overrideAlpha(window->alpha(kind));
+    }
+    ~InactiveWorkspaceCaptureScope() {
+        for (auto& [sample, value] : m_alphas)
+            if (sample)
+                *sample = value;
+        if (m_workspace)
+            m_workspace->m_renderOffset->value() = m_offset;
+    }
+    InactiveWorkspaceCaptureScope(const InactiveWorkspaceCaptureScope&) = delete;
+    InactiveWorkspaceCaptureScope& operator=(const InactiveWorkspaceCaptureScope&) = delete;
+
+  private:
+    void overrideAlpha(const PHLANIMVAR<float>& animation) {
+        if (!animation)
+            return;
+        m_alphas[m_alphaCount++] = {&animation->value(), animation->value()};
+        animation->value() = 1.F;
+    }
+    PHLWINDOW m_window;
+    PHLWORKSPACE m_workspace;
+    Vector2D m_offset;
+    std::array<std::pair<float*, float>, 5> m_alphas{};
+    std::size_t m_alphaCount = 0;
+};
+
 class WindowAnimationGoalOverride {
   public:
     explicit WindowAnimationGoalOverride(const PHLWINDOW& window) : m_window(window) {
@@ -3491,11 +3533,32 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         return session;
 
     const auto overviewSelectionGeometry = fetchHymissionOverviewSelectionGeometry();
+    const auto stageTargets = overviewSelectionGeometry.empty()
+        ? parseStageCaptureTargets(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state", "", "json"))
+        : std::vector<StageCaptureTarget>{};
+    struct Candidate { PHLWINDOW window; const StageCaptureTarget* stage = nullptr; };
+    std::vector<Candidate> candidates;
+    const auto desktopWindows = windowsInRenderOrder();
+    for (const auto& window : desktopWindows)
+        if (!window->m_pinned || !window->m_isFloating)
+            candidates.push_back({window});
+    for (const auto& target : stageTargets) {
+        const auto window = findWindowByAddress(target.address);
+        if (isLiveWindowCaptureTarget(window))
+            candidates.push_back({window, &target});
+    }
+    // Pinned floating windows are drawn above Stage. Keep separate entries if
+    // a window appears both on the desktop and in an active-workspace card.
+    for (const auto& window : desktopWindows)
+        if (window->m_pinned && window->m_isFloating)
+            candidates.push_back({window});
     int z = 0;
     std::vector<PendingRealBackgroundCapture> pendingRealBackgrounds;
-    for (const auto& window : windowsInRenderOrder()) {
+    for (const auto& candidate : candidates) {
+        const auto& window = candidate.window;
         if (session.windows.size() >= MAX_SESSION_WINDOWS)
             break;
+        InactiveWorkspaceCaptureScope nativeWorkspace(window);
         const CBox fullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
         const Rect full = toRect(fullBox);
         auto monitor = window->m_monitor.lock();
@@ -3505,7 +3568,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         const std::string address = "0x" + pointerId(window.get());
         const auto overviewSelectionIt = overviewSelectionGeometry.find(address);
 
-        bool visible = overviewSelectionIt != overviewSelectionGeometry.end();
+        bool visible = candidate.stage || overviewSelectionIt != overviewSelectionGeometry.end();
         for (const auto& mon : session.monitors)
             visible = visible || intersects(full, mon.logicalGeometry);
         if (!visible)
@@ -3515,7 +3578,11 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.address = address;
         if (overviewSelectionIt != overviewSelectionGeometry.end())
             info.selectionGeometry = overviewSelectionIt->second;
-        if (isScrollingTiledWindow(window))
+        if (candidate.stage) {
+            info.stagePreview = true;
+            info.selectionGeometry = candidate.stage->selection;
+            info.selectionClipGeometry = candidate.stage->clip;
+        } else if (isScrollingTiledWindow(window))
             info.selectionClipGeometry = monitorRect(monitor);
         info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
@@ -3526,7 +3593,8 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
         info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0);
         info.borderSize = dontRound || window->m_X11DoesntWantBorders ? 0.0 : std::max(0, window->getRealBorderSize());
-        const auto path = root / ("window-" + pointerId(window.get()) + ".rgba");
+        const std::string artifactId = pointerId(window.get()) + "-" + std::to_string(info.zIndex);
+        const auto path = root / ("window-" + artifactId + ".rgba");
         CBox artifactBox;
         const std::size_t windowIndex = session.windows.size();
         if (renderWindowImages && renderWindowArtifact(window, monitor, frozenTime, renderDecorations, path, info.artifactWidth, info.artifactHeight, artifactBox,
@@ -3538,7 +3606,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
                     .window = window,
                     .monitor = monitor,
                     .artifactBox = artifactBox,
-                    .path = root / ("window-real-" + pointerId(window.get()) + ".rgba"),
+                    .path = root / ("window-real-" + artifactId + ".rgba"),
                     .windowIndex = windowIndex,
                 });
             }
@@ -3650,6 +3718,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     if (!monitor)
         return {.success = false, .error = "window capture monitor unavailable"};
 
+    InactiveWorkspaceCaptureScope nativeWorkspace(window);
     CaptureSession session;
     session.id = makeSessionId();
     session.defaults = request->defaults;

@@ -92,6 +92,7 @@ class CaptureOverlay final : public QMainWindow {
         QRect   visibleGeometry;
         QRect   selectionGeometry;
         QRect   selectionClipGeometry;
+        bool    stagePreview = false;
         double  rounding = 0.0;
         double  roundingPower = 2.0;
         double  borderSize = 0.0;
@@ -238,6 +239,7 @@ class CaptureOverlay final : public QMainWindow {
     int                       m_scrollSessionVersion = 0;
     hyprcapture::ui::ScrollCaptureController* m_scrollController = nullptr;
     bool                      m_hymissionOverviewSession = false;
+    bool                      m_hymissionStageSession = false;
     bool                      m_hymissionCaptureInputSuppressed = false;
     bool                      m_confirmBeforeCapture = false;
     bool                      m_pendingConfirm = false;

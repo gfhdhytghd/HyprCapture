@@ -47,7 +47,8 @@ QString writeArtifact(const QImage& image) {
 }
 
 QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWindow = true,
-                    QSize logicalSize = QSize(kLogicalWidth, kLogicalHeight), QRect windowGeometry = QRect(100, 100, 200, 120)) {
+                    QSize logicalSize = QSize(kLogicalWidth, kLogicalHeight), QRect windowGeometry = QRect(100, 100, 200, 120),
+                    QRect stagePreview = {}, bool fullscreen = false) {
     QImage desktop(logicalSize * 2, QImage::Format_RGBA8888);
     desktop.fill(QColor(17, 29, 53));
     const QString desktopPath = writeArtifact(desktop);
@@ -86,6 +87,12 @@ QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWi
         info.appClass = "test-app";
         info.title = "Native resolution test";
         info.focused = true;
+        info.fullscreen = fullscreen;
+        if (stagePreview.isValid()) {
+            info.stagePreview = true;
+            info.selectionGeometry = hyprcapture::Rect{double(stagePreview.x()), double(stagePreview.y()), double(stagePreview.width()), double(stagePreview.height())};
+            info.selectionClipGeometry = *info.selectionGeometry;
+        }
         info.fullGeometry = {static_cast<double>(windowGeometry.x()), static_cast<double>(windowGeometry.y()),
                              static_cast<double>(windowGeometry.width()), static_cast<double>(windowGeometry.height())};
         info.visibleGeometry = info.fullGeometry;
@@ -395,6 +402,59 @@ class InPlaceEditorTest final : public QObject {
         QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(-1000, left.y()));
         QVERIFY(editor->resultImage().width() <= 1600);
         QVERIFY(editor->resultImage().width() > 600);
+    }
+
+    void stageWindowOpensCenteredAtNativeResolution_data() {
+        QTest::addColumn<bool>("fullscreen");
+        QTest::addColumn<bool>("fusion");
+        QTest::newRow("window-regular") << false << false;
+        QTest::newRow("window-fullscreen-client") << true << false;
+        QTest::newRow("fusion-regular") << false << true;
+        QTest::newRow("fusion-fullscreen-client") << true << true;
+    }
+    void stageWindowOpensCenteredAtNativeResolution() {
+        QFETCH(bool, fullscreen);
+        QFETCH(bool, fusion);
+        // The input-suppression handshake must never touch a real compositor
+        // from this offscreen test.
+        QTemporaryDir commands;
+        QVERIFY(commands.isValid());
+        QFile hyprctl(commands.filePath("hyprctl"));
+        QVERIFY(hyprctl.open(QIODevice::WriteOnly));
+        hyprctl.write("#!/bin/sh\nprintf 'ok\\n'\n");
+        hyprctl.close();
+        QVERIFY(hyprctl.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", commands.path().toUtf8());
+        const auto restorePath = qScopeGuard([&] { qputenv("PATH", oldPath); });
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.inPlaceEditToolbar = true;
+        defaults.captureFullscreenClientsAsMonitor = true;
+        defaults.fushionMode = fusion;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        const QRect nativeWindow(1100, 300, 300, 220);
+        const QRect thumbnail(12, 80, 90, 66);
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, true, QSize(800, 600), nativeWindow, thumbnail, fullscreen).toStdString());
+        QVERIFY(session.has_value());
+        session->windows.front().selectionClipGeometry->width /= 2;
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+        overlay.show(); QTest::qWait(30);
+        if (!fusion) {
+            QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(thumbnail.right() - 2, thumbnail.center().y()));
+            QVERIFY(!overlay.findChild<AnnotationEditor*>("inPlaceEditor"));
+        }
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(thumbnail.left() + thumbnail.width() / 4, thumbnail.center().y()));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor && editor->isVisible());
+        const QRect canvas = editor->canvasGeometry();
+        QVERIFY(overlay.rect().contains(canvas));
+        QVERIFY(qAbs(canvas.center().x() - overlay.rect().center().x()) <= 2);
+        QVERIFY(canvas.width() > thumbnail.width());
+        QCOMPARE(editor->resultImage().size(), nativeWindow.size() * 2);
+        QVERIFY(chooseBackground(overlay, QStringLiteral("white")));
+        QCOMPARE(editor->canvasGeometry(), canvas);
+        QCOMPARE(editor->resultImage().size(), nativeWindow.size() * 2);
     }
 
     void windowEditorRetainsOffscreenPosition_data() {

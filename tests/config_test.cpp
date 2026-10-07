@@ -1,4 +1,5 @@
 #include "shared/config.hpp"
+#include "plugin/hymission_capture.hpp"
 #include "shared/audio_source.hpp"
 #include "shared/protocol.hpp"
 
@@ -43,6 +44,30 @@ void eraseDefaultsJsonField(std::string& json, const std::string& key) {
 
 int main() {
     using namespace hyprcapture;
+
+    {
+        using Json = nlohmann::json;
+        const Json rect{{"x", -80}, {"y", 20}, {"width", 100}, {"height", 60}};
+        const Json target{{"address", "0x123"}, {"selectionGeometry", rect}, {"selectionClipGeometry", rect}};
+        Json response{{"enabled", true}, {"captureVersion", 1}, {"captureWindows", Json::array({target, target})}};
+        response["captureWindows"][1]["address"] = "0x456";
+        auto targets = parseStageCaptureTargets(response.dump());
+        require(targets.size() == 2 && targets[0].address == "0x123" && targets[1].address == "0x456", "Stage preserves stacking order");
+        require(targets[0].selection.x == -80, "Stage supports negative output coordinates");
+        require(parseStageCaptureTargets("unknown command").empty(), "old Hymission has no Stage capability");
+        response["captureVersion"] = 2;
+        require(parseStageCaptureTargets(response.dump()).empty(), "unsupported Stage capability fails closed");
+        response["captureVersion"] = 1;
+        response["enabled"] = false;
+        require(parseStageCaptureTargets(response.dump()).empty(), "disabled Stage has no targets");
+        response["enabled"] = true;
+        response["captureWindows"][0]["selectionClipGeometry"]["x"] = 200;
+        response["captureWindows"][1]["selectionGeometry"]["width"] = "bad";
+        require(parseStageCaptureTargets(response.dump()).empty(), "invisible and malformed previews are rejected");
+        response["captureWindows"] = Json::array({target});
+        response["captureWindows"][0]["address"] = "0xnot-an-address";
+        require(parseStageCaptureTargets(response.dump()).empty(), "invalid Stage address is rejected");
+    }
 
     require(parseCaptureMode("full") == CaptureMode::Fullscreen, "full mode parse");
     require(parseCaptureMode("selection") == CaptureMode::Region, "selection mode parse");
@@ -225,6 +250,7 @@ int main() {
     session.windows.back().artifactHeight = 100;
     session.windows.back().selectionGeometry = Rect{.x = 30, .y = 40, .width = 120, .height = 80};
     session.windows.back().selectionClipGeometry = Rect{.x = 0, .y = 0, .width = 100, .height = 100};
+    session.windows.back().stagePreview = true;
     session.windows.back().realBackgroundPath = "/tmp/window-real.rgba";
     session.windows.back().realBackgroundWidth = 200;
     session.windows.back().realBackgroundHeight = 100;
@@ -318,6 +344,7 @@ int main() {
     require(decoded->monitors.front().singleWorkspaceWindowClass == "Class", "decoded single workspace window class");
     require(decoded->monitors.front().singleWorkspaceWindowTitle == "Title", "decoded single workspace window title");
     require(decoded->windows.front().artifactPath == "/tmp/window.rgba", "decoded artifact path");
+    require(decoded->windows.front().stagePreview, "Stage selection marker survives round trip");
     require(decoded->windows.front().selectionGeometry.has_value(), "decoded selection geometry exists");
     require(decoded->windows.front().selectionClipGeometry.has_value(), "decoded selection clip geometry exists");
     require(decoded->windows.front().focused && decoded->windows.front().fullscreen, "decoded window state");
@@ -433,6 +460,7 @@ int main() {
     require(!decodeSessionJson(encodeSessionJson(invalidCursorSession)).has_value(), "cursor artifact path requires valid dimensions");
 
     CaptureSession legacySession = session;
+    legacySession.windows.front().stagePreview = false;
     legacySession.windows.front().selectionGeometry.reset();
     legacySession.windows.front().selectionClipGeometry.reset();
     const auto legacyJson = encodeSessionJson(legacySession);
@@ -441,6 +469,10 @@ int main() {
     require(legacyDecoded.has_value(), "session without selection geometry decodes");
     require(!legacyDecoded->windows.front().selectionGeometry.has_value(), "missing optional selection geometry stays empty");
     require(!legacyDecoded->windows.front().selectionClipGeometry.has_value(), "missing optional selection clip geometry stays empty");
+
+    require(!legacyDecoded->windows.front().stagePreview, "older sessions default to desktop windows");
+    legacySession.windows.front().stagePreview = true;
+    require(!decodeSessionJson(encodeSessionJson(legacySession)), "Stage target requires preview and clipping geometry");
 
     RecordingRequest recording;
     recording.id = "recording-request";

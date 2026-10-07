@@ -50,6 +50,7 @@ struct WindowInfo {
     Rect        fullGeometry;
     std::optional<Rect> selectionGeometry;
     std::optional<Rect> selectionClipGeometry;
+    bool        stagePreview = false;
     double      rounding = 0.0;
     double      roundingPower = 2.0;
     double      borderSize = 0.0;

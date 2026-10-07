@@ -1483,6 +1483,7 @@ CaptureOverlay::CaptureOverlay(const CaptureOverlay& source, const QRect& overla
       m_regionCaptureAvailable(source.m_regionCaptureAvailable),
       m_scrollSessionVersion(source.m_scrollSessionVersion),
       m_hymissionOverviewSession(source.m_hymissionOverviewSession),
+      m_hymissionStageSession(source.m_hymissionStageSession),
       m_confirmBeforeCapture(source.m_confirmBeforeCapture),
       m_overlayActive(active),
       m_cursorLogicalPosition(source.m_cursorLogicalPosition),
@@ -1721,6 +1722,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.address = qString(info.address);
         artifact.title = qString(info.title);
         artifact.appClass = qString(info.appClass);
+        artifact.stagePreview = info.stagePreview;
         artifact.zIndex = info.zIndex;
         artifact.focused = info.focused;
         artifact.fullscreen = info.fullscreen;
@@ -1728,8 +1730,12 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.fullGeometry = protocolRect(info.fullGeometry);
         if (info.selectionGeometry) {
             artifact.selectionGeometry = protocolRect(*info.selectionGeometry);
-            if (artifact.selectionGeometry.isValid())
-                m_hymissionOverviewSession = true;
+            if (artifact.selectionGeometry.isValid()) {
+                if (artifact.stagePreview)
+                    m_hymissionStageSession = true;
+                else
+                    m_hymissionOverviewSession = true;
+            }
         }
         if (info.selectionClipGeometry)
             artifact.selectionClipGeometry = protocolRect(*info.selectionClipGeometry);
@@ -3326,7 +3332,8 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         if (windowIndex >= 0) {
             m_mode = hyprcapture::CaptureMode::Window;
             m_selectedWindowIndex = windowIndex;
-            if (m_defaults.captureFullscreenClientsAsMonitor && m_windowArtifacts[static_cast<std::size_t>(windowIndex)].fullscreen) {
+            if (m_defaults.captureFullscreenClientsAsMonitor && !m_windowArtifacts[static_cast<std::size_t>(windowIndex)].stagePreview &&
+                m_windowArtifacts[static_cast<std::size_t>(windowIndex)].fullscreen) {
                 m_fullscreenClientSelected = true;
                 m_mode = hyprcapture::CaptureMode::Fullscreen;
                 if (m_fullscreenScope)
@@ -3361,6 +3368,7 @@ void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
         if (windowIndex >= 0)
             m_selectedWindowIndex = windowIndex;
         if (windowIndex >= 0 && m_defaults.captureFullscreenClientsAsMonitor &&
+            !m_windowArtifacts[static_cast<std::size_t>(windowIndex)].stagePreview &&
             m_windowArtifacts[static_cast<std::size_t>(windowIndex)].fullscreen) {
             m_fullscreenClientSelected = true;
             m_mode = hyprcapture::CaptureMode::Fullscreen;
@@ -3681,7 +3689,7 @@ QRect CaptureOverlay::windowSelectionGeometry(const WindowArtifact& window) cons
 }
 
 bool CaptureOverlay::hasOverviewSelectionGeometry(const WindowArtifact& window) const {
-    return window.selectionGeometry.isValid() && window.selectionGeometry != windowFrameGeometry(window);
+    return window.stagePreview || (window.selectionGeometry.isValid() && window.selectionGeometry != windowFrameGeometry(window));
 }
 
 bool CaptureOverlay::selectedWindowUsesOverviewSelection() const {
@@ -3690,7 +3698,7 @@ bool CaptureOverlay::selectedWindowUsesOverviewSelection() const {
 }
 
 void CaptureOverlay::beginHymissionCaptureInputSuppression() {
-    if (!m_hymissionOverviewSession || m_hymissionCaptureInputSuppressed || !m_hymissionCaptureInputToken.isEmpty())
+    if ((!m_hymissionOverviewSession && !m_hymissionStageSession) || m_hymissionCaptureInputSuppressed || !m_hymissionCaptureInputToken.isEmpty())
         return;
 
     m_hymissionCaptureInputToken =
@@ -3883,6 +3891,7 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         capturedWindow.fullscreen = info.fullscreen;
         capturedWindow.visibleGeometry = protocolRect(info.visibleGeometry);
         capturedWindow.fullGeometry = protocolRect(info.fullGeometry);
+        capturedWindow.stagePreview = window.stagePreview;
         capturedWindow.selectionGeometry = window.selectionGeometry;
         capturedWindow.selectionClipGeometry = window.selectionClipGeometry;
         capturedWindow.rounding = info.rounding;
@@ -4517,7 +4526,8 @@ QImage CaptureOverlay::renderScrollResultImage() {
 }
 
 void CaptureOverlay::beginScrollCapture() {
-    if(m_scrollController || m_scrolling || !m_editing || !m_editor || m_scrollResult || m_scrollSessionVersion<1 || m_hymissionOverviewSession) return;
+    if(m_scrollController || m_scrolling || !m_editing || !m_editor || m_scrollResult || m_scrollSessionVersion<1 || m_hymissionOverviewSession ||
+       (selectedWindow() && selectedWindow()->stagePreview)) return;
     auto beforeCapture=std::make_shared<QRect>(m_editImageRect);
     QRect capture=m_editImageRect;
     QString address;
@@ -4595,9 +4605,11 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
                                                    ? window->visibleGeometry : window->fullGeometry);
         }
     }
-    // Window captures stay at their original desktop position, including
-    // windows crossing output edges. Only a full-desktop capture auto-fits.
-    if (m_scrollResult || (m_mode != hyprcapture::CaptureMode::Window && !rect().contains(m_editImageRect)))
+    // Stage previews open centered at a usable scale; their source geometry
+    // belongs to another workspace, not the sidebar thumbnail. Desktop windows
+    // retain their original position, including those crossing output edges.
+    const bool stageWindow = m_mode == hyprcapture::CaptureMode::Window && selectedWindow() && selectedWindow()->stagePreview;
+    if (stageWindow || m_scrollResult || (m_mode != hyprcapture::CaptureMode::Window && !rect().contains(m_editImageRect)))
         m_editImageRect = {};
     if (!m_editor) {
         m_editor = new AnnotationEditor(this);

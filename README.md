@@ -333,6 +333,25 @@ Tool shortcuts: V selection, R rectangle, E ellipse, A arrow, W line, D pen, H h
 
 Pins stay above normal windows, support dragging across outputs and wheel zoom, and close with their × button or Esc after focusing the pin. Each pin has its own helper process, so later captures can create additional pins. Pinning also follows the configured screenshot saving, clipboard, and thumbnail settings; disabled outputs remain disabled.
 
+### Hymission Stage window capture
+
+With a matching Hymission build, window mode and fusion-mode clicks can select
+individual windows inside the Stage sidebar. The highlight follows the actual
+preview and its card clipping; the screenshot renders the original window at
+native resolution, including windows on inactive workspaces, without activating
+them. Pinned floating windows retain priority above the sidebar.
+
+`open_editor()` opens a Stage-selected image centered and fitted into the editor;
+zoom and pan affect only its display, not the saved resolution. Desktop window
+captures retain their normal position. A fullscreen window selected inside Stage
+is captured as a window rather than redirecting to the current monitor. If the
+window closes before capture, no thumbnail or unrelated desktop crop is used as
+a substitute.
+
+This integration requires Hymission's `hymission-stage-state` response to expose
+`captureVersion: 1` and `captureWindows`. Older Hymission builds keep ordinary
+window/overview capture but do not expose Stage targets. Update both plugins.
+
 ### UI language
 
 The `language` setting defaults to `auto`. Supported values are `en`, `zh_CN`, `zh_TW`, `ja`, `de`, `fr`, `es`, and `ko`; missing translations and unsupported languages fall back to English. An explicit configured language, or `--language zh_CN` when launching the helper directly, takes precedence. With `auto`, `HYPRCAPTURE_LANGUAGE` takes precedence over the system locale. Regional locale names such as `de_DE.UTF-8` are accepted.
