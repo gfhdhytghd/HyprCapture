@@ -4475,6 +4475,37 @@ void CaptureOverlay::beginScrollCapture() {
     QString error;
     if(!controller->prepare(localToDesktopLogicalRect(capture),error,address)) { delete controller; m_recordError=error; return; }
     m_scrollController=controller; controller->setEditor(m_editor);
+    if (!address.isEmpty()) {
+        controller->setWindowBackgroundProvider([this](const QImage& frame, const QRect& geometry) {
+            const auto* window = selectedWindow();
+            const auto backgroundMode = currentWindowBackground();
+            if (!window || backgroundMode == hyprcapture::WindowBackground::Transparent)
+                return QImage{};
+            ensureDesktopImage();
+            QImage background(frame.size(), QImage::Format_RGBA8888);
+            background.fill(Qt::transparent);
+            bool painted = false;
+            if (backgroundMode == hyprcapture::WindowBackground::Real && !window->realBackground.isNull()) {
+                const QRect source = projectedImageRect(geometry, window->fullGeometry, window->realBackground.size());
+                if (source.isValid()) {
+                    QPainter painter(&background);
+                    painter.drawImage(background.rect(), window->realBackground, source);
+                    painted = true;
+                }
+            }
+            if (!painted && paintWindowBackground(background, backgroundMode, m_desktopImage,
+                                                   desktopSourceRectForGlobalRect(geometry))) {
+                if (backgroundMode == hyprcapture::WindowBackground::Real)
+                    reconstructRealWindowBackground(background, frame.convertToFormat(QImage::Format_RGBA8888), frame.rect());
+                painted = true;
+            }
+            if (!painted)
+                return QImage{};
+            clipWindowBackgroundToFrame(background, geometry, window->visibleGeometry,
+                                        window->rounding, window->roundingPower);
+            return background;
+        });
+    }
     connect(controller,&hyprcapture::ui::ScrollCaptureController::began,this,[this,controller,beforeCapture] {
         *beforeCapture=m_editImageRect;
         const QRect capture=QRect(mapFromGlobal(controller->captureGeometry().topLeft()),controller->captureGeometry().size());

@@ -8,6 +8,7 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QImage>
+#include <QHelpEvent>
 #include <QListWidget>
 #include <QLineEdit>
 #include <QLabel>
@@ -155,6 +156,52 @@ class AnnotationEditorTest final : public QObject {
         auto result=editor.resultImage(); QCOMPARE(result.pixelColor(80,120),QColor("#ff5252"));
         editor.undo(); QCOMPARE(editor.resultImage(),output); editor.redo(); QCOMPARE(editor.resultImage(),result);
         editor.restore(snapshot); QCOMPARE(editor.resultImage(),before);
+    }
+    void scrollingInkStaysPutWhileFadingThenRelocates() {
+        AnnotationEditor editor;
+        const auto source = image({240,160}, Qt::white);
+        initialize(editor, source);
+        selectTool(editor, 5);
+        drag(editor, {60,100}, {100,100});
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        hyprcapture::ui::ScrollLayout layout{source.rect(), source.size()};
+        editor.setScrollImage(source, layout, true);
+        editor.setAnnotationPresentation(false, 1, 0);
+        const auto before = canvas->grab().toImage();
+        QCOMPARE(before.pixelColor(displayed({80,100})), QColor("#ff5252"));
+        layout.viewportY = layout.maximumY = 20;
+        editor.setScrollImage(source, layout, true);
+        const auto fading = canvas->grab().toImage();
+        QCOMPARE(fading.pixelColor(displayed({80,100})), before.pixelColor(displayed({80,100})));
+        editor.setAnnotationPresentation(false, 0, -12);
+        const auto hidden = canvas->grab().toImage();
+        QVERIFY(hidden.pixelColor(displayed({80,100})) != QColor("#ff5252"));
+        editor.setAnnotationPresentation(true, 1, 0);
+        const auto stopped = canvas->grab().toImage();
+        QCOMPARE(stopped.pixelColor(displayed({80,80})), QColor("#ff5252"));
+        QVERIFY(stopped.pixelColor(displayed({80,100})) != QColor("#ff5252"));
+    }
+    void newCaptureResetsHiddenInkPresentation() {
+        AnnotationEditor editor;
+        const auto source = image({240,160}, Qt::white);
+        initialize(editor, source);
+        editor.setAnnotationPresentation(false, 0, -12);
+        editor.setImage(source);
+        selectTool(editor, 5);
+        drag(editor, {60,100}, {100,100});
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        QCOMPARE(canvas->grab().toImage().pixelColor(displayed({80,100})), QColor("#ff5252"));
+    }
+    void toolbarHelpCannotCreateNativeTooltipWindow() {
+        AnnotationEditor editor;
+        initialize(editor, image());
+        auto* button = editor.findChild<QToolButton*>("annotationTool5");
+        QVERIFY(button && !button->toolTip().isEmpty());
+        QHelpEvent help(QEvent::ToolTip, button->rect().center(), button->mapToGlobal(button->rect().center()));
+        QApplication::sendEvent(button, &help);
+        QCOMPARE(button->accessibleDescription(), button->toolTip());
+        for (auto* window : QApplication::topLevelWidgets())
+            QVERIFY(!window->isVisible() || window->windowType() != Qt::ToolTip);
     }
     void touchSecondFingerDoesNotCommitInkOrNumber() {
         AnnotationEditor editor; auto source=image({240,160},Qt::white); initialize(editor,source); selectTool(editor,5);

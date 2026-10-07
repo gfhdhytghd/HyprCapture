@@ -25,7 +25,8 @@
 QImage document(int width, int height, qreal scale) {
   QImage out(qRound(width * scale), qRound(height * scale),
              QImage::Format_ARGB32);
-  out.fill(QColor(250, 249, 246));
+  out.fill(QColor(250, 249, 246,
+                   qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_ALPHA") ? 128 : 255));
   QPainter p(&out);
   p.scale(scale, scale);
   p.setFont(QFont("sans-serif", 13));
@@ -45,6 +46,8 @@ public:
   int offset = 400;
   QImage page;
   Fixture() {
+    if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_ALPHA"))
+      setAttribute(Qt::WA_TranslucentBackground);
     resize(800, 600);
     setWindowTitle("Scroll capture fixture");
   }
@@ -97,6 +100,8 @@ int main(int argc, char **argv) {
   if (!child.waitForStarted())
     return 2;
   bool passed = false;
+  const bool continuous = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_CONTINUOUS");
+  bool continuousDone = !continuous, continuousGrowth = false;
   int phase = 0;
   qreal scale = screen->devicePixelRatio();
   {
@@ -138,9 +143,19 @@ int main(int argc, char **argv) {
     const QRect capture(at[0].toInt(), at[1].toInt(), sz[0].toInt(),
                         sz[1].toInt());
     const auto full = document(capture.width(), 3000, scale);
-    const auto expected = full.copy(0, qRound(200 * scale), full.width(),
+    auto expected = full.copy(0, qRound(200 * scale), full.width(),
                                     qRound((capture.height() + 720) * scale));
+    const bool alphaFixture = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_ALPHA");
+    if (alphaFixture) {
+      QImage background(expected.size(), QImage::Format_ARGB32);
+      background.fill(Qt::white);
+      QPainter painter(&background);
+      painter.drawImage(QPoint{}, expected);
+      painter.end();
+      expected = background;
+    }
     hyprcapture::CaptureDefaults defaults;
+    defaults.windowBackground = hyprcapture::WindowBackground::White;
     const bool windowMode =
         qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_WINDOW");
     defaults.mode = windowMode ? hyprcapture::CaptureMode::Window
@@ -223,7 +238,7 @@ int main(int argc, char **argv) {
         defaults, false, false, false,
         QString::fromStdString(hyprcapture::encodeSessionJson(session)));
     overlay->show();
-    QTimer::singleShot(400, &app, [&, overlay, capture, expected, windowMode] {
+    QTimer::singleShot(400, &app, [&, overlay, capture, expected, windowMode, alphaFixture] {
       const QRect local = capture.translated(-screen->geometry().topLeft());
       if (windowMode)
         QTest::mouseClick(overlay, Qt::LeftButton, Qt::NoModifier,
@@ -305,7 +320,9 @@ int main(int argc, char **argv) {
                        });
       QObject::connect(
           controller, &hyprcapture::ui::ScrollCaptureController::progress, &app,
-          [&, controller, capture](const QSize &size, int count) {
+          [&, controller, capture, editor](const QSize &size, int count) {
+            if (!continuousDone && size.height() > controller->resultLayout().frameSize.height())
+              continuousGrowth = true;
             const int current =
                 qRound(controller->resultLayout().viewportY / scale) + 400;
             if (phase == 0)
@@ -314,6 +331,10 @@ int main(int argc, char **argv) {
             const int expectedOffsets[] = {520, 200, 450, 700, 920, 200};
             if (phase >= 6 || current != expectedOffsets[phase])
               return;
+            if (phase == 0 && continuous && (!continuousDone || !continuousGrowth)) {
+              if (continuousDone) fail("preview did not grow during continuous input");
+              return;
+            }
             std::cout << "accepted phase=" << phase << " offset=" << current
                       << " height=" << size.height() << " frames=" << count
                       << std::endl;
@@ -326,7 +347,13 @@ int main(int argc, char **argv) {
             }
             if (phase == 6)
               QTimer::singleShot(350, controller,
-                                 [controller] { controller->finish(); });
+                                 [&, controller, editor] {
+                                   if (editor->toolbarWidget()->isHidden()) {
+                                     fail("annotations did not restore after idle");
+                                     return;
+                                   }
+                                   controller->finish();
+                                 });
             else {
               const int next = expectedOffsets[phase], delta = next - current;
               QTimer::singleShot(300, controller, [controller, capture, delta] {
@@ -339,7 +366,7 @@ int main(int argc, char **argv) {
           controller, &hyprcapture::ui::ScrollCaptureController::completed,
           &app,
           [&, overlay, expected = QImage(expected),
-           windowMode](const QImage &actual) mutable {
+           windowMode, alphaFixture](const QImage &actual) mutable {
             QPoint padding;
             if (windowMode) {
               padding = QPoint((actual.width() - expected.width()) / 2,
@@ -359,7 +386,21 @@ int main(int argc, char **argv) {
             }
             actual.save(dir + "/stitched.png");
             expected.save(dir + "/expected.png");
-            if (actual != expected) {
+            int maximumError = 0;
+            if (alphaFixture && actual.size() == expected.size()) {
+              for (int y = 0; y < actual.height(); ++y)
+                for (int x = 0; x < actual.width(); ++x) {
+                  const auto a = actual.pixelColor(x, y), e = expected.pixelColor(x, y);
+                  if (a.alpha() != e.alpha()) {
+                    fail("window background alpha mismatch");
+                    return;
+                  }
+                  maximumError = std::max({maximumError, std::abs(a.red()-e.red()),
+                                          std::abs(a.green()-e.green()), std::abs(a.blue()-e.blue())});
+                }
+            }
+            if (actual.size() != expected.size() ||
+                actual != expected) {
               fail(QString("native pixels mismatch: %1x%2 expected %3x%4")
                        .arg(actual.width())
                        .arg(actual.height())
@@ -367,7 +408,7 @@ int main(int argc, char **argv) {
                        .arg(expected.height()));
               return;
             }
-            QTimer::singleShot(350, overlay, [&, overlay, expected, padding] {
+            QTimer::singleShot(350, overlay, [&, overlay, expected = actual.convertToFormat(QImage::Format_ARGB32), padding, maximumError, alphaFixture] {
               auto *ed =
                   overlay->findChild<AnnotationEditor *>("inPlaceEditor");
               auto marked = ed->resultImage();
@@ -395,7 +436,11 @@ int main(int argc, char **argv) {
                 return;
               }
               report.write(
-                  QJsonDocument(QJsonObject{{"pixel_exact", true},
+                  QJsonDocument(QJsonObject{{"pixel_exact", !alphaFixture || maximumError == 0},
+                                            {"maximum_rgb_error", maximumError},
+                                            {"alpha_verified", alphaFixture},
+                                            {"continuous_input", continuous},
+                                            {"grew_during_input", continuousGrowth},
                                             {"annotation_exact", true},
                                             {"undo_redo", true},
                                             {"scale", scale},
@@ -407,7 +452,26 @@ int main(int argc, char **argv) {
               app.quit();
             });
           });
-      QTimer::singleShot(400, controller, [controller, capture] {
+      QTimer::singleShot(400, controller, [&, controller, capture] {
+        if (continuous) {
+          auto* timer = new QTimer(controller);
+          auto remaining = std::make_shared<int>(40);
+          QObject::connect(timer, &QTimer::timeout, controller, [&, controller, capture, timer, remaining] {
+            controller->scroll(capture.center(), 3, 0, true, false);
+            if (--*remaining == 0) {
+              continuousDone = true;
+              timer->stop();
+              timer->deleteLater();
+            }
+          });
+          timer->start(32);
+          QTimer::singleShot(250, controller, [&, controller] {
+            auto* editor = controller->parentWidget()->findChild<AnnotationEditor *>("inPlaceEditor");
+            if (!editor || !editor->toolbarWidget()->isHidden())
+              fail("annotations remained interactive during continuous input");
+          });
+          return;
+        }
         if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_NATIVE_INPUT")) {
           auto *input = new QProcess(controller);
           auto *screen = QGuiApplication::primaryScreen();

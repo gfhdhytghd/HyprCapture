@@ -6,6 +6,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <condition_variable>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,6 +33,7 @@ public:
   bool prepare(const QRect &capture, QString &error,
                const QString &windowAddress = {});
   void setEditor(AnnotationEditor *editor);
+  void setWindowBackgroundProvider(std::function<QImage(const QImage&, const QRect&)> provider);
   void updateTarget(const QRect &capture);
   QRect captureGeometry() const { return m_capture; }
   void start(); // arm; does not begin capture until a real scroll gesture
@@ -58,6 +60,7 @@ private:
     QImage image;
     QRect geometry;
     quint64 sequence = 0, timeNs = 0;
+    QImage background;
   };
   void acceptFrames();
   void readFrames();
@@ -65,6 +68,7 @@ private:
   void readControl();
   void work(std::stop_token stop);
   void motion(double delta);
+  void restoreAnnotationsIfReady();
   void present(QImage frame, QRect geometry, QImage preview,
                ScrollLayout layout, ScrollStitcher::Result result, int captures,
                bool stable, quint64 sequence, quint64 timeNs);
@@ -90,6 +94,12 @@ private:
   QVariantAnimation *m_animation = nullptr;
   QTimer m_idle, m_watchdog;
   QElapsedTimer m_lastInput;
+  qreal m_annotationOpacity = 1, m_annotationOffset = 0;
+  quint64 m_lastInputNs = 0, m_latestCaptureNs = 0;
+  bool m_latestAligned = false, m_latestStable = false;
+  std::function<QImage(const QImage&, const QRect&)> m_backgroundProvider;
+  QImage m_background;
+  QRect m_backgroundGeometry;
   QList<QRect> m_exclusions;
   QList<QJsonObject> m_commands;
   QByteArray m_controlBytes;

@@ -55,6 +55,7 @@ class AnnotationEditor final : public QWidget {
     void toolbarGeometryChanged(const QRect& geometry);
 
   protected:
+    bool eventFilter(QObject* object, QEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void hideEvent(QHideEvent* event) override;

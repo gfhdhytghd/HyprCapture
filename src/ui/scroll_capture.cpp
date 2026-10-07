@@ -128,14 +128,19 @@ ScrollCaptureController::ScrollCaptureController(QWidget *parent)
             if (!m_editor)
               return;
             const qreal value = v.toReal();
-            if (m_hiddenAnnotations)
-              m_editor->setAnnotationPresentation(
-                  false, 1 - value,
-                  m_animation->property("direction").toDouble() * 12 * value);
-            else
-              m_editor->setAnnotationPresentation(true, value, 0);
+            // The direction belongs to this animation, not to a mutable
+            // registration result arriving while it runs.
+            const bool showing = m_animation->property("showAnnotations").toBool();
+            m_annotationOpacity = showing ? value :
+                m_animation->property("opacityFrom").toDouble() * (1 - value);
+            m_annotationOffset = showing ? 0 :
+                m_animation->property("offsetFrom").toDouble() * (1 - value) +
+                m_animation->property("offsetTo").toDouble() * value;
+            m_editor->setAnnotationPresentation(showing, m_annotationOpacity, m_annotationOffset);
           });
   m_idle.setSingleShot(true);
+  m_idle.setTimerType(Qt::PreciseTimer);
+  connect(&m_idle, &QTimer::timeout, this, &ScrollCaptureController::restoreAnnotationsIfReady);
   m_watchdog.setSingleShot(true);
   connect(&m_watchdog, &QTimer::timeout, this, [this] {
     setStatus(tr("Capture timed out; finish or cancel"));
@@ -147,6 +152,10 @@ ScrollCaptureController::~ScrollCaptureController() { stop(); }
 void ScrollCaptureController::setEditor(AnnotationEditor *editor) {
   m_editor = editor;
   QCoreApplication::instance()->installEventFilter(this);
+}
+void ScrollCaptureController::setWindowBackgroundProvider(
+    std::function<QImage(const QImage&, const QRect&)> provider) {
+  m_backgroundProvider = std::move(provider);
 }
 bool ScrollCaptureController::prepare(const QRect &capture, QString &error,
                                       const QString &windowAddress) {
@@ -314,17 +323,25 @@ void ScrollCaptureController::readFrames() {
       setStatus(tr("Invalid capture frame"));
       continue;
     }
+    // Streaming readback is GPU-premultiplied, unlike the static artifacts
+    // which are unpremultiplied before publication.
+    frame.reinterpretAsFormat(QImage::Format_RGBA8888_Premultiplied);
+    const QRect geometry = QRectF(metadata->logicalX, metadata->logicalY,
+                                   metadata->logicalWidth, metadata->logicalHeight).toAlignedRect();
+    if (m_backgroundProvider && (m_backgroundGeometry != geometry || m_background.size() != frame.size())) {
+      m_background = m_backgroundProvider(frame, geometry);
+      m_backgroundGeometry = geometry;
+      // A deliberately transparent background also only needs evaluating once.
+      if (m_background.isNull()) m_backgroundProvider = {};
+    }
     m_sequence = metadata->sequence;
     m_watchdog.start(5000);
     {
       std::lock_guard lock(m_mutex);
       if (m_latest)
         ++m_dropped;
-      m_latest = Frame{frame,
-                       QRectF(metadata->logicalX, metadata->logicalY,
-                              metadata->logicalWidth, metadata->logicalHeight)
-                           .toAlignedRect(),
-                       metadata->sequence, metadata->captureMonotonicNs};
+      m_latest = Frame{frame, geometry, metadata->sequence,
+                       metadata->captureMonotonicNs, m_background};
     }
     m_ready.notify_one();
   }
@@ -401,18 +418,38 @@ void ScrollCaptureController::motion(double delta) {
   if (delta == 0)
     return;
   m_lastInput.restart();
+  m_lastInputNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now().time_since_epoch()).count();
   m_idle.start(180);
   if (m_hiddenAnnotations)
     return;
   m_hiddenAnnotations = true;
   m_animation->stop();
-  m_animation->setProperty("direction", delta > 0 ? -1. : 1.);
+  m_animation->setProperty("showAnnotations", false);
+  m_animation->setProperty("opacityFrom", m_annotationOpacity);
+  m_animation->setProperty("offsetFrom", m_annotationOffset);
+  m_animation->setProperty("offsetTo", delta > 0 ? -12. : 12.);
+  if (m_editor)
+    m_editor->setAnnotationPresentation(false, m_annotationOpacity, m_annotationOffset);
   m_animation->setDuration(140);
   m_animation->setStartValue(0.);
   m_animation->setEndValue(1.);
   m_animation->start();
   if (m_editor)
     m_editor->toolbarWidget()->hide();
+}
+void ScrollCaptureController::restoreAnnotationsIfReady() {
+  if (m_done || !m_editor || !m_hiddenAnnotations || !m_latestAligned || !m_latestStable ||
+      m_latestCaptureNs < m_lastInputNs || (m_lastInput.isValid() && m_lastInput.elapsed() < 180))
+    return;
+  m_hiddenAnnotations = false;
+  m_animation->stop();
+  m_animation->setProperty("showAnnotations", true);
+  m_animation->setDuration(120);
+  m_animation->setStartValue(0.);
+  m_animation->setEndValue(1.);
+  m_animation->start();
+  m_editor->toolbarWidget()->show();
 }
 void ScrollCaptureController::work(std::stop_token stopToken) {
   cv::setNumThreads(1);
@@ -433,6 +470,13 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
       final = m_finalize;
     }
     if (frame) {
+      if (!frame->background.isNull()) {
+        QImage composed = frame->background.convertToFormat(QImage::Format_ARGB32);
+        QPainter painter(&composed);
+        painter.drawImage(QPoint{}, frame->image);
+        painter.end();
+        frame->image = std::move(composed);
+      }
       const bool stable = ScrollStitcher::stable(candidate, frame->image);
       candidate = frame->image;
       // Seed the unscrolled baseline immediately, before input is replayed.
@@ -488,6 +532,9 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
                        result.status == ScrollStitcher::Status::Appended ||
                        result.status == ScrollStitcher::Status::Relocated ||
                        result.status == ScrollStitcher::Status::Unchanged;
+  m_latestAligned = aligned;
+  m_latestStable = stable;
+  m_latestCaptureNs = timeNs;
   if (result.status == ScrollStitcher::Status::Started)
     command({{"command", "baseline"}});
   if (aligned) {
@@ -519,24 +566,14 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
     setStatus(tr("%1 × %2 · Scroll either way")
                   .arg(layout.frameSize.width())
                   .arg(layout.outputHeight()));
-    // A result captured before the latest input must never restore annotations.
-    const auto nowNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                           std::chrono::steady_clock::now().time_since_epoch())
-                           .count();
-    const bool fresh = !m_lastInput.isValid() ||
-                       (m_lastInput.elapsed() >= 180 &&
-                        qint64(timeNs) >= nowNs - m_lastInput.nsecsElapsed());
-    if (stable && fresh && m_hiddenAnnotations && m_editor) {
-      m_hiddenAnnotations = false;
-      m_animation->stop();
-      m_animation->setDuration(120);
-      m_animation->setStartValue(0.);
-      m_animation->setEndValue(1.);
-      m_animation->start();
-      m_editor->toolbarWidget()->show();
-    }
+    restoreAnnotationsIfReady();
     m_lastAcceptedSequence = sequence;
   } else {
+    // A rejected frame must not let an in-flight fade-in repaint ink at an
+    // unverified position on the next animation tick.
+    m_animation->stop();
+    m_annotationOpacity = 0;
+    m_annotationOffset = 0;
     if (m_editor)
       m_editor->setAnnotationPresentation(false, 0, 0);
     m_hiddenAnnotations = true;
@@ -586,6 +623,7 @@ void ScrollCaptureController::stop() {
   m_stopping = true;
   command({{"command", "stop"}});
   m_watchdog.stop();
+  m_idle.stop();
   m_animation->stop();
   if (m_worker.joinable()) {
     m_worker.request_stop();
