@@ -1,4 +1,5 @@
 #include "ui/scroll_capture.hpp"
+#include "ui/thumbnail_style.hpp"
 #include "plugin/window_stream.hpp"
 #include "shared/protocol.hpp"
 #include "ui/annotation_editor.hpp"
@@ -39,46 +40,50 @@ QRect scrollControlsPlacement(const QRect &capture, const QList<QRect> &screens,
     return {};
   for (const auto &screen : screens)
     if (screen.contains(capture))
-      return QRect(screen.right() - controls.width() - 15,
-                   screen.bottom() - controls.height() - 15, controls.width(),
+      return QRect(screen.right() - controls.width() - thumbnail::kThumbnailScreenMargin + 1,
+                   screen.bottom() - controls.height() - thumbnail::kThumbnailScreenMargin + 1, controls.width(),
                    controls.height());
   return {};
 }
 ScrollCaptureController::ScrollCaptureController(QWidget *parent)
     : QWidget(parent) {
   setObjectName("scrollCaptureBar");
-  setAttribute(Qt::WA_StyledBackground);
-  setStyleSheet("QWidget#scrollCaptureBar { background:#202833; color:#eef3fa; "
-                "border:1px solid #607080; border-radius:10px; }");
-  setFixedWidth(240);
+  setAttribute(Qt::WA_TranslucentBackground);
+  setStyleSheet(thumbnail::imageStyleSheet() + thumbnail::menuStyleSheet(palette()));
   auto *v = new QVBoxLayout(this);
-  v->setContentsMargins(8, 8, 8, 8);
-  m_preview = new QLabel(this);
-  m_preview->setObjectName("scrollCapturePreview");
-  m_preview->setAlignment(Qt::AlignCenter);
-  m_preview->setFixedSize(224, 200);
-  m_preview->setCursor(Qt::PointingHandCursor);
-  m_preview->installEventFilter(this);
-  v->addWidget(m_preview);
-  m_status = new QLabel(this);
+  v->setContentsMargins(0, 0, 0, 0);
+  v->setSpacing(6);
+  m_menu = new QWidget(this);
+  m_menu->setObjectName("thumbnailMenu");
+  m_menu->setAttribute(Qt::WA_StyledBackground);
+  m_menu->setFixedWidth(thumbnail::kThumbnailMaxWidth);
+  auto *menu = new QVBoxLayout(m_menu);
+  menu->setContentsMargins(6, 6, 6, 6);
+  menu->setSpacing(2);
+  m_status = new QLabel(m_menu);
   m_status->setWordWrap(true);
-  m_status->setMinimumHeight(38);
-  v->addWidget(m_status);
-  auto *row = new QHBoxLayout;
-  m_finish = new QPushButton(uiText("Finish"), this);
+  menu->addWidget(m_status);
+  m_finish = new QPushButton(uiText("Finish"), m_menu);
   m_finish->setObjectName("scrollCaptureFinish");
   m_finish->setEnabled(false);
-  m_finish->setMinimumHeight(44);
-  auto *cancelButton = new QPushButton(uiText("Cancel"), this);
+  auto *cancelButton = new QPushButton(uiText("Cancel"), m_menu);
   cancelButton->setObjectName("scrollCaptureCancel");
-  cancelButton->setMinimumHeight(44);
-  row->addWidget(m_finish);
-  row->addWidget(cancelButton);
-  v->addLayout(row);
-  connect(m_finish, &QPushButton::clicked, this,
-          &ScrollCaptureController::finish);
-  connect(cancelButton, &QPushButton::clicked, this,
-          &ScrollCaptureController::cancel);
+  menu->addWidget(m_finish);
+  menu->addWidget(cancelButton);
+  m_menu->hide();
+  v->addWidget(m_menu, 0, Qt::AlignRight);
+  m_preview = new QLabel(this);
+  m_preview->setObjectName("thumbnailImage");
+  m_preview->setAttribute(Qt::WA_StyledBackground);
+  m_preview->setAlignment(Qt::AlignCenter);
+  m_preview->setFixedSize(thumbnail::kThumbnailMaxWidth, thumbnail::kThumbnailMaxHeight);
+  m_preview->setCursor(Qt::PointingHandCursor);
+  m_preview->setAccessibleName(uiText("Long screenshot"));
+  m_preview->setAccessibleDescription(tr("Click to finish; right-click for actions. Enter to finish, Escape to cancel."));
+  m_preview->installEventFilter(this);
+  v->addWidget(m_preview, 0, Qt::AlignRight);
+  connect(m_finish, &QPushButton::clicked, this, &ScrollCaptureController::finish);
+  connect(cancelButton, &QPushButton::clicked, this, &ScrollCaptureController::cancel);
   m_server = new QLocalServer(this);
   connect(m_server, &QLocalServer::newConnection, this, [this] {
     if (m_control) {
@@ -165,13 +170,7 @@ bool ScrollCaptureController::prepare(const QRect &capture, QString &error,
   }
   m_capture = capture;
   m_windowAddress = windowAddress;
-  const int h = std::min(320, int(m_screen->geometry().height() * .4));
-  m_preview->setFixedHeight(std::max(40, h - 112));
-  setFixedHeight(std::max(160, h));
-  const QRect card =
-      scrollControlsPlacement(capture, {m_screen->geometry()}, size());
-  move(parentWidget() ? parentWidget()->mapFromGlobal(card.topLeft())
-                      : card.topLeft());
+  relayoutPreview();
   return true;
 }
 void ScrollCaptureController::updateTarget(const QRect &capture) {
@@ -442,7 +441,7 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
                 result.status == ScrollStitcher::Status::Appended ||
                 result.status == ScrollStitcher::Status::Relocated ||
                 result.status == ScrollStitcher::Status::Unchanged;
-      auto preview = stitcher.preview({224, 208});
+      auto preview = stitcher.preview({thumbnail::kThumbnailMaxWidth * 4, thumbnail::kThumbnailMaxHeight * 4});
       const auto layout = stitcher.layout();
       const int captures = stitcher.frameCount();
       QMetaObject::invokeMethod(
@@ -511,8 +510,10 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
         layout.viewportInImage().x() * sx, layout.viewportInImage().y() * sy,
         layout.content.width() * sx, layout.content.height() * sy));
     p.end();
-    m_preview->setPixmap(QPixmap::fromImage(preview.scaled(
-        m_preview->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+    const auto pixmap = thumbnail::scaledPixmap(QPixmap::fromImage(preview), m_screen);
+    m_preview->setPixmap(pixmap);
+    m_preview->setFixedSize(pixmap.deviceIndependentSize().toSize());
+    relayoutPreview();
     emit progress(QSize(layout.frameSize.width(), layout.outputHeight()),
                   captures);
     setStatus(tr("%1 × %2 · Scroll either way")
@@ -550,6 +551,15 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
 void ScrollCaptureController::setStatus(const QString &text) {
   m_status->setText(text);
   m_status->setAccessibleName(text);
+  m_preview->setAccessibleDescription(text + tr(". Click to finish; right-click for actions. Enter to finish, Escape to cancel."));
+  if (m_menu->isVisible()) relayoutPreview();
+}
+void ScrollCaptureController::relayoutPreview() {
+  adjustSize();
+  if (!m_screen) return;
+  const QRect card = scrollControlsPlacement(m_capture, {m_screen->geometry()}, size());
+  move(parentWidget() ? parentWidget()->mapFromGlobal(card.topLeft()) : card.topLeft());
+  if (m_active) exclude(m_exclusions);
 }
 QRect ScrollCaptureController::previewGeometry() const {
   return QRect(m_preview->mapToGlobal(QPoint{}), m_preview->size());
@@ -624,7 +634,11 @@ bool ScrollCaptureController::eventFilter(QObject *object, QEvent *event) {
         exclude(m_exclusions);
     });
   if (object == m_preview && event->type() == QEvent::MouseButtonRelease) {
-    finish();
+    const auto *mouse = static_cast<QMouseEvent *>(event);
+    if (mouse->button() == Qt::RightButton) {
+      m_menu->setVisible(!m_menu->isVisible());
+      relayoutPreview();
+    } else if (mouse->button() == Qt::LeftButton) finish();
     return true;
   }
   return QWidget::eventFilter(object, event);

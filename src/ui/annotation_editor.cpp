@@ -1653,7 +1653,7 @@ struct AnnotationEditor::Impl {
         actionLabel(themeLight, owner->tr("Light"), {});
         widthLabel->setText(owner->tr("Width"));
         width->setToolTip(owner->tr("Width"));
-        canvas->setToolTip(owner->tr("Drag to draw. Select to move or delete annotations. Ctrl+wheel to zoom; Space+drag to pan. Single finger to draw; two fingers to scroll."));
+        canvas->setAccessibleDescription(owner->tr("Drag to draw. Select to move or delete annotations. Ctrl+wheel to zoom; Space+drag to pan. Single finger to draw; two fingers to scroll."));
         updateTools();
         morePanel->adjustSize();
         positionToolbar();

@@ -70,6 +70,7 @@ private:
                bool stable, quint64 sequence, quint64 timeNs);
   void stop();
   void setStatus(const QString &);
+  void relayoutPreview();
   QPointer<AnnotationEditor> m_editor;
   std::shared_ptr<const AnnotationSnapshot> m_before;
   QPointer<QScreen> m_screen;
@@ -82,6 +83,7 @@ private:
   QSocketNotifier *m_accept = nullptr;
   QSocketNotifier *m_receive = nullptr;
   int m_listener = -1, m_peer = -1;
+  QWidget *m_menu = nullptr;
   QLabel *m_status = nullptr;
   QLabel *m_preview = nullptr;
   QPushButton *m_finish = nullptr;

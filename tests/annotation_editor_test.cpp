@@ -125,6 +125,14 @@ class AnnotationEditorTest final : public QObject {
         QCOMPARE(g.update({{3,{10,10}}},true).front().action,G::Action::CancelStroke);
         QVERIFY(g.update({{3,{30,40}}}).empty());
     }
+    void canvasHelpDoesNotCreateNativeTooltip() {
+        AnnotationEditor editor;
+        initialize(editor,image({240,160},Qt::white));
+        auto* canvas=editor.findChild<QWidget*>("annotationCanvas");
+        QVERIFY(canvas);
+        QVERIFY(canvas->toolTip().isEmpty());
+        QVERIFY(!canvas->accessibleDescription().isEmpty());
+    }
     void finalTouchPanIncludesHorizontalMotion() {
         using Gesture=hyprcapture::ui::TouchGesture;
         Gesture gesture;

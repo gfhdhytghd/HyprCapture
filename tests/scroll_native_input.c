@@ -36,14 +36,34 @@ int main(int argc, char **argv) {
   zwlr_virtual_pointer_v1_frame(pointer);
   wl_display_roundtrip(display);
   int delta = atoi(argv[5]);
-  zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_WHEEL);
-  zwlr_virtual_pointer_v1_axis_discrete(
-      pointer, ms + 1, WL_POINTER_AXIS_VERTICAL_SCROLL,
-      wl_fixed_from_double(delta), delta * 8 / 120);
+  const int finger = getenv("HYPRCAPTURE_SCROLL_NATIVE_FINGER") != NULL;
+  zwlr_virtual_pointer_v1_axis_source(pointer, finger ? WL_POINTER_AXIS_SOURCE_FINGER : WL_POINTER_AXIS_SOURCE_WHEEL);
+  if (finger)
+    zwlr_virtual_pointer_v1_axis(pointer, ms + 1, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(delta));
+  else
+    zwlr_virtual_pointer_v1_axis_discrete(pointer, ms + 1, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(delta), delta * 8 / 120);
   zwlr_virtual_pointer_v1_frame(pointer);
   wl_display_roundtrip(display);
   // Keep the source alive through initial-frame acknowledgement and replay.
-  usleep(500000);
+  if (getenv("HYPRCAPTURE_SCROLL_POINTER_MOTION")) {
+    for (int i = 0; i < 150; ++i) {
+      usleep(4000);
+      clock_gettime(CLOCK_MONOTONIC, &time);
+      ms = time.tv_sec * 1000 + time.tv_nsec / 1000000;
+      zwlr_virtual_pointer_v1_motion_absolute(pointer, ms,
+          atoi(argv[1]) + (i % 2 ? 2 : -2), atoi(argv[2]), atoi(argv[3]), atoi(argv[4]));
+      zwlr_virtual_pointer_v1_frame(pointer);
+      wl_display_roundtrip(display);
+    }
+  } else usleep(500000);
+  if (finger) {
+    zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_FINGER);
+    clock_gettime(CLOCK_MONOTONIC, &time);
+    ms = time.tv_sec * 1000 + time.tv_nsec / 1000000;
+    zwlr_virtual_pointer_v1_axis_stop(pointer, ms, WL_POINTER_AXIS_VERTICAL_SCROLL);
+    zwlr_virtual_pointer_v1_frame(pointer);
+    wl_display_roundtrip(display);
+  }
   zwlr_virtual_pointer_v1_destroy(pointer);
   wl_display_roundtrip(display);
   wl_display_disconnect(display);

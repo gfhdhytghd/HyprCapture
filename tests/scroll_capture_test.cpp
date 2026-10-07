@@ -1,6 +1,7 @@
 #include "ui/scroll_capture.hpp"
 #include <QApplication>
 #include <QPushButton>
+#include <QLabel>
 #include <QSignalSpy>
 #include <QTest>
 #include <cstdlib>
@@ -30,6 +31,13 @@ int main(int argc, char** argv) {
     auto* finish = controller.findChild<QPushButton*>("scrollCaptureFinish");
     auto* cancel = controller.findChild<QPushButton*>("scrollCaptureCancel");
     require(finish && !finish->isEnabled() && cancel, "no result before a real frame");
+    auto* preview=controller.findChild<QLabel*>("thumbnailImage");
+    auto* menu=controller.findChild<QWidget*>("thumbnailMenu");
+    require(preview && menu && menu->isHidden(), "preview uses the result thumbnail image with collapsed actions");
+    require(preview->toolTip().isEmpty(), "preview help cannot spawn a fullscreen tooltip");
+    controller.show();
+    QTest::mouseClick(preview,Qt::RightButton);
+    require(menu->isVisible(), "right click reveals finish and cancel actions");
     QSignalSpy cancelled(&controller, &ScrollCaptureController::cancelled);
     cancel->click();
     cancel->click();
