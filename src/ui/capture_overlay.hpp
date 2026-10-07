@@ -2,6 +2,7 @@
 
 #include "shared/config.hpp"
 #include "ui/overlay_paint.hpp"
+#include "ui/scroll_stitcher.hpp"
 
 #include <QImage>
 #include <QMainWindow>
@@ -131,6 +132,8 @@ class CaptureOverlay final : public QMainWindow {
     void beginInPlaceEdit(const QImage& capturedImage = {});
     void beginScrollCapture();
     void refreshInPlaceImage();
+    QImage scrollWindowBackground(const QImage& frame, const QRect& geometry);
+    QImage renderScrollResultImage();
     void leaveInPlaceEdit();
     void exportInPlaceImage();
     void pinInPlaceImage();
@@ -226,6 +229,9 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_recordActive = false;
     bool                      m_scrolling = false;
     bool                      m_scrollResult = false;
+    QImage                    m_scrollOriginal, m_scrollFirstFrame;
+    QRect                     m_scrollGeometry;
+    hyprcapture::ui::ScrollLayout m_scrollLayout;
     QString                   m_recordError;
     bool                      m_sessionDecoded = false;
     bool                      m_regionCaptureAvailable = false;

@@ -126,6 +126,27 @@ int main(int argc, char** argv) {
     const auto layeredResult=backdrop.image();
     require(layeredResult.copy(60,165,240,65)==layered(300).copy(60,165,240,65),"retained foreground pixels never blended");
 
+    ScrollStitcher retained;
+    auto translucent = [&](int offset) {
+        auto raw = frame(offset);
+        for (int y=0; y<raw.height(); ++y)
+            for (int x=0; x<raw.width(); ++x) {
+                auto color=raw.pixelColor(x,y); color.setAlpha(128); raw.setPixelColor(x,y,color);
+            }
+        return raw;
+    };
+    retained.append(frame(200), translucent(200));
+    require(retained.append(frame(350), translucent(350)).status==Status::Appended,
+            "paired raw pixels append on the accepted alignment");
+    require(retained.append(frame(100), translucent(100)).status==Status::Appended,
+            "paired raw pixels prepend on the accepted alignment");
+    const auto rawResult=retained.originalImage();
+    require(rawResult.size()==retained.image().size(), "raw and composited bounds match");
+    require(rawResult.copy(0,0,360,600)==translucent(100), "raw first viewport preserved including alpha");
+    require(rawResult.copy(0,250,360,600)==translucent(350), "raw appended viewport preserved including alpha");
+    require(retained.append(frame(400)).status==Status::InvalidFrame,
+            "cannot silently discard the original pixel channel");
+
     ScrollStitcher limited({700, 360LL * 700, 2});
     limited.append(frame(0));
     require(limited.append(frame(110)).status == Status::LimitReached, "height and pixel budget");

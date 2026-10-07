@@ -2552,7 +2552,8 @@ void CaptureOverlay::updateToolbarControlsForMode() {
     }
 
     if (m_windowBackground) {
-        const bool visible = !m_scrollResult && (m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Window);
+        const bool visible = m_scrollResult ? !m_scrollOriginal.isNull() :
+            (m_defaults.fushionMode || m_mode == hyprcapture::CaptureMode::Window);
         m_windowBackground->setControlVisible(visible);
     }
 
@@ -4097,7 +4098,7 @@ void CaptureOverlay::relayoutToolbar() {
     if (m_editing && m_editor) {
         m_editor->setGeometry(rect());
         m_editor->setImageDisplayRect(m_editImageRect);
-        m_editor->setCaptureToolbarSize(m_toolbar->size());
+        m_editor->setCaptureToolbarSize(m_scrollResult && m_scrollOriginal.isNull() ? QSize{} : m_toolbar->size());
         m_toolbar->move(m_editor->captureToolbarGeometry().topLeft());
         m_toolbar->raise();
     } else {
@@ -4461,6 +4462,60 @@ bool CaptureOverlay::stopRecording() {
     return dispatchRecordingStop().success;
 }
 
+QImage CaptureOverlay::scrollWindowBackground(const QImage& frame, const QRect& geometry) {
+    const auto* window = selectedWindow();
+    const auto backgroundMode = currentWindowBackground();
+    if (!window || backgroundMode == hyprcapture::WindowBackground::Transparent)
+        return QImage{};
+    ensureDesktopImage();
+    QImage background(frame.size(), QImage::Format_RGBA8888);
+    background.fill(Qt::transparent);
+    bool painted = false;
+    if (backgroundMode == hyprcapture::WindowBackground::Real && !window->realBackground.isNull()) {
+        const QRect source = projectedImageRect(geometry, window->fullGeometry, window->realBackground.size());
+        if (source.isValid()) {
+            QPainter painter(&background);
+            painter.drawImage(background.rect(), window->realBackground, source);
+            painted = true;
+        }
+    }
+    if (!painted && paintWindowBackground(background, backgroundMode, m_desktopImage,
+                                           desktopSourceRectForGlobalRect(geometry))) {
+        if (backgroundMode == hyprcapture::WindowBackground::Real)
+            reconstructRealWindowBackground(background, frame.convertToFormat(QImage::Format_RGBA8888), frame.rect());
+        painted = true;
+    }
+    if (!painted)
+        return QImage{};
+    clipWindowBackgroundToFrame(background, geometry, window->visibleGeometry,
+                                window->rounding, window->roundingPower);
+    return background;
+}
+
+QImage CaptureOverlay::renderScrollResultImage() {
+    if (m_scrollOriginal.isNull())
+        return {};
+    const auto background = scrollWindowBackground(m_scrollFirstFrame, m_scrollGeometry);
+    if (background.isNull())
+        return m_scrollOriginal;
+    QImage image(m_scrollOriginal.size(), QImage::Format_ARGB32);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    const int top = m_scrollLayout.content.top();
+    const int bottom = m_scrollLayout.content.bottom() + 1;
+    const int footer = background.height() - bottom;
+    // Extend only the content band; keep the original top/bottom clipping and
+    // rounded corners at native size. The window pixels remain unmodified.
+    painter.drawImage(QRect(0, 0, image.width(), top), background,
+                      QRect(0, 0, background.width(), top));
+    painter.drawImage(QRect(0, top, image.width(), image.height() - top - footer), background,
+                      QRect(0, top, background.width(), bottom - top));
+    painter.drawImage(QRect(0, image.height() - footer, image.width(), footer), background,
+                      QRect(0, bottom, background.width(), footer));
+    painter.drawImage(QPoint{}, m_scrollOriginal);
+    return image;
+}
+
 void CaptureOverlay::beginScrollCapture() {
     if(m_scrollController || m_scrolling || !m_editing || !m_editor || m_scrollResult || m_scrollSessionVersion<1 || m_hymissionOverviewSession) return;
     auto beforeCapture=std::make_shared<QRect>(m_editImageRect);
@@ -4477,33 +4532,7 @@ void CaptureOverlay::beginScrollCapture() {
     m_scrollController=controller; controller->setEditor(m_editor);
     if (!address.isEmpty()) {
         controller->setWindowBackgroundProvider([this](const QImage& frame, const QRect& geometry) {
-            const auto* window = selectedWindow();
-            const auto backgroundMode = currentWindowBackground();
-            if (!window || backgroundMode == hyprcapture::WindowBackground::Transparent)
-                return QImage{};
-            ensureDesktopImage();
-            QImage background(frame.size(), QImage::Format_RGBA8888);
-            background.fill(Qt::transparent);
-            bool painted = false;
-            if (backgroundMode == hyprcapture::WindowBackground::Real && !window->realBackground.isNull()) {
-                const QRect source = projectedImageRect(geometry, window->fullGeometry, window->realBackground.size());
-                if (source.isValid()) {
-                    QPainter painter(&background);
-                    painter.drawImage(background.rect(), window->realBackground, source);
-                    painted = true;
-                }
-            }
-            if (!painted && paintWindowBackground(background, backgroundMode, m_desktopImage,
-                                                   desktopSourceRectForGlobalRect(geometry))) {
-                if (backgroundMode == hyprcapture::WindowBackground::Real)
-                    reconstructRealWindowBackground(background, frame.convertToFormat(QImage::Format_RGBA8888), frame.rect());
-                painted = true;
-            }
-            if (!painted)
-                return QImage{};
-            clipWindowBackgroundToFrame(background, geometry, window->visibleGeometry,
-                                        window->rounding, window->roundingPower);
-            return background;
+            return scrollWindowBackground(frame, geometry);
         });
     }
     connect(controller,&hyprcapture::ui::ScrollCaptureController::began,this,[this,controller,beforeCapture] {
@@ -4517,6 +4546,8 @@ void CaptureOverlay::beginScrollCapture() {
     connect(controller,&hyprcapture::ui::ScrollCaptureController::completed,this,[this,controller](const QImage& image) {
         const QRect start=QRect(mapFromGlobal(controller->previewGeometry().topLeft()),controller->previewGeometry().size());
         m_scrolling=false; m_scrollResult=true; m_scrollController=nullptr;
+        m_scrollOriginal=controller->originalResult(); m_scrollFirstFrame=controller->originalFirstFrame();
+        m_scrollGeometry=controller->originalGeometry(); m_scrollLayout=controller->resultLayout();
         m_editor->setScrollEnabled(false);
         auto result=image; hyprcapture::ui::applyWatermark(result,m_defaults);
         m_editor->setScrollImage(result,controller->resultLayout(),false);
@@ -4526,7 +4557,7 @@ void CaptureOverlay::beginScrollCapture() {
         m_editor->setEnabled(false); m_editor->toolbarWidget()->hide(); m_toolbar->hide();
         auto* animation=new QVariantAnimation(this); animation->setDuration(260); animation->setEasingCurve(QEasingCurve::OutCubic); animation->setStartValue(start); animation->setEndValue(destination);
         connect(animation,&QVariantAnimation::valueChanged,m_editor,[this](const QVariant& v) { m_editor->setImageDisplayRect(v.toRect()); });
-        connect(animation,&QVariantAnimation::finished,this,[this,animation] { m_editor->setImageDisplayRect({}); m_editor->setEnabled(true); m_editor->toolbarWidget()->show(); m_toolbar->show(); m_editor->setFocus(); animation->deleteLater(); });
+        connect(animation,&QVariantAnimation::finished,this,[this,animation] { m_editor->setImageDisplayRect({}); m_editor->setEnabled(true); m_editor->toolbarWidget()->show(); m_toolbar->setVisible(!m_scrollOriginal.isNull()); m_editor->setFocus(); animation->deleteLater(); });
         animation->start(); controller->deleteLater(); update();
     });
     connect(controller,&hyprcapture::ui::ScrollCaptureController::cancelled,this,[this,controller,beforeCapture] {
@@ -4623,16 +4654,19 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
 }
 
 void CaptureOverlay::refreshInPlaceImage() {
-    if (!m_editing || !m_editor || m_scrollResult)
+    if (!m_editing || !m_editor)
         return;
-    auto image = renderResultImage();
+    auto image = m_scrollResult ? renderScrollResultImage() : renderResultImage();
     if (image.isNull()) {
         m_recordError = tr("Could not capture the selected target");
         updateStatus();
         return;
     }
     hyprcapture::ui::applyWatermark(image, m_defaults);
-    m_editor->setImage(image, true);
+    if (m_scrollResult)
+        m_editor->setScrollImage(image, m_scrollLayout, false);
+    else
+        m_editor->setImage(image, true);
     m_editor->setImageDisplayRect(m_editImageRect);
     m_recordError.clear();
 }
@@ -4644,6 +4678,8 @@ void CaptureOverlay::leaveInPlaceEdit() {
         return;
     m_editing = false;
     m_scrollResult = false;
+    m_scrollOriginal = {}; m_scrollFirstFrame = {};
+    m_toolbar->show();
     m_editor->hide();
     m_editedOutput = {};
     m_fullscreenClientSelected = false;

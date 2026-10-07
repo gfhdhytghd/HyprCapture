@@ -408,7 +408,7 @@ int main(int argc, char **argv) {
                        .arg(expected.height()));
               return;
             }
-            QTimer::singleShot(350, overlay, [&, overlay, expected = actual.convertToFormat(QImage::Format_ARGB32), padding, maximumError, alphaFixture] {
+            QTimer::singleShot(350, overlay, [&, overlay, expected = actual.convertToFormat(QImage::Format_ARGB32), padding, maximumError, alphaFixture, windowMode] {
               auto *ed =
                   overlay->findChild<AnnotationEditor *>("inPlaceEditor");
               auto marked = ed->resultImage();
@@ -430,6 +430,47 @@ int main(int argc, char **argv) {
                 fail("redo changed annotations");
                 return;
               }
+              if (alphaFixture) {
+                auto* selector=overlay->findChild<QWidget*>("windowBackground");
+                auto* trigger=selector ? selector->findChild<QPushButton*>() : nullptr;
+                if (!trigger || !trigger->isVisible()) {
+                  fail("finished window capture lost its background control"); return;
+                }
+                const auto choose = [&](const QString& value) {
+                  QTest::mouseClick(trigger, Qt::LeftButton);
+                  for (auto* button : overlay->findChildren<QPushButton*>())
+                    if (button->isVisible() && button->property("value").toString()==value) {
+                      QTest::mouseClick(button, Qt::LeftButton); return true;
+                    }
+                  return false;
+                };
+                if (!choose("transparent")) { fail("transparent background unavailable"); return; }
+                const auto raw=ed->resultImage();
+                if (raw.size()!=marked.size() || raw.pixelColor(padding+QPoint(3,3)).alpha()!=128 ||
+                    raw.pixelColor(padding+QPoint(qRound(130*scale),qRound(280*scale)))!=QColor("#ff5252")) {
+                  fail("background change lost native alpha, dimensions or annotations"); return;
+                }
+                if (!choose("black")) { fail("black background unavailable"); return; }
+                const auto black=ed->resultImage().pixelColor(padding+QPoint(3,3));
+                if (black.alpha()!=255 || black.red()>=200) {
+                  fail("black background did not recompose native pixels"); return;
+                }
+                if (!choose("white") || ed->resultImage()!=marked) {
+                  ed->resultImage().save(dir + "/background-roundtrip.png");
+                  fail("background round trip changed the result"); return;
+                }
+                ed->undo();
+                if (ed->resultImage().convertToFormat(QImage::Format_ARGB32)!=expected) {
+                  fail("background change damaged annotation undo"); return;
+                }
+                ed->redo();
+                if (ed->resultImage()!=marked) { fail("background change damaged redo"); return; }
+              } else if (!windowMode) {
+                auto* selector=overlay->findChild<QWidget*>("windowBackground");
+                if (selector && selector->parentWidget()->isVisible()) {
+                  fail("finished region capture displays an empty capture toolbar"); return;
+                }
+              }
               QFile report(dir + "/result.json");
               if (!report.open(QIODevice::WriteOnly)) {
                 fail("report failed");
@@ -439,6 +480,7 @@ int main(int argc, char **argv) {
                   QJsonDocument(QJsonObject{{"pixel_exact", !alphaFixture || maximumError == 0},
                                             {"maximum_rgb_error", maximumError},
                                             {"alpha_verified", alphaFixture},
+                                            {"background_controls_round_trip", alphaFixture},
                                             {"continuous_input", continuous},
                                             {"grew_during_input", continuousGrowth},
                                             {"annotation_exact", true},

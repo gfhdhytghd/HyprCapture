@@ -328,6 +328,10 @@ void ScrollCaptureController::readFrames() {
     frame.reinterpretAsFormat(QImage::Format_RGBA8888_Premultiplied);
     const QRect geometry = QRectF(metadata->logicalX, metadata->logicalY,
                                    metadata->logicalWidth, metadata->logicalHeight).toAlignedRect();
+    if (!m_windowAddress.isEmpty() && m_originalFirstFrame.isNull()) {
+      m_originalFirstFrame = frame;
+      m_originalGeometry = geometry;
+    }
     if (m_backgroundProvider && (m_backgroundGeometry != geometry || m_background.size() != frame.size())) {
       m_background = m_backgroundProvider(frame, geometry);
       m_backgroundGeometry = geometry;
@@ -470,6 +474,7 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
       final = m_finalize;
     }
     if (frame) {
+      const QImage original = m_windowAddress.isEmpty() ? QImage{} : frame->image;
       if (!frame->background.isNull()) {
         QImage composed = frame->background.convertToFormat(QImage::Format_ARGB32);
         QPainter painter(&composed);
@@ -480,7 +485,7 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
       const bool stable = ScrollStitcher::stable(candidate, frame->image);
       candidate = frame->image;
       // Seed the unscrolled baseline immediately, before input is replayed.
-      auto result = stitcher.append(frame->image);
+      auto result = stitcher.append(frame->image, original);
       aligned = result.status == ScrollStitcher::Status::Started ||
                 result.status == ScrollStitcher::Status::Appended ||
                 result.status == ScrollStitcher::Status::Relocated ||
@@ -498,10 +503,11 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
     }
     if (final) {
       auto image = stitcher.image();
+      const auto original = m_windowAddress.isEmpty() ? QImage{} : stitcher.originalImage();
       const auto layout = stitcher.layout();
       QMetaObject::invokeMethod(
           this,
-          [this, image, layout, aligned] {
+          [this, image, original, layout, aligned] {
             if (m_done)
               return;
             if (image.isNull()) {
@@ -512,6 +518,7 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
               emit failed(tr("Final frame could not be aligned; keeping "
                              "confirmed content"));
             m_layout = layout;
+            m_originalResult = original;
             stop();
             m_done = true;
             emit completed(image);

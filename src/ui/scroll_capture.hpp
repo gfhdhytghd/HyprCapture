@@ -43,6 +43,9 @@ public:
   void finish();
   void cancel();
   ScrollLayout resultLayout() const { return m_layout; }
+  QImage originalResult() const { return m_originalResult; }
+  QImage originalFirstFrame() const { return m_originalFirstFrame; }
+  QRect originalGeometry() const { return m_originalGeometry; }
   QRect previewGeometry() const;
 signals:
   void began();
@@ -99,12 +102,12 @@ private:
   bool m_latestAligned = false, m_latestStable = false;
   std::function<QImage(const QImage&, const QRect&)> m_backgroundProvider;
   QImage m_background;
-  QRect m_backgroundGeometry;
+  QRect m_backgroundGeometry, m_originalGeometry;
   QList<QRect> m_exclusions;
   QList<QJsonObject> m_commands;
   QByteArray m_controlBytes;
   ScrollLayout m_layout;
-  QImage m_thumbnail;
+  QImage m_thumbnail, m_originalResult, m_originalFirstFrame;
   std::mutex m_mutex;
   std::condition_variable_any m_ready;
   std::optional<Frame> m_latest;

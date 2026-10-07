@@ -296,7 +296,10 @@ bool ScrollStitcher::stable(const QImage &a, const QImage &b) {
          static_cast<size_t>(cv::countNonZero(diff.reshape(1) > 12)) <=
              diff.total() / 1000;
 }
-ScrollStitcher::Result ScrollStitcher::append(const QImage &source) {
+ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage &original) {
+  if ((!original.isNull() && original.size() != source.size()) ||
+      (!empty() && original.isNull() != m_originalInitial.isNull()))
+    return {Status::InvalidFrame};
   if (source.isNull() || source.width() < 64 || source.height() < 96)
     return {Status::InvalidFrame};
   if (source.height() > m_limits.maxHeight ||
@@ -305,6 +308,7 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source) {
   const auto frame = source.convertToFormat(QImage::Format_ARGB32);
   if (empty()) {
     m_initial = m_previous = frame;
+    m_originalInitial = original.convertToFormat(QImage::Format_ARGB32);
     m_layout = {frame.rect(), frame.size()};
     m_frames = 1;
     return {Status::Started, frame.height()};
@@ -377,6 +381,8 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source) {
     m_layout.rightSeam = right;
     m_layoutLocked = true;
     m_strips.push_back({0, m_initial.copy(content)});
+    if (!original.isNull())
+      m_originalStrips.push_back({0, m_originalInitial.copy(content)});
   }
   if (minY < m_layout.minimumY)
     m_strips.push_back(
@@ -387,6 +393,19 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source) {
     m_strips.push_back({m_layout.maximumY + content.height(),
                         frame.copy(content.x(), content.bottom() + 1 - count,
                                    content.width(), count)});
+  }
+  // Retain uncomposited pixels using the same accepted alignment. This avoids
+  // a second matcher and allows background changes after capture.
+  if (!original.isNull()) {
+    if (minY < m_layout.minimumY)
+      m_originalStrips.push_back({minY, original.copy(content.x(), content.y(),
+          content.width(), m_layout.minimumY - minY).convertToFormat(QImage::Format_ARGB32)});
+    if (maxY > m_layout.maximumY) {
+      const int count = maxY - m_layout.maximumY;
+      m_originalStrips.push_back({m_layout.maximumY + content.height(),
+          original.copy(content.x(), content.bottom() + 1 - count,
+                        content.width(), count).convertToFormat(QImage::Format_ARGB32)});
+    }
   }
   const int delta = position - m_layout.viewportY;
   m_layout.minimumY = minY;
@@ -408,9 +427,11 @@ QImage ScrollStitcher::bodyImage() const {
     p.drawImage(0, strip.y - m_layout.minimumY, strip.image);
   return result;
 }
-void ScrollStitcher::paint(QPainter &p) const {
+void ScrollStitcher::paint(QPainter &p, bool original) const {
+  const auto& initial = original && !m_originalInitial.isNull() ? m_originalInitial : m_initial;
+  const auto& strips = original && !m_originalInitial.isNull() ? m_originalStrips : m_strips;
   if (!m_layoutLocked) {
-    p.drawImage(0, 0, m_initial);
+    p.drawImage(0, 0, initial);
     return;
   }
   const auto c = m_layout.content;
@@ -423,37 +444,37 @@ void ScrollStitcher::paint(QPainter &p) const {
     if (seam < 0) {
       // A dense, stationary background may repeat in source-pixel blocks.
       const int tile = std::min(64, c.height());
-      p.drawImage(QRect(x, c.y(), width, c.height()), m_initial,
+      p.drawImage(QRect(x, c.y(), width, c.height()), initial,
                   QRect(x, c.y(), width, c.height()));
       for (int y = c.bottom() + 1; y < c.bottom() + 1 + growth; y += tile)
         p.drawImage(
             QRect(x, y, width, std::min(tile, c.bottom() + 1 + growth - y)),
-            m_initial,
+            initial,
             QRect(x, c.bottom() + 1 - tile, width,
                   std::min(tile, c.bottom() + 1 + growth - y)));
       return;
     }
-    p.drawImage(QRect(x, c.y(), width, seam - c.y()), m_initial,
+    p.drawImage(QRect(x, c.y(), width, seam - c.y()), initial,
                 QRect(x, c.y(), width, seam - c.y()));
     p.drawImage(QRect(x, seam + growth, width, c.bottom() + 1 - seam),
-                m_initial, QRect(x, seam, width, c.bottom() + 1 - seam));
+                initial, QRect(x, seam, width, c.bottom() + 1 - seam));
     if (growth <= 0)
       return;
     for (int i = 0; i < width; ++i) {
       QLinearGradient gradient(0, seam, 0, seam + growth);
-      gradient.setColorAt(0, m_initial.pixelColor(x + i, seam - 1));
-      gradient.setColorAt(1, m_initial.pixelColor(x + i, seam));
+      gradient.setColorAt(0, initial.pixelColor(x + i, seam - 1));
+      gradient.setColorAt(1, initial.pixelColor(x + i, seam));
       p.fillRect(QRect(x + i, seam, 1, growth), gradient);
     }
   };
   sidebar(0, c.x(), m_layout.leftSeam);
-  sidebar(c.right() + 1, m_initial.width() - c.right() - 1, m_layout.rightSeam);
-  p.drawImage(QRect(0, 0, m_initial.width(), c.y()), m_initial,
-              QRect(0, 0, m_initial.width(), c.y()));
-  const int footer = m_initial.height() - c.bottom() - 1;
-  p.drawImage(QRect(0, size().height() - footer, m_initial.width(), footer),
-              m_initial, QRect(0, c.bottom() + 1, m_initial.width(), footer));
-  for (const auto &strip : m_strips)
+  sidebar(c.right() + 1, initial.width() - c.right() - 1, m_layout.rightSeam);
+  p.drawImage(QRect(0, 0, initial.width(), c.y()), initial,
+              QRect(0, 0, initial.width(), c.y()));
+  const int footer = initial.height() - c.bottom() - 1;
+  p.drawImage(QRect(0, size().height() - footer, initial.width(), footer),
+              initial, QRect(0, c.bottom() + 1, initial.width(), footer));
+  for (const auto &strip : strips)
     p.drawImage(c.x(), c.y() + strip.y - m_layout.minimumY, strip.image);
 }
 QImage ScrollStitcher::image() const {
@@ -463,6 +484,15 @@ QImage ScrollStitcher::image() const {
   result.fill(Qt::transparent);
   QPainter p(&result);
   paint(p);
+  return result;
+}
+QImage ScrollStitcher::originalImage() const {
+  if (m_originalInitial.isNull())
+    return image();
+  QImage result(size(), QImage::Format_ARGB32);
+  result.fill(Qt::transparent);
+  QPainter painter(&result);
+  paint(painter, true);
   return result;
 }
 QImage ScrollStitcher::preview(const QSize &bounds) const {
