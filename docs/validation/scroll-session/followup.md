@@ -2,6 +2,8 @@
 
 Base commit: `61eb260`. Tests used a separate nested Hyprland instance and an isolated Zen profile, started through the same `wl-relabel` wrapper as the desktop browser. The production compositor, browser, plugin and helper were not replaced or reloaded.
 
+**2026-10-07 correction:** The virtual-pointer driver set `axis_source` before `axis`, which reinitialized the pending event to WHEEL in Hyprland. The FINGER labels below describe the intended input, not the actual protocol source. These historical runs are wheel evidence only. See [gtk-touchpad.md](gtk-touchpad.md) for a source-checked GTK regression and the forwarding fix.
+
 ## Fixed and observed
 
 - Moving the pointer over the canvas could create a native Qt tooltip containing the canvas help text. In the layer-shell session this became a full-screen white surface. Canvas help is now an accessible description rather than a popup tooltip.

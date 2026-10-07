@@ -96,7 +96,14 @@ int main(int argc, char **argv) {
   QProcess child;
   child.setStandardOutputFile(dir + "/fixture.log");
   child.setStandardErrorFile(dir + "/fixture-wire.log");
-  child.start(app.applicationFilePath(), {"--fixture"});
+  const QString gtkFixture = qEnvironmentVariable("HYPRCAPTURE_SCROLL_GTK_FIXTURE");
+  if (!gtkFixture.isEmpty()) {
+    const QString pagePath = dir + "/fixture-page.png";
+    if (!document(800, 3000, screen->devicePixelRatio()).save(pagePath))
+      return 2;
+    child.start(gtkFixture, {pagePath});
+  } else
+    child.start(app.applicationFilePath(), {"--fixture"});
   if (!child.waitForStarted())
     return 2;
   bool passed = false;

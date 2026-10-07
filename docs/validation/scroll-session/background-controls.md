@@ -14,4 +14,6 @@ Validation in an isolated nested compositor, scale 1:
 
 ## Separate input investigation
 
+**2026-10-07 correction:** The virtual-pointer source assignment in this historical probe was overwritten by the following axis request, so the events below actually used WHEEL, not FINGER. See [gtk-touchpad.md](gtk-touchpad.md) for the corrected reproduction and fix. The background-control results above are unaffected.
+
 User reports Moonlight input scrolls Zen, while their precision touchpad does not. The user confirmed the touchpad is directly connected to Linux. An isolated Zen fixture accepted 40 FINGER-source events carrying vertical delta 3 and horizontal delta 0.8 in the same native protocol frame, spaced 16 ms apart. With the installed `35ffca1` helper and the native capture plugin, DOM scrollY advanced from 912 to 1824 and the scrolling preview grew. This does not reproduce the physical/remote touchpad failure. No compositor input-forwarding change is included, and no claim is made that the device failure is fixed. Production plugin/helper were not reloaded or replaced during these tests.

@@ -1,0 +1,14 @@
+{
+    "alpha_verified": false,
+    "annotation_exact": true,
+    "background_controls_round_trip": false,
+    "continuous_input": false,
+    "grew_during_input": false,
+    "height": 1320,
+    "maximum_rgb_error": 0,
+    "phases": 6,
+    "pixel_exact": true,
+    "scale": 1,
+    "undo_redo": true,
+    "width": 800
+}

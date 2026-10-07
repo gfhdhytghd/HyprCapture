@@ -1,0 +1,35 @@
+[
+  {
+    "phase": "normal",
+    "before": {
+      "y": 137,
+      "wheelEvents": 344
+    },
+    "after": {
+      "y": 1288,
+      "wheelEvents": 369
+    }
+  },
+  {
+    "phase": "capture-forward",
+    "before": {
+      "y": 1460,
+      "wheelEvents": 369
+    },
+    "after": {
+      "y": 2606,
+      "wheelEvents": 413
+    }
+  },
+  {
+    "phase": "capture-backward",
+    "before": {
+      "y": 2606,
+      "wheelEvents": 413
+    },
+    "after": {
+      "y": 1460,
+      "wheelEvents": 458
+    }
+  }
+]

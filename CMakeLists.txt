@@ -225,6 +225,13 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-scroll-live-test PRIVATE ${OpenCV_LIBS} Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
   add_test(NAME scroll-live COMMAND hyprcapture-scroll-live-test)
   set_tests_properties(scroll-live PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
+  # Optional receiver for the isolated GTK touchpad regression; not a UI runtime dependency.
+  pkg_check_modules(GTK3 QUIET IMPORTED_TARGET gtk+-3.0)
+  if(GTK3_FOUND)
+    add_executable(hyprcapture-scroll-gtk-fixture tests/scroll_gtk_fixture.cpp)
+    target_link_libraries(hyprcapture-scroll-gtk-fixture PRIVATE PkgConfig::GTK3)
+    set_target_properties(hyprcapture-scroll-gtk-fixture PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
+  endif()
 
   add_executable(hyprcapture-audio-timeline-test tests/audio_timeline_test.cpp)
   target_include_directories(hyprcapture-audio-timeline-test PRIVATE src)

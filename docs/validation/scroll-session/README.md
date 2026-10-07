@@ -2,6 +2,8 @@
 
 Candidate source tested against Hyprland 0.56.2 (`efb50993780079460b0cbed1363e2166a2de1d9f`), Qt 6.11.2 and OpenCV 5.0. No production compositor/plugin was reloaded. Runtime cases used an isolated nested Wayland compositor and the candidate plugin/helper.
 
+For the subsequent GTK/Zen touchpad forwarding fix and corrected FINGER-source regression, see [gtk-touchpad.md](gtk-touchpad.md). Earlier virtual-pointer FINGER labels in follow-up reports were invalidated by a driver ordering error; those runs exercised wheel input.
+
 ## Runtime evidence
 
 The fixture renders deterministic native pixels, starts at document offset 400, then visits 520, 200, 450, 700, 920 and 200. Tests compare the assembled output to the source document, verify an annotation at its document position, and undo/redo it. The fixture uses its window's actual device pixel ratio (QScreen's rounded DPR is unsuitable for fractional-scale pixel goldens).
@@ -26,7 +28,7 @@ HYPRCAPTURE_SCROLL_LIVE_TEST=1 QT_QPA_PLATFORM=wayland \
 # Optional: HYPRCAPTURE_SCROLL_WINDOW=1 or HYPRCAPTURE_SCROLL_CANCEL=1
 ```
 
-For the native first-wheel driver, generate `scroll-virtual-pointer.h/.c` with `wayland-scanner` from Hyprland's `wlr-virtual-pointer-unstable-v1.xml`, compile them with `tests/scroll_native_input.c` and `-lwayland-client`, then set `HYPRCAPTURE_SCROLL_NATIVE_INPUT` to that executable. The driver requires the live-test environment opt-in.
+For the native first-wheel driver, generate `scroll-virtual-pointer.h/.c` with `wayland-scanner` from Hyprland's `wlr-virtual-pointer-unstable-v1.xml`, compile them with `tests/scroll_native_input.c` and `-lwayland-client -lm`, then set `HYPRCAPTURE_SCROLL_NATIVE_INPUT` to that executable. The driver requires the live-test environment opt-in.
 
 ## Single-core algorithm benchmark
 

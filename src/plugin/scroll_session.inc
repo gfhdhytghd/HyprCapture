@@ -129,6 +129,10 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
   }
   g_pSeatManager->setPointerFocus(surface, local);
   g_pSeatManager->sendPointerMotion(input.event.timeMs, local);
+  // GTK 3 flushes either pointer motion or scroll data for a wl_pointer.frame.
+  // Finish the synthetic positioning event first, otherwise a FINGER axis in
+  // the same frame is swallowed (while Gecko's separate wheel path still works).
+  g_pSeatManager->sendPointerFrame();
   if (input.native) {
     // Re-enter the native path exactly once, preserving per-device factors,
     // wheel v120 accumulation, application overrides and natural scrolling.

@@ -37,11 +37,13 @@ int main(int argc, char **argv) {
   wl_display_roundtrip(display);
   int delta = atoi(argv[5]);
   const int finger = getenv("HYPRCAPTURE_SCROLL_NATIVE_FINGER") != NULL;
-  zwlr_virtual_pointer_v1_axis_source(pointer, finger ? WL_POINTER_AXIS_SOURCE_FINGER : WL_POINTER_AXIS_SOURCE_WHEEL);
   if (finger)
     zwlr_virtual_pointer_v1_axis(pointer, ms + 1, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(delta));
   else
     zwlr_virtual_pointer_v1_axis_discrete(pointer, ms + 1, WL_POINTER_AXIS_VERTICAL_SCROLL, wl_fixed_from_double(delta), delta * 8 / 120);
+  // Hyprland initializes the pending axis in axis()/axis_discrete(). Set the
+  // source afterwards so a FINGER test cannot silently become a wheel event.
+  zwlr_virtual_pointer_v1_axis_source(pointer, finger ? WL_POINTER_AXIS_SOURCE_FINGER : WL_POINTER_AXIS_SOURCE_WHEEL);
   zwlr_virtual_pointer_v1_frame(pointer);
   wl_display_roundtrip(display);
   // Keep the source alive through initial-frame acknowledgement and replay.
@@ -57,10 +59,10 @@ int main(int argc, char **argv) {
     }
   } else usleep(500000);
   if (finger) {
-    zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_FINGER);
     clock_gettime(CLOCK_MONOTONIC, &time);
     ms = time.tv_sec * 1000 + time.tv_nsec / 1000000;
     zwlr_virtual_pointer_v1_axis_stop(pointer, ms, WL_POINTER_AXIS_VERTICAL_SCROLL);
+    zwlr_virtual_pointer_v1_axis_source(pointer, WL_POINTER_AXIS_SOURCE_FINGER);
     zwlr_virtual_pointer_v1_frame(pointer);
     wl_display_roundtrip(display);
   }

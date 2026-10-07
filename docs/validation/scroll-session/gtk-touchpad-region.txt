@@ -1,0 +1,22 @@
+progress: 400 800x600
+
+progress: 520 800x720
+accepted phase=0 offset=520 height=720 frames=2
+accepted phase=1 offset=200 height=920 frames=3
+
+accepted phase=2 offset=450 height=920 frames=3
+
+accepted phase=3 offset=700 height=1100 frames=4
+accepted phase=4 offset=920 height=1320 frames=5
+
+accepted phase=5 offset=200 height=1320 frames=5
+
+
+GTK receiver events:
+fixture offset=520 source=touchpad
+fixture offset=200 source=wheel
+fixture offset=200 source=touchpad
+fixture offset=450 source=wheel
+fixture offset=700 source=wheel
+fixture offset=920 source=wheel
+fixture offset=200 source=wheel
