@@ -1,0 +1,15 @@
+{
+  "annotation_exact": true,
+  "height": 2640,
+  "phases": 6,
+  "pixel_exact": true,
+  "scale": 2,
+  "undo_redo": true,
+  "width": 1600,
+  "case": "scale-2-negative",
+  "isolated_compositor": true,
+  "monitor_origin": [
+    -1280,
+    -100
+  ]
+}

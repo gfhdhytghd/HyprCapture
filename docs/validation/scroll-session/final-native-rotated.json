@@ -1,0 +1,17 @@
+{
+  "annotation_exact": true,
+  "height": 2640,
+  "phases": 6,
+  "pixel_exact": true,
+  "scale": 2,
+  "undo_redo": true,
+  "width": 1600,
+  "case": "final-native-rotated",
+  "isolated_compositor": true,
+  "monitor_origin": [
+    -1280,
+    -100
+  ],
+  "monitor_transform": 1,
+  "first_input": "Wayland virtual pointer axis; remaining phases use touch-axis control"
+}

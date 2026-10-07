@@ -43,6 +43,8 @@ constexpr std::array  kLuaFunctionNames = {
     "record_start",
     "window_capture",
     "region_capture",
+    "scroll_session_start",
+    "scroll_session_stop",
     "window_stream_start",
     "window_stream_stop",
     "export_pipe",
@@ -440,6 +442,9 @@ int luaRecordStart(lua_State* L) {
     return luaDispatchResult(L, dispatchRecordStart(luaOptionalString(L, 1)));
 }
 
+int luaScrollSessionStart(lua_State* L) { return luaDispatchResult(L, dispatchResult(hyprcapture::startScrollSessionFromRequestFile(luaOptionalString(L,1)))); }
+int luaScrollSessionStop(lua_State* L) { return luaDispatchResult(L, dispatchResult(hyprcapture::stopScrollSessionFromRequestFile(luaOptionalString(L,1)))); }
+
 int luaRegionCapture(lua_State* L) {
     return luaDispatchResult(L, dispatchResult(hyprcapture::captureRegionArtifactFromRequestFile(luaOptionalString(L, 1))));
 }
@@ -482,6 +487,8 @@ int luaDispatch(lua_State* L) {
         return luaDispatchResult(L, dispatchRecordStop(args));
     if (action == "record_start")
         return luaDispatchResult(L, dispatchRecordStart(args));
+    if(action=="scroll_session_start") return luaDispatchResult(L,dispatchResult(hyprcapture::startScrollSessionFromRequestFile(args)));
+    if(action=="scroll_session_stop") return luaDispatchResult(L,dispatchResult(hyprcapture::stopScrollSessionFromRequestFile(args)));
     if (action == "region_capture")
         return luaDispatchResult(L, dispatchResult(hyprcapture::captureRegionArtifactFromRequestFile(args)));
     if (action == "window_capture")
@@ -533,6 +540,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         registerLuaFunction("record_start", luaRecordStart);
         registerLuaFunction("window_capture", luaWindowCapture);
         registerLuaFunction("region_capture", luaRegionCapture);
+        registerLuaFunction("scroll_session_start", luaScrollSessionStart);
+        registerLuaFunction("scroll_session_stop", luaScrollSessionStop);
         registerLuaFunction("export_pipe", luaExportPipe);
         registerLuaFunction("window_stream_start", luaWindowStreamStart);
         registerLuaFunction("window_stream_stop", luaWindowStreamStop);

@@ -14,6 +14,7 @@
   libpulseaudio,
   ffmpeg,
   nlohmann_json,
+  opencv,
   pkg-config,
   src,
 }:
@@ -48,6 +49,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
     lua
     libpulseaudio
     nlohmann_json
+    opencv
   ];
 
   cmakeFlags = [

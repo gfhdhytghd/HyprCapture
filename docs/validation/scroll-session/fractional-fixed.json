@@ -1,0 +1,11 @@
+{
+  "annotation_exact": true,
+  "height": 1650,
+  "phases": 6,
+  "pixel_exact": true,
+  "scale": 1.25,
+  "undo_redo": true,
+  "width": 1000,
+  "case": "fractional-fixed",
+  "isolated_compositor": true
+}

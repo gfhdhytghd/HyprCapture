@@ -1,5 +1,7 @@
 #include "ui/annotation_editor.hpp"
 #include "ui/material_icon.hpp"
+#include "ui/touch_gesture.hpp"
+#include <QTouchEvent>
 
 #include <QApplication>
 #include <QButtonGroup>
@@ -56,6 +58,8 @@ struct Annotation {
     QFont textFont;
     QSizeF textBox;
     int number = 1;
+    int documentY = 0;
+    bool scrollAnchored = false;
     mutable QImage mosaicCache;
     mutable QRect mosaicBounds;
     mutable int mosaicBlock = 0;
@@ -69,6 +73,37 @@ struct Edit {
     Annotation after;
     std::vector<Annotation> all;
 };
+
+} // namespace
+struct AnnotationSnapshot {
+    std::vector<Annotation> annotations;
+    std::vector<Edit> history;
+    int position=0, selected=-1;
+    QImage base;
+    QRect display;
+    qreal zoom=1;
+    QPointF pan;
+    bool fitToViewport=false;
+};
+namespace {
+using hyprcapture::ui::ScrollLayout;
+// Map pieces, not object coordinates. Cross-chrome objects retain one identity
+// and one undo action, including when the document grows above the first frame.
+struct AnnotationPiece { QRectF clip; int dy; };
+std::vector<AnnotationPiece> annotationPieces(const Annotation& a,const ScrollLayout& l,bool live) {
+    const QRect c=l.content; const int w=l.frameSize.width(),h=l.frameSize.height();
+    const int growth=l.maximumY-l.minimumY;
+    std::vector<AnnotationPiece> result{{QRectF(0,0,w,c.y()),0},
+        {QRectF(0,c.bottom()+1,w,h-c.bottom()-1),live?0:growth},
+        {QRectF(c),a.documentY-(live?l.viewportY:l.minimumY)}};
+    const auto side=[&](int x,int width,int seam) {
+        if(live || seam<0) { result.push_back({QRectF(x,c.y(),width,c.height()),0}); return; }
+        result.push_back({QRectF(x,c.y(),width,seam-c.y()),0});
+        result.push_back({QRectF(x,seam,width,c.bottom()+1-seam),growth});
+    };
+    side(0,c.x(),l.leftSeam); side(c.right()+1,w-c.right()-1,l.rightSeam);
+    return result;
+}
 
 QRectF pointBounds(const Annotation& annotation) {
     if (annotation.points.isEmpty())
@@ -440,11 +475,23 @@ class TextBoxFrame final : public QFrame {
     QPointF m_pointer;
 };
 
+void drawMappedAnnotation(QPainter& p,const QImage& base,const Annotation& a,const std::optional<ScrollLayout>& layout,bool live) {
+    if(!layout || !a.scrollAnchored) { drawAnnotation(p,base,a); return; }
+    for(const auto& piece:annotationPieces(a,*layout,live)) {
+        if(piece.clip.isEmpty()) continue;
+        Annotation mapped=a;
+        for(auto& point:mapped.points) point.ry()+=piece.dy;
+        p.save(); p.setClipRect(piece.clip.translated(0,piece.dy),Qt::IntersectClip);
+        drawAnnotation(p,base,mapped); p.restore();
+    }
+}
+
 class AnnotationCanvas final : public QWidget {
   public:
     explicit AnnotationCanvas(QWidget* parent) : QWidget(parent) {
         setObjectName("annotationCanvas");
         setMouseTracking(true);
+        setAttribute(Qt::WA_AcceptTouchEvents);
         setFocusPolicy(Qt::StrongFocus);
         setAttribute(Qt::WA_TranslucentBackground);
         setCursor(Qt::CrossCursor);
@@ -460,6 +507,51 @@ class AnnotationCanvas final : public QWidget {
     std::function<void(const QRect&)> captureRectChanged;
     QRect resizeBounds;
 
+    bool scrollEnabled=false, liveScroll=false, annotationsReady=true;
+    qreal annotationOpacity=1,annotationOffset=0;
+    std::optional<ScrollLayout> scrollLayout;
+    std::function<void(QPointF,double,int,bool,bool)> scrollRequested;
+    std::shared_ptr<const AnnotationSnapshot> snapshot() const {
+        return std::make_shared<AnnotationSnapshot>(AnnotationSnapshot{m_annotations,m_history,m_historyPosition,m_selected,base,m_displayRect,m_zoom,m_pan,m_fitToViewport});
+    }
+    void restore(const std::shared_ptr<const AnnotationSnapshot>& state) {
+        if(!state) return;
+        cancelGesture(); base=state->base; m_annotations=state->annotations; m_history=state->history;
+        m_historyPosition=state->position; m_selected=state->selected; m_displayRect=state->display; m_zoom=state->zoom; m_pan=state->pan; m_fitToViewport=state->fitToViewport;
+        scrollLayout.reset(); liveScroll=false; annotationsReady=true; annotationOpacity=1; annotationOffset=0; notify();
+    }
+    void scrollImage(const QImage& image,const ScrollLayout& layout,bool live) {
+        if(image.isNull()) return;
+        if(!scrollLayout) {
+            auto anchor=[](Annotation& a) { a.scrollAnchored=true; a.documentY=0; };
+            for(auto& a:m_annotations) anchor(a);
+            for(auto& e:m_history) { anchor(e.before); anchor(e.after); for(auto& a:e.all) anchor(a); }
+        }
+        if(!scrollLayout || scrollLayout->viewportY!=layout.viewportY) cancelGesture();
+        scrollLayout=layout; liveScroll=live; base=image; base.setDevicePixelRatio(1);
+        resizeBounds={}; notify();
+    }
+    QImage annotatedPreview(const QImage& preview,const ScrollLayout& layout) const {
+        if(preview.isNull()) return {};
+        QImage result=preview.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        QPainter p(&result); p.scale(qreal(result.width())/layout.frameSize.width(),qreal(result.height())/layout.outputHeight());
+        for(auto a:m_annotations) {
+            a.scrollAnchored=true;
+            if(a.tool!=Tool::Mosaic) { drawMappedAnnotation(p,base,a,layout,false); continue; }
+            const qreal sx=qreal(result.width())/layout.frameSize.width(),sy=qreal(result.height())/layout.outputHeight();
+            for(const auto& piece:annotationPieces(a,layout,false)) {
+                auto scaled=a; for(auto& pt:scaled.points) pt=QPointF(pt.x()*sx,(pt.y()+piece.dy)*sy);
+                scaled.width*=sx;
+                p.save(); p.resetTransform(); p.setClipRect(QRectF(piece.clip.x()*sx,(piece.clip.y()+piece.dy)*sy,piece.clip.width()*sx,piece.clip.height()*sy));
+                drawAnnotation(p,preview,scaled); p.restore();
+            }
+        }
+        return result;
+    }
+    void presentation(bool ready,qreal opacity,qreal offset) {
+        if(!ready) cancelGesture();
+        annotationsReady=ready; annotationOpacity=opacity; annotationOffset=offset; update();
+    }
     void replaceCapture(const QImage& image, const QRect& target) {
         if (base.isNull() || m_displayRect.isEmpty() || image.isNull()) return;
         const QRect oldView = displayRect();
@@ -503,6 +595,7 @@ class AnnotationCanvas final : public QWidget {
 
     void setImage(const QImage& image, bool preserve) {
         const bool sameSize = image.size() == base.size();
+        if(!preserve) { scrollLayout.reset(); liveScroll=false; annotationsReady=true; }
         base = image;
         base.setDevicePixelRatio(1.0);
         m_draft.reset();
@@ -525,7 +618,7 @@ class AnnotationCanvas final : public QWidget {
             return {};
         QPainter painter(&output);
         for (const auto& annotation : m_annotations)
-            drawAnnotation(painter, base, annotation);
+            drawMappedAnnotation(painter, base, annotation,scrollLayout,false);
         return output;
     }
 
@@ -600,6 +693,55 @@ class AnnotationCanvas final : public QWidget {
     }
 
   protected:
+    bool event(QEvent* event) override {
+        using Gesture=hyprcapture::ui::TouchGesture;
+        if(event->type()!=QEvent::TouchBegin && event->type()!=QEvent::TouchUpdate && event->type()!=QEvent::TouchEnd && event->type()!=QEvent::TouchCancel)
+            return QWidget::event(event);
+        auto* touch=static_cast<QTouchEvent*>(event);
+        if(touch->pointingDevice()->type()!=QInputDevice::DeviceType::TouchScreen) return QWidget::event(event);
+        if (m_touchDevice && m_touchDevice != touch->pointingDevice()) { event->accept(); return true; }
+        m_touchDevice = touch->pointingDevice();
+        QVector<Gesture::Point> points;
+        for(const auto& p:touch->points()) if(p.state()!=QEventPoint::State::Released) points.push_back({p.id(),p.position()});
+        if(event->type()==QEvent::TouchCancel) points.clear();
+        const auto updates=m_touch.update(points,event->type()==QEvent::TouchCancel,scrollLayout.has_value() && !liveScroll);
+        if (points.empty()) m_touchDevice = nullptr;
+        auto mouse=[&](QEvent::Type type,QPointF at) {
+            QMouseEvent e(type,at,mapToGlobal(at),Qt::LeftButton,type==QEvent::MouseButtonRelease?Qt::NoButton:Qt::LeftButton,Qt::NoModifier);
+            if(type==QEvent::MouseButtonPress) mousePressEvent(&e);
+            else if(type==QEvent::MouseButtonRelease) mouseReleaseEvent(&e); else mouseMoveEvent(&e);
+        };
+        for(const auto& u:updates) {
+            switch(u.action) {
+            case Gesture::Action::BeginStroke:
+                m_touchBefore=snapshot(); m_touchStart=u.position;
+                m_touchDeferred=tool==Tool::Text || tool==Tool::Number || (tool==Tool::Select && annotationAt(imagePoint(u.position))>=0 && m_annotations[annotationAt(imagePoint(u.position))].tool==Tool::Text);
+                if(!m_touchDeferred) mouse(QEvent::MouseButtonPress,u.position);
+                break;
+            case Gesture::Action::MoveStroke: if(!m_touchDeferred) mouse(QEvent::MouseMove,u.position); break;
+            case Gesture::Action::EndStroke:
+                if(m_touchDeferred) mouse(QEvent::MouseButtonPress,m_touchStart);
+                mouse(QEvent::MouseButtonRelease,u.position); m_touchBefore.reset(); break;
+            case Gesture::Action::CancelStroke:
+                cancelGesture();
+                if(m_touchBefore) {
+                    m_annotations=m_touchBefore->annotations; m_history=m_touchBefore->history; m_historyPosition=m_touchBefore->position; m_selected=m_touchBefore->selected;
+                    if(m_resizeEdges && captureRectChanged) captureRectChanged(m_touchBefore->display);
+                }
+                m_resizeEdges=0; m_touchBefore.reset(); notify(); break;
+            case Gesture::Action::Scroll:
+                if(scrollEnabled && scrollRequested) scrollRequested(mapToGlobal(u.position),u.delta,0,true,false);
+                else if(scrollLayout && !liveScroll) { m_pan+=u.movement; update(); if(viewChanged) viewChanged(); }
+                break;
+            case Gesture::Action::EndScroll:
+                if(scrollEnabled && scrollRequested) scrollRequested(mapToGlobal(u.position),0,0,true,false);
+                break;
+            default: break;
+            }
+        }
+        event->accept(); return true;
+    }
+
     void paintEvent(QPaintEvent*) override {
         if (base.isNull())
             return;
@@ -613,18 +755,28 @@ class AnnotationCanvas final : public QWidget {
         const QRect visible = rect.toAlignedRect().intersected(this->rect());
         const int startX = visible.left() - (visible.left() % check);
         const int startY = visible.top() - (visible.top() % check);
-        for (int y = startY; y <= visible.bottom(); y += check)
+        if(!liveScroll) for (int y = startY; y <= visible.bottom(); y += check)
             for (int x = startX; x <= visible.right(); x += check)
                 painter.fillRect(QRect(x, y, check, check), ((x / check + y / check) & 1) ? QColor(72, 77, 86) : QColor(94, 100, 111));
         painter.setTransform(transform);
         painter.setRenderHint(QPainter::SmoothPixmapTransform);
-        painter.drawImage(QPoint(0, 0), base);
+        if(!liveScroll) painter.drawImage(QPoint(0, 0), base);
+        painter.setOpacity(annotationOpacity);
+        painter.translate(0,annotationOffset / transform.m22());
         for (int i = 0; i < static_cast<int>(m_annotations.size()); ++i)
-            if (i != m_editingTextIndex) drawAnnotation(painter, base, m_annotations[i]);
+            if (i != m_editingTextIndex) drawMappedAnnotation(painter, base, m_annotations[i],scrollLayout,liveScroll);
         if (m_draft)
-            drawAnnotation(painter, base, *m_draft);
+            drawMappedAnnotation(painter, base, *m_draft,scrollLayout,liveScroll);
         if (m_selected >= 0 && m_selected != m_editingTextIndex && m_selected < static_cast<int>(m_annotations.size())) {
-            const QRectF selectedBounds = annotationPath(m_annotations[m_selected]).boundingRect();
+            QPainterPath selectedPath;
+            const auto& selected=m_annotations[m_selected];
+            if(scrollLayout && selected.scrollAnchored) {
+                for(const auto& piece:annotationPieces(selected,*scrollLayout,liveScroll)) {
+                    QPainterPath clip; clip.addRect(piece.clip);
+                    selectedPath.addPath(QTransform::fromTranslate(0,piece.dy).map(annotationPath(selected).intersected(clip)));
+                }
+            } else selectedPath=annotationPath(selected);
+            const QRectF selectedBounds=selectedPath.boundingRect();
             painter.setPen(QPen(QColor("#69bfff"), 1.5 / transform.m11(), Qt::DashLine));
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(selectedBounds.adjusted(-5.0 / transform.m11(), -5.0 / transform.m11(), 5.0 / transform.m11(), 5.0 / transform.m11()));
@@ -644,6 +796,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void mousePressEvent(QMouseEvent* event) override {
+        if(liveScroll && !annotationsReady) { event->accept(); return; }
         if (pressed) pressed();
         if (event->button() == Qt::LeftButton && !m_spaceDown && (m_resizeEdges = resizeEdgesAt(event->position()))) {
             finishEditing();
@@ -686,6 +839,8 @@ class AnnotationCanvas final : public QWidget {
             return;
         }
         Annotation annotation;
+        annotation.scrollAnchored=scrollLayout.has_value() && liveScroll;
+        annotation.documentY=scrollLayout?scrollLayout->viewportY:0;
         annotation.tool = tool;
         annotation.variant = variant;
         annotation.color = color;
@@ -798,10 +953,15 @@ class AnnotationCanvas final : public QWidget {
         m_dragBefore.reset();
         m_editingTextIndex = index;
         update();
-        requestText(before, imageTransform(), [this, before, index](std::optional<Annotation> text) {
+        int dy=0;
+        if(scrollLayout && before.scrollAnchored) for(const auto& piece:annotationPieces(before,*scrollLayout,liveScroll))
+            if(piece.clip.translated(0,piece.dy).contains(point)) { dy=piece.dy; break; }
+        Annotation visible=before; for(auto& p:visible.points) p.ry()+=dy;
+        requestText(visible, imageTransform(), [this, before, index,dy](std::optional<Annotation> text) {
             m_editingTextIndex = -1;
             update();
             if (text && !text->text.trimmed().isEmpty() && index < static_cast<int>(m_annotations.size())) {
+                for(auto& p:text->points) p.ry()-=dy;
                 commit({Edit::Kind::Replace, index, before, *text});
                 notify();
             }
@@ -819,6 +979,16 @@ class AnnotationCanvas final : public QWidget {
         if (base.isNull() || !displayRect().contains(event->position().toPoint())) {
             event->ignore();
             return;
+        }
+        if(!(event->modifiers() & Qt::ControlModifier)) {
+            if(m_draft || m_dragBefore || m_resizeEdges || m_panning) { event->accept(); return; }
+            if(scrollEnabled && scrollRequested) {
+                const double delta=event->pixelDelta().isNull() ? -event->angleDelta().y()/8.0 : -event->pixelDelta().y();
+                scrollRequested(event->globalPosition(),delta,-event->angleDelta().y(),!event->pixelDelta().isNull(),event->inverted());
+            } else if(scrollLayout && !liveScroll) {
+                m_pan.ry()+=event->pixelDelta().isNull()?event->angleDelta().y()/2.0:event->pixelDelta().y(); update();
+            }
+            event->accept(); return;
         }
         const QPointF anchor = imageTransform().inverted().map(event->position());
         m_zoom = std::clamp(m_zoom * std::pow(1.0015, event->angleDelta().y()), 0.2, 12.0);
@@ -873,6 +1043,11 @@ class AnnotationCanvas final : public QWidget {
     }
 
   private:
+    hyprcapture::ui::TouchGesture m_touch;
+    const QPointingDevice* m_touchDevice = nullptr;
+    std::shared_ptr<const AnnotationSnapshot> m_touchBefore;
+    QPointF m_touchStart;
+    bool m_touchDeferred=false;
     int m_resizeEdges = 0;
     QRect m_resizeStart;
     QRect m_resizeView;
@@ -940,7 +1115,13 @@ class AnnotationCanvas final : public QWidget {
         const qreal tolerance = 7.0 / imageTransform().m11();
         for (int index = static_cast<int>(m_annotations.size()) - 1; index >= 0; --index) {
             const auto& annotation = m_annotations[index];
-            const QPainterPath path = annotationPath(annotation);
+            QPainterPath path;
+            if(scrollLayout && annotation.scrollAnchored) {
+                for(const auto& piece:annotationPieces(annotation,*scrollLayout,liveScroll)) {
+                    QPainterPath clip; clip.addRect(piece.clip);
+                    path.addPath(QTransform::fromTranslate(0,piece.dy).map(annotationPath(annotation).intersected(clip)));
+                }
+            } else path=annotationPath(annotation);
             QPainterPathStroker stroker;
             stroker.setWidth(std::max(annotation.width, tolerance * 2.0));
             const bool filled = annotation.tool == Tool::Text || annotation.tool == Tool::Number || annotation.tool == Tool::Mosaic || annotation.tool == Tool::Spotlight || annotation.variant == Variant::Filled || annotation.variant == Variant::RoundedFilled;
@@ -1373,6 +1554,8 @@ struct AnnotationEditor::Impl {
         positionToolbar();
     }
     QSize arrangeStrip(int availableWidth) {
+        int rowHeight=36;
+        for(auto* button:strip) rowHeight=std::max(rowHeight,button->height());
         constexpr int horizontalMargin = 6, verticalMargin = 5, spacing = 2;
         int naturalWidth = horizontalMargin * 2 - spacing;
         for (auto* button : strip)
@@ -1387,12 +1570,12 @@ struct AnnotationEditor::Impl {
                 : button->width();
             if (x && x + requiredWidth > rowWidth) {
                 x = 0;
-                y += 36 + spacing;
+                y += rowHeight + spacing;
             }
             button->move(horizontalMargin + x, verticalMargin + y);
             x += button->width() + spacing;
         }
-        return QSize(panelWidth, y + 36 + verticalMargin * 2);
+        return QSize(panelWidth, y + rowHeight + verticalMargin * 2);
     }
     void positionToolbar() {
         if (layoutActive || !toolbar || !canvas)
@@ -1470,7 +1653,7 @@ struct AnnotationEditor::Impl {
         actionLabel(themeLight, owner->tr("Light"), {});
         widthLabel->setText(owner->tr("Width"));
         width->setToolTip(owner->tr("Width"));
-        canvas->setToolTip(owner->tr("Drag to draw. Select to move or delete annotations. Wheel to zoom; Space+drag to pan."));
+        canvas->setToolTip(owner->tr("Drag to draw. Select to move or delete annotations. Ctrl+wheel to zoom; Space+drag to pan. Single finger to draw; two fingers to scroll."));
         updateTools();
         morePanel->adjustSize();
         positionToolbar();
@@ -1646,6 +1829,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         m_impl->positionToolbar();
         emit annotationsChanged();
     };
+    ui.canvas->scrollRequested = [this](QPointF p,double d,int discrete,bool finger,bool inverted) { emit scrollRequested(p,d,discrete,finger,inverted); };
     ui.canvas->viewChanged = [this] { m_impl->positionToolbar(); };
     ui.canvas->captureRectChanged = [this](const QRect& rect) { emit captureRectChangeRequested(rect); };
     ui.canvas->pressed = [this] { m_impl->closePanels(); };
@@ -1990,3 +2174,10 @@ void AnnotationEditor::changeEvent(QEvent* event) {
     if (event->type() == QEvent::LanguageChange && m_impl->toolbar)
         m_impl->retranslate();
 }
+
+std::shared_ptr<const AnnotationSnapshot> AnnotationEditor::snapshot() const { return m_impl->canvas->snapshot(); }
+void AnnotationEditor::restore(const std::shared_ptr<const AnnotationSnapshot>& state) { m_impl->canvas->restore(state); }
+void AnnotationEditor::setScrollImage(const QImage& image,const hyprcapture::ui::ScrollLayout& layout,bool live) { m_impl->canvas->scrollImage(image,layout,live); }
+void AnnotationEditor::setScrollEnabled(bool enabled) { m_impl->canvas->scrollEnabled=enabled; }
+void AnnotationEditor::setAnnotationPresentation(bool ready,qreal opacity,qreal offset) { m_impl->canvas->presentation(ready,opacity,offset); }
+QImage AnnotationEditor::annotatedPreview(const QImage& image,const hyprcapture::ui::ScrollLayout& layout) const { return m_impl->canvas->annotatedPreview(image,layout); }

@@ -413,6 +413,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
     root["id"] = boundedString(session.id, MAX_METADATA_STRING_BYTES);
     root["defaults"] = defaultsJson(session.defaults);
     root["regionCaptureAvailable"] = session.regionCaptureAvailable;
+    root["scrollSessionVersion"] = session.scrollSessionVersion;
     if (session.cursorPosition)
         root["cursorPosition"] = pointJson(*session.cursorPosition);
 
@@ -488,6 +489,8 @@ std::optional<CaptureSession> decodeSessionJson(const std::string& json) {
         return std::nullopt;
 
     CaptureSession session;
+    if (!intValue(root, "scrollSessionVersion", session.scrollSessionVersion, 0, 65535, false))
+        return std::nullopt;
     if (!boolValue(root, "regionCaptureAvailable", session.regionCaptureAvailable, false))
         return std::nullopt;
     if (!stringValue(root, "id", session.id, MAX_METADATA_STRING_BYTES) || session.id.empty())

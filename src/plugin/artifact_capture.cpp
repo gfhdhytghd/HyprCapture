@@ -34,6 +34,10 @@
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/desktop/state/ViewState.hpp>
+#include <hyprland/src/desktop/view/LayerSurface.hpp>
+#include <hyprland/src/managers/SeatManager.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/notification/NotificationOverlay.hpp>
 #include <hyprland/src/render/gl/GLFramebuffer.hpp>
 #include <hyprland/src/render/gl/GLTexture.hpp>
@@ -70,6 +74,7 @@
 #include <sstream>
 #include <system_error>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/un.h>
 #include <thread>
 #include <unordered_map>
@@ -1057,8 +1062,7 @@ void resetAsyncPboReadback(AsyncPboReadbackState& state) {
     state = {};
 }
 
-void resetWindowStreamPboReadback() {
-    auto& state = g_windowStreamPboReadback;
+void resetWindowStreamPboReadback(WindowStreamPboReadbackState& state = g_windowStreamPboReadback) {
     for (auto& fence : state.fences) {
         if (fence)
             glDeleteSync(fence);
@@ -1084,10 +1088,10 @@ bool ensureWindowStreamPboReadback(WindowStreamPboReadbackState& state, int widt
         state.height == height && state.bytes == bytes)
         return true;
 
-    resetWindowStreamPboReadback();
+    resetWindowStreamPboReadback(state);
     glGenBuffers(static_cast<GLsizei>(WindowStreamPboReadbackState::BUFFER_COUNT), state.buffers);
     if (!std::all_of(std::begin(state.buffers), std::end(state.buffers), [](GLuint buffer) { return buffer != 0; })) {
-        resetWindowStreamPboReadback();
+        resetWindowStreamPboReadback(state);
         return false;
     }
     state.width = width;
@@ -1129,7 +1133,7 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
         const auto source = (state.next + WindowStreamPboReadbackState::BUFFER_COUNT - state.pending) % WindowStreamPboReadbackState::BUFFER_COUNT;
         if (!state.metadataSlots.discardOldest()) {
             noteWindowStreamDiagnostic("pbo metadata discard mismatch");
-            resetWindowStreamPboReadback();
+            resetWindowStreamPboReadback(state);
             return std::nullopt;
         }
         glDeleteSync(state.fences[source]);
@@ -1143,7 +1147,7 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
     const auto metadata = state.metadataSlots.mapOldest();
     if (!metadata) {
         noteWindowStreamDiagnostic("pbo metadata map mismatch");
-        resetWindowStreamPboReadback();
+        resetWindowStreamPboReadback(state);
         return std::nullopt;
     }
 
@@ -1200,7 +1204,7 @@ bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
     glFlush();
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     if (!state.fences[state.next]) {
-        resetWindowStreamPboReadback();
+        resetWindowStreamPboReadback(state);
         return false;
     }
     state.slotGeometry[state.next] = {.fullBox = fullBox, .visibleBox = visibleBox, .geometryEpoch = metadata.geometryEpoch,
@@ -1877,7 +1881,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
                                    int cropTopY,
                                    int cropWidth,
                                    int cropHeight,
-                                   ArtifactBudget* budget = nullptr) {
+                                   ArtifactBudget* budget = nullptr, SP<CFramebuffer>* persistent = nullptr, bool skipReadback = false) {
     if (!monitor || !monitor->m_activeWorkspace || !g_pHyprRenderer || !g_pHyprOpenGL)
         return {};
 
@@ -1889,7 +1893,10 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     if (budget && !budget->canFit(framebufferBytes))
         return {};
 
-    auto framebuffer = createFramebuffer("hyprcapture-monitor", width, height, monitor->m_output->state->state().drmFormat);
+    auto framebuffer = persistent ? *persistent : SP<CFramebuffer>{};
+    if(!framebuffer || framebuffer->m_size != Vector2D(width,height))
+        framebuffer = createFramebuffer("hyprcapture-monitor", width, height, monitor->m_output->state->state().drmFormat);
+    if(persistent) *persistent=framebuffer;
     if (!framebuffer)
         return {};
 
@@ -1924,6 +1931,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     g_pHyprRenderer->endRender();
     restoreRendererState();
 
+    if(skipReadback) return {};
     auto readback = readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight);
     if (budget && !readback.pixels.empty() && !budget->consume(readback.pixels.size()))
         return {};
@@ -3420,6 +3428,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
 CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool quick) {
     CaptureSession session;
     session.regionCaptureAvailable = true;
+    session.scrollSessionVersion = 1;
     session.id = makeSessionId();
     session.defaults = defaults;
     if (g_pInputManager) {
@@ -4376,6 +4385,8 @@ LaunchResult stopWindowStreamFromRequestFile(const std::string& path) {
     return {.success = true};
 }
 
+#include "plugin/scroll_session.inc"
+
 void resetRecordingCaptureState() {
     if (g_pHyprOpenGL)
         g_pHyprOpenGL->makeEGLCurrent();
@@ -4437,6 +4448,9 @@ void cleanupCompositorArtifacts(const CaptureSession& session) {
 }
 
 void shutdownArtifactCapture() {
+    stopScrollSession();
+    removeRealBackgroundHook(g_scrollLayerHook);
+    g_scrollLayerOriginal=nullptr;
     shutdownExportPipeWriters();
     stopWindowStreamSession();
     if (g_pHyprOpenGL)

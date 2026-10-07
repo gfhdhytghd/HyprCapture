@@ -1119,7 +1119,7 @@ int main(int argc, char** argv) {
         QObject::connect(candidate, &CaptureOverlay::scrollingChanged, &app, [&, candidate](bool scrolling) {
             activeOverlay = candidate;
             for (CaptureOverlay* peer : overlays) {
-                if (scrolling)
+                if (scrolling && peer != candidate)
                     peer->hide();
                 else
                     peer->show();

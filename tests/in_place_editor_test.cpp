@@ -377,7 +377,7 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(editor);
         auto* canvas = editor->findChild<QWidget*>("annotationCanvas");
         const QPoint center = editor->canvasGeometry().center();
-        QWheelEvent wheel(center, canvas->mapToGlobal(center), {}, QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QWheelEvent wheel(center, canvas->mapToGlobal(center), {}, QPoint(0, 120), Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(canvas, &wheel);
         const QRect zoomed = editor->canvasGeometry();
         QVERIFY(zoomed.width() > 150);
@@ -504,7 +504,7 @@ class InPlaceEditorTest final : public QObject {
         const QRect clusterBefore = editorToolbarCluster(overlay, *editor);
         const QPoint zoomPoint = imageBefore.center();
         QWheelEvent zoom(zoomPoint, canvas->mapToGlobal(zoomPoint), {}, QPoint(0, 120),
-                         Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                         Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(canvas, &zoom);
         QTRY_VERIFY(editor->canvasGeometry().width() > imageBefore.width());
         QTRY_VERIFY(editorToolbarCluster(overlay, *editor) != clusterBefore);

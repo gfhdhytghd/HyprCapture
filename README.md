@@ -51,6 +51,7 @@ https://github.com/user-attachments/assets/2c986639-7a3d-44ee-9f33-1b9b79ad9f1d
 - nlohmann-json
 - Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
+- OpenCV `core` and `imgproc` (CPU image registration; no neural-network runtime)
 - libpipewire-0.3 development headers (`libpipewire` on Arch, `libpipewire-0.3-dev` on Debian/Ubuntu)
 - PipeWire development files, FFTW3 and FFmpeg libswresample/libavutil for the native DTLN-AEC candidate
 - Optional TensorFlow Lite 2.14.0 runtime (installed by `hyprcapture-install-aec`); OpenVINO is only needed for experimental NPU
@@ -90,7 +91,7 @@ Perform a full system upgrade while installing the build tools and libraries:
 ```sh
 sudo pacman -Syu --needed base-devel cmake git cpio \
     hyprland nlohmann-json lua glib2 \
-    qt6-base qt6-svg qt6-wayland layer-shell-qt \
+    qt6-base qt6-svg qt6-wayland layer-shell-qt opencv \
     pipewire libpipewire fftw libpulse ffmpeg wl-clipboard
 ```
 
@@ -306,11 +307,15 @@ Use lowercase `s` for `SUPER + s`. In Lua config key strings, uppercase `S` mean
 
 ### Scrolling screenshots
 
-Click **Scrolling capture** (the vertical arrows) in the overlay toolbar, then drag a region around the scrolling content. Leave space outside the region for the capture controls. Scroll **down slowly**, pausing between movements: HyprCapture samples stable frames and appends matching content automatically. Click **Finish** to annotate, zoom, copy, save or pin the long image through the existing editor. **Cancel** returns to the selection without exporting.
+After selecting a region or window in `open_editor()` (or an `open()` confirmation session), scroll inside it to start a long screenshot. Ordinary `open()` and `quick()` retain their direct-output behavior. Use **Ctrl + wheel** to zoom while editing. The separate scrolling-mode button is no longer needed.
 
-Select content within one monitor and exclude fixed headers, footers, sidebars and scrollbars. Scrolling capture uses the plugin's native cursor-free renderer; both the plugin and helper must be updated for the button to appear. It does not drive application scrolling. If the page moves too far or has ambiguous repeating content, no pixels are appended and the controls ask you to scroll back slightly. Upward scrolling does not extend the image. Animated or changing pages may not align reliably.
+Scroll in either direction, including back over captured content. A live preview appears at the bottom right; click it or **Finish** to move the image smoothly into the central editor. Pausing does not finish the session. **Cancel** restores the original selection, annotations and undo history; the source application stays at its current scroll position.
 
-Capture stops at 200 accepted frames, 64 megapixels, 32,768 pixels in height, or five minutes; an existing result can still be finished. A display change or capture failure also stops sampling while retaining the collected result. A single sampled region is limited to 32 megapixels and 16,384 pixels per side.
+On touchscreens, one finger draws with the current tool and two fingers scroll the source application. A second finger cancels the unfinished stroke; lift all fingers before drawing again. During scrolling, annotations move slightly and fade out. Once the page is stable and aligned, they reappear at their measured content positions and drawing resumes. In the completed editor, two fingers pan the long image.
+
+The plugin captures native, cursor-free frames while excluding this helper's layers. A window uses its own native render; a region stays within one monitor. Fixed headers and footers are retained once. Fixed sidebars expand at a quiet pixel band near the bottom, outside the footer: a linear gradient fills the added space without stretching text or icons. Dense stationary backgrounds can repeat captured pixel blocks while moving foreground anchors determine alignment. If there is no safe insertion band or alignment is ambiguous, capture retains confirmed content and asks you to recover overlap.
+
+Image matching uses a bounded CPU worker and preserves source pixels; it does not infer displacement from wheel distances. The limits are 200 accepted frames, 64 megapixels, 32,768 output rows and five minutes. Closing the target or changing its geometry/scale stops new capture and leaves confirmed content available. Both plugin and helper must support scroll-session version 1; older plugins retain ordinary capture and editing.
 
 ### In-place screenshot editing
 
