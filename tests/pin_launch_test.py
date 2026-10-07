@@ -26,7 +26,8 @@ PNG = (
 def launch(helper, source, ready_socket):
     env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
     return subprocess.Popen(
-        [helper, "--pin-image", str(source), "--pin-consume-source", "--pin-ready-socket", str(ready_socket)],
+        [helper, "--pin-image", str(source), "--pin-consume-source", "--pin-ready-socket", str(ready_socket),
+         "--pin-geometry", "212,330,788,430"],
         env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
 

@@ -4809,6 +4809,9 @@ void CaptureOverlay::pinInPlaceImage() {
     timeout->start(5000);
     QStringList args{"--pin-image", path, "--pin-consume-source", "--pin-ready-socket", socketPath,
                      "--language", qString(m_defaults.language)};
+    const QRect pinGeometry = localToDesktopLogicalRect(m_editor->canvasGeometry().translated(m_editor->pos()));
+    args << "--pin-geometry" << QStringLiteral("%1,%2,%3,%4")
+        .arg(pinGeometry.x()).arg(pinGeometry.y()).arg(pinGeometry.width()).arg(pinGeometry.height());
     if (auto* screen = overlayScreen())
         args << "--pin-monitor" << screen->name();
     if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args)) {

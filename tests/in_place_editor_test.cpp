@@ -785,11 +785,16 @@ class InPlaceEditorTest final : public QObject {
         QTest::mouseMove(canvas, QPoint(200, 160));
         QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(200, 160));
         const auto expected = editor->resultImage().convertToFormat(QImage::Format_RGBA8888);
+        const QRect expectedGeometry(editor->mapToGlobal(editor->canvasGeometry().topLeft()), editor->canvasGeometry().size());
         QVERIFY(clickEditorAction(*editor, "annotationPin"));
         QTRY_COMPARE_WITH_TIMEOUT(finishing.count(), 1, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(!overlay.isVisible(), 2000);
         QTRY_VERIFY_WITH_TIMEOUT(!QImage(pinPath).isNull(), 2000);
         QCOMPARE(QImage(pinPath).convertToFormat(QImage::Format_RGBA8888), expected);
+        QFile geometryFile(pinPath + ".geometry");
+        QVERIFY(geometryFile.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(geometryFile.readAll()), QStringLiteral("%1,%2,%3,%4")
+            .arg(expectedGeometry.x()).arg(expectedGeometry.y()).arg(expectedGeometry.width()).arg(expectedGeometry.height()));
         const auto saved = QDir(output.path()).entryList({"*.png"}, QDir::Files);
         QCOMPARE(saved.size(), save ? 1 : 0);
         if (save) QCOMPARE(QImage(output.filePath(saved.front())).convertToFormat(QImage::Format_RGBA8888), expected);
@@ -1109,6 +1114,12 @@ int main(int argc, char** argv) {
         if (!resultPath.isEmpty()) {
             const QImage pinned(arguments.at(2));
             if (pinned.isNull()) return 1;
+            const int geometryOption = arguments.indexOf(QStringLiteral("--pin-geometry"));
+            if (geometryOption < 0 || geometryOption + 1 >= arguments.size()) return 1;
+            QFile geometryFile(resultPath + ".geometry");
+            if (!geometryFile.open(QIODevice::WriteOnly)) return 1;
+            geometryFile.write(arguments.at(geometryOption + 1).toUtf8());
+            geometryFile.close();
             socket.write("ready\n");
             socket.flush();
             if (socket.bytesToWrite() && !socket.waitForBytesWritten(1000)) return 1;

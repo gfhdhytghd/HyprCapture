@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QString>
+#include <QRect>
 
 class QScreen;
 class QWidget;
@@ -9,6 +10,9 @@ class QWidget;
 // widget and must keep it alive while running QApplication::exec(). Closing any
 // of its output surfaces closes the whole pin and quits its helper process.
 //
+// A valid initialGeometry preserves the editor image rectangle in desktop
+// logical coordinates. Without it, the image is fitted and centered.
+//
 // Source files are preserved by default. With consumePrivateRuntimeSource,
 // only a regular, user-owned image in HyprCapture's private runtime directory
 // may be removed, and only after it has been successfully read into memory.
@@ -16,4 +20,5 @@ class QWidget;
 QWidget* createPinnedImage(const QString& path,
                            bool consumePrivateRuntimeSource = false,
                            QString* error = nullptr,
-                           QScreen* targetScreen = nullptr);
+                           QScreen* targetScreen = nullptr,
+                           const QRect& initialGeometry = {});

@@ -88,6 +88,23 @@ int main(int argc, char** argv) {
     require(pin->windowHandle()->mask().boundingRect().width() > initialMask.width(), "wheel zoom enlarges image input region");
     pin.reset();
 
+    // PNG does not retain the editor's DPR: use the supplied logical rectangle
+    // even when its pixel dimensions are three times larger (issue #33).
+    QImage scaledImage(600, 300, QImage::Format_ARGB32);
+    scaledImage.fill(Qt::blue);
+    const QString scaledSource = temporary.filePath(QStringLiteral("scale3.png"));
+    require(scaledImage.save(scaledSource, "PNG"), "save scale-3 image");
+    const QRect editorGeometry(43, 67, 200, 100);
+    pin.reset(createPinnedImage(scaledSource, false, &error, nullptr, editorGeometry));
+    require(pin != nullptr && error.isEmpty(), "create pin at editor geometry");
+    require(pin->windowHandle()->mask().boundingRect() == editorGeometry,
+            "pin preserves editor origin and logical size instead of centering or scaling PNG again");
+    app.processEvents();
+    const QImage rendered = pin->grab(editorGeometry).toImage();
+    require(rendered.pixelColor(rendered.width() / 2, rendered.height() / 2) == QColor(Qt::blue),
+            "image pixels are painted at the requested rectangle");
+    pin.reset();
+
     const QString privateSource = hyprcapture::ui::runtimeFile(QStringLiteral("pin-test"), QStringLiteral(".png"));
     require(!privateSource.isEmpty() && hyprcapture::ui::savePrivatePng(image, privateSource), "save private image");
     pin.reset(createPinnedImage(privateSource, true, &error));
