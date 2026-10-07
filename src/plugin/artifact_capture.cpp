@@ -1921,6 +1921,12 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
         return {};
     }
 
+    // renderWorkspace emits the workspace render stages, but not RENDER_PRE:
+    // that normally comes from renderMonitor. This independent capture pass
+    // needs its own reset of frame-local plugin state (e.g. Hymission's Stage
+    // pass deduplication). Emit only after beginRender succeeds so listeners
+    // see the capture monitor and framebuffer, never a stale desktop target.
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
     g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     g_pHyprRenderer->renderWorkspace(monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(width), static_cast<double>(height)});
     if (monitor == Desktop::focusState()->monitor())
