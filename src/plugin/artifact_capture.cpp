@@ -1980,7 +1980,9 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     restoreRendererState();
 
     if(skipReadback) return {};
-    auto readback = readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight);
+    // Fake monitor rendering stores the top of the monitor at GL row zero.
+    // Keep crop coordinates in that same space for every monitor capture caller.
+    auto readback = readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight, true);
     if (budget && !readback.pixels.empty() && !budget->consume(readback.pixels.size()))
         return {};
     return readback;
@@ -3670,11 +3672,7 @@ LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
     const int transform = std::clamp(static_cast<int>(target->m_transform), 0, 7);
     RgbaReadback readback;
     if (transform == 0) {
-        // Hyprland's fake monitor render is already top-down in GL row order.
-        // The generic framebuffer reader converts a top-origin crop to GL Y,
-        // so mirror the crop argument (not the resulting pixel rows) here.
-        const int readTop = positiveRoundedIntFromDouble(target->m_pixelSize.y) - y - height;
-        readback = renderMonitorReadback(target, Time::steadyNow(), x, readTop, width, height);
+        readback = renderMonitorReadback(target, Time::steadyNow(), x, y, width, height);
     } else {
         readback = renderMonitorReadback(target, Time::steadyNow(), 0, 0,
             positiveRoundedIntFromDouble(target->m_pixelSize.x), positiveRoundedIntFromDouble(target->m_pixelSize.y));
