@@ -199,14 +199,15 @@
             <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
             <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.2.8-0.56.2</span></div>
           </div>
-          <p class="summary">Changes on master since v0.2.8-0.56.2. They are not part of a tagged release yet, so the version and release date are still open.</p>
+          <p class="summary">Prepared for HyprCapture 0.3.0: native scrolling screenshots, an in-place editor, desktop pins, and Hymission Stage capture.</p>
           <h3>New</h3>
           <ul>
-            <li>Scrolling screenshots: select a region, scroll slowly, and HyprCapture stitches stable frames into one long image using the plugin&#x27;s cursor-free renderer.</li>
-            <li>Optional in-place screenshot editor, enabled with <code>in_place_edit_toolbar = true</code>: rectangles, ellipses, arrows, lines, pen, highlighter, numbered markers, mosaic, spotlight, undo/redo, and zoom/pan.</li>
+            <li>Native scrolling screenshots: scroll inside a selected region or window in the editor to grow a long image, revisit captured content, and keep annotations aligned with the page.</li>
+            <li>In-place screenshot editor through <code>open_editor()</code>: rectangles, ellipses, arrows, lines, pen, highlighter, numbered markers, mosaic, spotlight, undo/redo, and zoom/pan.</li>
             <li>Movable, resizable multiline text boxes with a floating toolbar for font, pixel size, and color.</li>
             <li>Desktop pins that stay above normal windows and then follow the normal save, clipboard, and thumbnail flow.</li>
             <li>UI translations for Simplified and Traditional Chinese, Japanese, German, French, Spanish, and Korean, selected through the new <code>language</code> option.</li>
+            <li>Capture windows from Hymission Stage, center them in the editor, and match selection outlines to their displayed rounded corners.</li>
           </ul>
           <h3>Faster</h3>
           <ul>
@@ -219,6 +220,22 @@
             <li>Nix build fixes for <a href="https://github.com/gfhdhytghd/HyprCapture/issues/29">#29</a>: read-only store paths whose owner is unmapped inside the build sandbox are now trusted (writable paths are still rejected), and supervised processes handle stop signals under BusyBox ash. A sandboxed build of the repository flake passed its tests locally; the reporter&#x27;s own setup has not been verified yet.</li>
             <li>Microphone-only recordings ignore changes to application audio, and only capture dropdown settings are persisted.</li>
             <li>Toolbar icons now use Google Material Symbols and render sharply at any scale.</li>
+            <li>Fix region scrolling captures that stayed at their original size or misaligned during small movements and repeated text; foreground detail aligns scrolling text over a stationary smooth background, with safer history matching and fixed-header detection.</li>
+            <li>Flush pointer motion before forwarding touchpad scrolling so applications such as Zen receive input at the intended capture position.</li>
+            <li>Keep the captured window foreground separate from the real or blurred background, and preserve editable backgrounds after a scrolling capture.</li>
+            <li>Preserve top-origin monitor crops in region recordings (<a href="https://github.com/gfhdhytghd/HyprCapture/issues/32">#32</a>) and editor geometry when creating scaled desktop pins (<a href="https://github.com/gfhdhytghd/HyprCapture/issues/33">#33</a>).</li>
+            <li>Reset offscreen render state between monitor captures and stabilize asynchronous UI/audio regression checks.</li>
+          </ul>
+          <h3>Upgrade notes</h3>
+          <ul>
+            <li>Remove the old <code>in_place_edit_toolbar</code> setting and bind <code>hl.plugin.hyprcapture.open_editor()</code> for editing. <code>open()</code> retains its confirmation behavior and <code>quick()</code> captures directly.</li>
+            <li>Build against Hyprland 0.56.2 and update both the plugin and Qt helper. Scrolling image matching adds an OpenCV dependency.</li>
+            <li>Update Hymission alongside HyprCapture to use the Stage renderer&#x27;s exact selection radius; older Hymission versions use a scaled-radius fallback.</li>
+          </ul>
+          <h3>Validation and remaining checks</h3>
+          <ul>
+            <li>Release build and automated regression coverage, including isolated GTK scrolling, scale-2 region stitching, independent backgrounds, and Stage selection geometry. A stationary-backdrop fixture preserves opaque foreground pixels exactly; it does not claim whole-image equality for a background that does not scroll.</li>
+            <li>Production-desktop kitty and physical touchpad/touchscreen acceptance remain pending after updating the plugin and helper. Dynamic or ambiguous page content may require recovering overlap.</li>
           </ul>
           <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.2.8-0.56.2...master">Compare v0.2.8-0.56.2…master</a></div>
         </article>
