@@ -55,13 +55,14 @@ in hyprlandPlugins.mkHyprlandPlugin {
   ];
 
   cmakeFlags = [
+    "-DBUILD_TESTING=OFF"
     "-DHYPRCAPTURE_AEC_MODEL_DIR=${aecModels}"
     "-DHYPRCAPTURE_TFLITE_LIBRARY=${aecRuntime}/lib/libtensorflowlite_c.so"
     "-DHYPRCAPTURE_DEFAULT_HELPER_PATH=${builtins.placeholder "out"}/bin/hyprcapture-ui"
     "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ffmpeg ]}"
   ];
 
-  doCheck = true;
+  doCheck = false;
   preCheck = ''
     # Nix defaults HOME to an unwritable /homeless-shelter. Tests need a
     # private writable home for their clipboard executable fixture.

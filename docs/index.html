@@ -178,6 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
+      <li><a href="#unreleased">Unreleased <span>next</span></a></li>
       <li><a href="#v0-3-0-0-56-2">0.3.0 <span>2026-10-08</span></a></li>
       <li><a href="#v0-2-8-0-56-2">0.2.8 <span>2026-09-06</span></a></li>
       <li><a href="#v0-2-7-0-56-1">0.2.7 <span>2026-08-07</span></a></li>
@@ -193,6 +194,20 @@
   </nav>
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
+      <li>
+        <article class="entry unreleased" id="unreleased" aria-labelledby="unreleased-title">
+          <div class="entry-head">
+            <h2 id="unreleased-title"><a href="#unreleased">Unreleased</a></h2>
+            <div class="meta"><span class="badge pending">Not yet released</span><span>Since v0.3.0-0.56.2</span></div>
+          </div>
+          <p class="summary">Installation and build changes after 0.3.0.</p>
+          <h3>Build</h3>
+          <ul>
+            <li>Keep the test suite available for development, but disable it by default and skip automatic tests in hyprpm and Nix builds. Enable tests manually with <code>-DBUILD_TESTING=ON</code>.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.3.0-0.56.2...master">Compare v0.3.0-0.56.2…master</a></div>
+        </article>
+      </li>
       <li>
         <article class="entry" id="v0-3-0-0-56-2" aria-labelledby="v0-3-0-0-56-2-title">
           <div class="entry-head">

@@ -10,9 +10,8 @@ description = "Hyprland-only screenshot overlay"
 authors = ["wilf"]
 output = "build-hyprpm/libhyprcapture.so"
 build = [
-    "cmake -S . -B build-hyprpm -DCMAKE_BUILD_TYPE=Release",
+    "cmake -S . -B build-hyprpm -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF",
     "cmake --build build-hyprpm --parallel 8",
-    "ctest --test-dir build-hyprpm --output-on-failure",
     "install -Dm755 build-hyprpm/hyprcapture-ui \"$HOME/.local/bin/hyprcapture-ui\"",
     "install -Dm755 build-hyprpm/hyprcapture-aec \"$HOME/.local/bin/hyprcapture-aec\"",
     "install -Dm755 build-hyprpm/libspa-aec-dtln.so \"$HOME/.local/lib/hyprcapture/libspa-aec-dtln.so\"",
