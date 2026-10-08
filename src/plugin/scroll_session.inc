@@ -527,7 +527,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
     s->axis = Event::bus()->m_events.input.mouse.axis.listen(
         [ptr](IPointer::SAxisEvent e, Event::SCallbackInfo &info) {
           if (ptr->replaying || ptr->failed || ptr->paused ||
-              (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_CTRL) ||
+              (g_pInputManager->getModsFromAllKBs() & Input::HL_MODIFIER_CTRL) ||
               g_pInputManager->hasHeldButtons())
             return;
           const auto point = g_pInputManager->getMouseCoordsInternal();

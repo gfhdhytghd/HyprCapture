@@ -1867,7 +1867,7 @@ class HymissionRawWindowRenderScope {
 class InactiveWorkspaceCaptureScope {
   public:
     explicit InactiveWorkspaceCaptureScope(const PHLWINDOW& window) : m_window(window) {
-        if (!window || window->m_pinned || !window->m_workspace || window->m_workspace->isVisible())
+        if (!window || (window->m_state & Desktop::View::WINDOW_STATE_PINNED) || !window->m_workspace || window->m_workspace->visible())
             return;
         m_workspace = window->m_workspace;
         m_offset = m_workspace->m_renderOffset->value();
@@ -1875,7 +1875,7 @@ class InactiveWorkspaceCaptureScope {
         overrideAlpha(m_workspace->m_alpha);
         for (const auto kind : {Desktop::View::WINDOW_ALPHA_LAYOUT, Desktop::View::WINDOW_ALPHA_FULLSCREEN,
                                 Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE, Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE})
-            overrideAlpha(window->alpha(kind));
+            overrideAlpha(window->alpha()[kind]);
     }
     ~InactiveWorkspaceCaptureScope() {
         for (auto& [sample, value] : m_alphas)
@@ -1992,7 +1992,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     // needs its own reset of frame-local plugin state (e.g. Hymission's Stage
     // pass deduplication). Emit only after beginRender succeeds so listeners
     // see the capture monitor and framebuffer, never a stale desktop target.
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
+    Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_PRE, .monitor = monitor});
     g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(width), static_cast<double>(height)});
     if (monitor == Desktop::focusState()->monitor())
@@ -2510,7 +2510,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
     }
 
     renderContext().m_blockSurfaceFeedback = true;
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
+    Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_PRE, .monitor = monitor});
     g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
     renderContext().m_data.blockScreenShader = true;
@@ -2588,7 +2588,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
     }
 
     renderContext().m_blockSurfaceFeedback = true;
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
+    Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_PRE, .monitor = monitor});
     g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     {
         ScopedTiming timing("realbg.render_workspace");
@@ -3580,7 +3580,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     std::vector<Candidate> candidates;
     const auto desktopWindows = windowsInRenderOrder();
     for (const auto& window : desktopWindows)
-        if (!window->m_pinned || !window->m_isFloating)
+        if (!(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || !window->isFloating())
             candidates.push_back({window});
     for (const auto& target : stageTargets) {
         const auto window = findWindowByAddress(target.address);
@@ -3590,7 +3590,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     // Pinned floating windows are drawn above Stage. Keep separate entries if
     // a window appears both on the desktop and in an active-workspace card.
     for (const auto& window : desktopWindows)
-        if (window->m_pinned && window->m_isFloating)
+        if ((window->m_state & Desktop::View::WINDOW_STATE_PINNED) && window->isFloating())
             candidates.push_back({window});
     int z = 0;
     std::vector<PendingRealBackgroundCapture> pendingRealBackgrounds;
