@@ -51,6 +51,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
   ];
 
   cmakeFlags = [
+    "-DHYPRCAPTURE_ENABLE_NIX_SANDBOX_INCOMPATIBLE_TESTS=OFF"
     "-DHYPRCAPTURE_AEC_MODEL_DIR=${aecModels}"
     "-DHYPRCAPTURE_TFLITE_LIBRARY=${aecRuntime}/lib/libtensorflowlite_c.so"
     "-DHYPRCAPTURE_DEFAULT_HELPER_PATH=${builtins.placeholder "out"}/bin/hyprcapture-ui"
