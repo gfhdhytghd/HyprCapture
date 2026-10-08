@@ -38,7 +38,7 @@ The screenshot annotation interface is inspired by [Omarchy Screenshot](https://
 - Recording does not use `wf-recorder`, `grim`, screencopy, PipeWire portals, or Hyprland managed screenshare sessions
 
 
-https://github.com/user-attachments/assets/ee1c3cd9-2208-451c-ac1f-be938e285607
+https://github.com/user-attachments/assets/03a642d3-569d-4b77-8ccf-17934620bc20
 
 
 ## Installation
