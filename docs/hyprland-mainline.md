@@ -1,5 +1,28 @@
 # Hyprland mainline adaptation
 
+## 2026-10-08 synchronization
+
+Merged stable `master` through `fa647d7`, including 0.3.0, the scrolling
+stitcher fixes, independent backgrounds, Stage outlines, and test portability
+changes. The development target remains Hyprland
+`5a78b5e927345860a27e2893bf894f97ee620c48` from this branch's lock file.
+
+New Stage and scrolling paths use the mainline window state flags, workspace
+visibility accessor, alpha container, typed render-stage event, and keyboard
+modifier namespace. Existing render-context and hook ABI adaptations remain.
+
+As requested, tests remain in source but are disabled by default. Hyprpm uses
+`-DBUILD_TESTING=OFF` without a CTest step; Nix uses the same flag and
+`doCheck = false`. Manual CMake checks require `-DBUILD_TESTING=ON`.
+
+The final source revision `4ed3691` built successfully in the Nix sandbox using
+the reproduction command below, including the plugin, Qt helper, audio helper,
+installation, and fixup. No test suite ran in this build. Its output is
+`/nix/store/y44h80slnr1h2rh7iycghasbxzh5iq68-hyprcapture-0.3.0`.
+Build log: `/tmp/hyprcapture-mainline-sync-final.log` on the validation host.
+The earlier test counts below describe the October 6 run only. No production
+plugin was installed or reloaded; runtime acceptance remains pending.
+
 ## Target and scope
 
 The `hyprland-master` branch targets Hyprland development/main. The 2026-10-06
