@@ -16,6 +16,7 @@
   nlohmann_json,
   opencv,
   pkg-config,
+  python3,
   src,
 }:
 let
@@ -35,6 +36,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
   nativeBuildInputs = [
     cmake
     pkg-config
+    python3
     kdePackages.wrapQtAppsHook
   ];
 
@@ -61,6 +63,10 @@ in hyprlandPlugins.mkHyprlandPlugin {
 
   doCheck = true;
   preCheck = ''
+    # Nix defaults HOME to an unwritable /homeless-shelter. Tests need a
+    # private writable home for their clipboard executable fixture.
+    export HOME="$TMPDIR/hyprcapture-test-home"
+    mkdir -m 700 -p "$HOME"
     export QT_QPA_PLATFORM=offscreen
   '';
 

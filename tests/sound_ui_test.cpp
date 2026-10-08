@@ -21,6 +21,7 @@
 #include <QJsonArray>
 #include <iostream>
 #include <cstdlib>
+#include <algorithm>
 
 void require(bool value, const char* message) {
     if (!value) { std::cerr << message << '\n'; std::exit(1); }
@@ -32,21 +33,41 @@ QPushButton* button(CaptureOverlay& overlay, const char* name) {
     require(result, "control button missing");
     return result;
 }
+template <typename Predicate>
+void waitFor(Predicate predicate, const char* message) {
+    require(QTest::qWaitFor(predicate, 5000), message);
+}
+void waitForDiscovery(CaptureOverlay& overlay) {
+    waitFor([&] {
+        for (auto* process : overlay.findChildren<QProcess*>())
+            if (process->arguments().value(0) == "--sound-list" && process->state() != QProcess::NotRunning)
+                return false;
+        return true;
+    }, "device discovery did not finish");
+}
+QPushButton* visibleOption(CaptureOverlay& overlay, const QString& value) {
+    for (auto* option : overlay.findChildren<QPushButton*>())
+        if (option->isVisible() && option->property("value").toString() == value) return option;
+    return nullptr;
+}
+QProcess* runningPreview(CaptureOverlay& overlay) {
+    for (auto* process : overlay.findChildren<QProcess*>())
+        if (process->arguments().value(0) == "--sound-meter" && process->state() == QProcess::Running) return process;
+    return nullptr;
+}
 void choose(CaptureOverlay& overlay, const char* name, const QString& value) {
     QTest::mouseClick(button(overlay, name), Qt::LeftButton);
-    QTest::qWait(20);
-    for (auto* option : overlay.findChildren<QPushButton*>()) {
-        if (option->isVisible() && option->property("value").toString() == value) {
-            QTest::mouseClick(option, Qt::LeftButton);
-            QTest::qWait(20);
-            return;
-        }
-    }
-    require(false, "visible option missing");
+    waitForDiscovery(overlay);
+    waitFor([&] { return visibleOption(overlay, value) != nullptr; }, "visible option missing");
+    QTest::mouseClick(visibleOption(overlay, value), Qt::LeftButton);
+    QCoreApplication::processEvents();
 }
 int main(int argc, char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--sound-list" && !qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
-        QThread::msleep(200);
+        // Override only in this test to exercise slow asynchronous discovery.
+        bool validDelay = false;
+        const int delay = qEnvironmentVariableIntValue("HYPRCAPTURE_TEST_DISCOVERY_DELAY_MS", &validDelay);
+        QThread::msleep(validDelay ? std::clamp(delay, 0, 3000) : 200);
         std::cout << R"({"outputs":[{"name":"test-output","description":"Test speakers"},{"name":"test-hdmi","description":"Test HDMI"}],"inputs":[{"name":"test-input","description":"Test microphone"}],"windows":[{"name":"window:0x123","description":"Window · Test player — Player","pid":123}]})" << '\n';
         return 0;
     }
@@ -81,12 +102,10 @@ int main(int argc, char** argv) {
             auto* test = overlay.findChild<QPushButton*>("aecRetest");
             auto* status = overlay.findChild<QLabel*>("aecStatus");
             require(test && status, "AEC feedback controls exist");
-            QTest::qWait(400);
-            require(test->isEnabled(), "test action available after status query");
+            waitFor([&] { return test->isEnabled(); }, "test action available after status query");
             test->click();
             require(!test->isEnabled() && test->text().contains("Testing"), "test shows progress and prevents duplicate clicks");
-            for (int i=0; i<100 && !test->isEnabled(); ++i) QTest::qWait(20);
-            require(test->isEnabled(), "test action restored after completion");
+            waitFor([&] { return test->isEnabled(); }, "test action restored after completion");
             const auto expected = outcome == "success" ? "Test passed" : outcome == "busy" ? "Test not completed" : "Test failed";
             require(status->text().startsWith(expected), "explicit test outcome displayed");
             if (outcome == "failed") require(status->toolTip().contains("OpenVINO backend unavailable"), "failure details retained");
@@ -123,20 +142,16 @@ int main(int argc, char** argv) {
     require(overlay.findChild<QWidget*>("soundOptions") == firstPanel, "record controls and state survive repeated toggles");
     QTest::qWait(20);
     QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton);
-    QTest::qWait(400);
-    QPushButton* discovered = nullptr;
-    for (auto* option : overlay.findChildren<QPushButton*>())
-        if (option->property("value").toString() == expectedOutput) discovered = option;
+    waitForDiscovery(overlay);
+    auto* discovered = visibleOption(overlay, expectedOutput);
     require(discovered && discovered->isVisible(), "async discovery must show device in open popup");
     auto* viewport = discovered->parentWidget()->parentWidget();
     require(viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size())), "discovered device must fit visible scroll viewport, not just hidden content");
     QTest::mouseClick(discovered, Qt::LeftButton);
     require(button(overlay, "soundOutput")->toolTip().contains(expectedLabel), "discovered device selectable");
     QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton);
-    QTest::qWait(400);
-    discovered = nullptr;
-    for (auto* option : overlay.findChildren<QPushButton*>())
-        if (option->property("value").toString() == expectedOutput) discovered = option;
+    waitForDiscovery(overlay);
+    discovered = visibleOption(overlay, expectedOutput);
     require(discovered && discovered->isVisible(), "device survives repeated refresh");
     viewport = discovered->parentWidget()->parentWidget();
     require(viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size())), "reopening must not collapse popup to default row");
@@ -147,7 +162,7 @@ int main(int argc, char** argv) {
     if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
         choose(overlay, "soundOutput", "window:0x123");
         require(button(overlay, "soundOutput")->toolTip().contains("Test player"), "window source selectable");
-        QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton); QTest::qWait(300);
+        QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton); waitForDiscovery(overlay);
         require(button(overlay, "soundOutput")->toolTip().contains("Test player"), "window source survives refresh");
         QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton);
         choose(overlay, "soundOutput", "auto");
@@ -159,20 +174,20 @@ int main(int argc, char** argv) {
     choose(overlay, "soundMode", "off");
     choose(overlay, "soundPreset", "manual");
     require(overlay.findChild<QWidget*>("soundMixer")->isVisible(), "manual fourth row visible even with Sound off");
-    QTest::qWait(300);
-    QProcess* preview = nullptr;
-    for (auto* process : overlay.findChildren<QProcess*>())
-        if (process->arguments().value(0) == "--sound-meter") preview = process;
+    waitFor([&] { return runningPreview(overlay) != nullptr; }, "preview did not start");
+    auto* preview = runningPreview(overlay);
     require(preview && preview->state() == QProcess::Running && preview->arguments().value(1) == "mix", "Sound off still previews both channels");
     if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND"))
         for (const char* name : {"soundMeter", "micMeter"})
-            require(std::abs(overlay.findChild<QWidget*>(name)->property("postGainPeak").toDouble() - .1) < .0001, "Off preview receives live levels");
+            waitFor([&] { return std::abs(overlay.findChild<QWidget*>(name)->property("postGainPeak").toDouble() - .1) < .0001; }, "Off preview receives live levels");
     auto* aec = overlay.findChild<QWidget*>("echoCancellation");
     require(aec && button(overlay, "echoCancellation")->text().contains("Auto") && preview->arguments().value(4) == "-1" && preview->arguments().last() == "cpu", "AEC defaults to automatic CPU in preview");
-    choose(overlay, "echoCancellation", "0"); QTest::qWait(1200);
-    preview = nullptr;
-    for (auto* process : overlay.findChildren<QProcess*>())
-        if (process->arguments().value(0) == "--sound-meter" && process->state() == QProcess::Running) preview = process;
+    choose(overlay, "echoCancellation", "0");
+    waitFor([&] {
+        auto* current = runningPreview(overlay);
+        return current && current->arguments().value(4) == "0";
+    }, "AEC switch did not restart preview");
+    preview = runningPreview(overlay);
     require(preview && preview->arguments().value(4) == "0", "AEC switch reaches helper");
     require(button(overlay, "soundInput")->isVisible() && button(overlay, "soundOutput")->isVisible(), "off keeps all sound options visible");
     choose(overlay, "soundMode", "microphone");
@@ -191,8 +206,7 @@ int main(int argc, char** argv) {
     auto* meter = static_cast<AudioMeter*>(overlay.findChild<QWidget*>("micMeter"));
     require(gain && meter, "manual gain and meter present");
     if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_REAL_SOUND")) {
-        QTest::qWait(300);
-        require(std::abs(meter->property("postGainPeak").toDouble() - .1) < .0001, "live helper telemetry reaches visible meter");
+        waitFor([&] { return std::abs(meter->property("postGainPeak").toDouble() - .1) < .0001; }, "live helper telemetry reaches visible meter");
     } else meter->setLevels(.1, .05, true);
     gain->setValue(6);
     require(std::abs(meter->property("postGainPeak").toDouble() - .199526) < .0001, "meter shows post gain samples");
@@ -227,13 +241,16 @@ int main(int argc, char** argv) {
     }
     if (qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_SCREENSHOT")) second.grab().save(qEnvironmentVariable("HYPRCAPTURE_TEST_SCREENSHOT"));
     QTest::mouseClick(button(second, "soundOutput"), Qt::LeftButton);
-    QTest::qWait(300);
+    waitForDiscovery(second);
     for (auto* panel : second.findChildren<QWidget*>("inlineSelectPopup"))
         if (panel->isVisible()) require(second.rect().contains(panel->geometry()), "device popup stays inside overlay after refresh");
-    second.hide(); overlay.hide(); QTest::qWait(300);
-    for (auto* owner : {&second, &overlay})
-        for (auto* process : owner->findChildren<QProcess*>())
-            if (process->arguments().value(0) == "--sound-meter") require(process->state() == QProcess::NotRunning, "closing overlay stops live capture");
+    second.hide(); overlay.hide();
+    waitFor([&] {
+        for (auto* owner : {&second, &overlay})
+            for (auto* process : owner->findChildren<QProcess*>())
+                if (process->arguments().value(0) == "--sound-meter" && process->state() != QProcess::NotRunning) return false;
+        return true;
+    }, "closing overlay stops live capture");
     hyprcapture::CaptureDefaults remembered;
     remembered.rememberSettings = true;
     // Exercise the plugin session transport as well as a real widget edit + Esc.

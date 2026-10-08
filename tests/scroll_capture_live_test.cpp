@@ -18,6 +18,7 @@
 #include <QScreen>
 #include <QTest>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QToolButton>
 #include <QWheelEvent>
 #include <QWindow>
@@ -90,9 +91,14 @@ int main(int argc, char **argv) {
     f.show();
     return app.exec();
   }
-  if (argc != 2)
+  if (argc > 2)
     return 2;
-  const QString dir = QString::fromLocal8Bit(argv[1]);
+  QTemporaryDir automaticOutput;
+  if (argc == 1 && !automaticOutput.isValid())
+    return 2;
+  const QString dir = argc == 2 ? QString::fromLocal8Bit(argv[1]) : automaticOutput.path();
+  if (argc == 1) automaticOutput.setAutoRemove(false);
+  std::cout << "Live test artifacts: " << dir.toStdString() << std::endl;
   QDir().mkpath(dir);
   auto *screen = app.primaryScreen();
   if (!screen)
