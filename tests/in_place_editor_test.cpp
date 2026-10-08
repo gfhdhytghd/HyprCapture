@@ -15,6 +15,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QStandardPaths>
 #include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
@@ -993,7 +994,15 @@ int main(int argc, char** argv) {
     if (!copyStub.open(QIODevice::WriteOnly)) return 1;
     QString quotedPath = clipboardPath;
     quotedPath.replace(QChar(0x27), QStringLiteral("'\\''"));
-    copyStub.write((QStringLiteral("#!/bin/sh\n/bin/cat > '") + quotedPath + QStringLiteral("'\n")).toUtf8());
+    QString cat = QStandardPaths::findExecutable(QStringLiteral("cat"));
+    const QString shell = QStandardPaths::findExecutable(QStringLiteral("sh"));
+    if (cat.isEmpty() || shell.isEmpty()) {
+        fputs("clipboard fixture requires cat and sh on PATH\n", stderr);
+        return 1;
+    }
+    cat.replace(QChar(0x27), QStringLiteral("'\\''"));
+    copyStub.write((QStringLiteral("#!") + shell + QStringLiteral("\nexec '") + cat +
+                    QStringLiteral("' > '") + quotedPath + QStringLiteral("'\n")).toUtf8());
     copyStub.close();
     if (!copyStub.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) return 1;
     qputenv("HOME", clipboardHome.path().toUtf8());

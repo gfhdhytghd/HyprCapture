@@ -15,6 +15,7 @@
   ffmpeg,
   nlohmann_json,
   pkg-config,
+  python3,
   src,
 }:
 let
@@ -34,6 +35,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
   nativeBuildInputs = [
     cmake
     pkg-config
+    python3
     kdePackages.wrapQtAppsHook
   ];
 
@@ -51,7 +53,6 @@ in hyprlandPlugins.mkHyprlandPlugin {
   ];
 
   cmakeFlags = [
-    "-DHYPRCAPTURE_ENABLE_NIX_SANDBOX_INCOMPATIBLE_TESTS=OFF"
     "-DHYPRCAPTURE_AEC_MODEL_DIR=${aecModels}"
     "-DHYPRCAPTURE_TFLITE_LIBRARY=${aecRuntime}/lib/libtensorflowlite_c.so"
     "-DHYPRCAPTURE_DEFAULT_HELPER_PATH=${builtins.placeholder "out"}/bin/hyprcapture-ui"
@@ -60,6 +61,10 @@ in hyprlandPlugins.mkHyprlandPlugin {
 
   doCheck = true;
   preCheck = ''
+    # Nix defaults HOME to an unwritable /homeless-shelter. Tests need a
+    # private writable home for their clipboard executable fixture.
+    export HOME="$TMPDIR/hyprcapture-test-home"
+    mkdir -m 700 -p "$HOME"
     export QT_QPA_PLATFORM=offscreen
   '';
 

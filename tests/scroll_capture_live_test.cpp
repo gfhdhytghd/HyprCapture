@@ -20,6 +20,7 @@
 #include <QScreen>
 #include <QTest>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QWindow>
 #include <iostream>
 
@@ -64,7 +65,10 @@ class DocumentFixture final : public QWidget {
 int main(int argc, char** argv) {
     if (!qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_LIVE_TEST"))
         return 77;
-    if (argc != 2)
+    if (argc > 2)
+        return 2;
+    QTemporaryDir automaticOutput;
+    if (argc == 1 && !automaticOutput.isValid())
         return 2;
     LayerShellQt::Shell::useLayerShell();
     QApplication app(argc, argv);
@@ -72,7 +76,9 @@ int main(int argc, char** argv) {
     auto* screen = QGuiApplication::primaryScreen();
     if (!screen || screen->geometry().width() < 800 || screen->geometry().height() < 600)
         return 77;
-    const QString outputDir = QString::fromLocal8Bit(argv[1]);
+    const QString outputDir = argc == 2 ? QString::fromLocal8Bit(argv[1]) : automaticOutput.path();
+    if (argc == 1) automaticOutput.setAutoRemove(false);
+    std::cout << "Live test artifacts: " << outputDir.toStdString() << std::endl;
     if (!QDir().mkpath(outputDir))
         return 2;
     const QString outputFile = outputDir + "/scroll-live.png";

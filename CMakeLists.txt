@@ -210,6 +210,12 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-sound-ui-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
   add_test(NAME hyprcapture-sound-ui-test COMMAND hyprcapture-sound-ui-test)
   set_tests_properties(hyprcapture-sound-ui-test PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 20)
+  add_executable(hyprcapture-in-place-editor-test tests/in_place_editor_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
+  set_target_properties(hyprcapture-in-place-editor-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
+  target_include_directories(hyprcapture-in-place-editor-test PRIVATE src ${GIO_INCLUDE_DIRS})
+  target_link_libraries(hyprcapture-in-place-editor-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
+  add_test(NAME in-place-editor COMMAND hyprcapture-in-place-editor-test)
+  set_tests_properties(in-place-editor PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
   add_executable(hyprcapture-scroll-live-test tests/scroll_capture_live_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
   set_target_properties(hyprcapture-scroll-live-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
   target_include_directories(hyprcapture-scroll-live-test PRIVATE src ${GIO_INCLUDE_DIRS})
@@ -221,48 +227,18 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-audio-timeline-test PRIVATE src)
   target_compile_options(hyprcapture-audio-timeline-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-audio-timeline-test COMMAND hyprcapture-audio-timeline-test)
-  find_package(Python3 COMPONENTS Interpreter)
-
+  # Ignore inherited PYTHONOPTIMIZE/PYTHONPATH: assertions are part of these tests.
+  find_package(Python3 REQUIRED COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
-    add_test(NAME session-startup-ui COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_startup_ui_test.py $<TARGET_FILE:hyprcapture-ui>)
+    add_test(NAME session-startup-ui COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_startup_ui_test.py $<TARGET_FILE:hyprcapture-ui>)
     set_tests_properties(session-startup-ui PROPERTIES TIMEOUT 40)
-    add_test(NAME pin-launch COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/pin_launch_test.py $<TARGET_FILE:hyprcapture-ui>)
+    add_test(NAME pin-launch COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/pin_launch_test.py $<TARGET_FILE:hyprcapture-ui>)
     set_tests_properties(pin-launch PROPERTIES TIMEOUT 20)
   endif()
-
-  option(HYPRCAPTURE_ENABLE_NIX_SANDBOX_INCOMPATIBLE_TESTS
-    "Enable tests requiring root-owned executables to be visible as root"
-    ON)
-  if(HYPRCAPTURE_ENABLE_NIX_SANDBOX_INCOMPATIBLE_TESTS)
-    if(Python3_Interpreter_FOUND)
-      add_test(NAME hyprcapture-audio-finalize-test COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/audio_finalize_test.py $<TARGET_FILE:hyprcapture-ui>)
-      set_tests_properties(hyprcapture-audio-finalize-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
-
-      add_executable(hyprcapture-timestamped-rgba-fixture tests/timestamped_rgba_fixture.cpp src/plugin/timestamped_rgba.cpp)
-      target_include_directories(hyprcapture-timestamped-rgba-fixture PRIVATE src)
-      target_link_libraries(hyprcapture-timestamped-rgba-fixture PRIVATE PkgConfig::FFMPEG_MUX)
-      add_test(NAME hyprcapture-recording-timestamps-test COMMAND ${Python3_EXECUTABLE}
-        ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_timestamps_test.py
-        $<TARGET_FILE:hyprcapture-timestamped-rgba-fixture> $<TARGET_FILE:hyprcapture-ui>)
-      set_tests_properties(hyprcapture-recording-timestamps-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
-    endif()
-
-    add_executable(hyprcapture-supervised-process-test
-      tests/supervised_process_test.cpp
-      src/shared/supervised_process.cpp
-    )
-    target_include_directories(hyprcapture-supervised-process-test PRIVATE src)
-    add_test(NAME hyprcapture-supervised-process-test COMMAND hyprcapture-supervised-process-test)
-    set_tests_properties(hyprcapture-supervised-process-test PROPERTIES TIMEOUT 10)
-
-    add_executable(hyprcapture-in-place-editor-test tests/in_place_editor_test.cpp ${HYPRCAPTURE_UI_TEST_SOURCES})
-    set_target_properties(hyprcapture-in-place-editor-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
-    target_include_directories(hyprcapture-in-place-editor-test PRIVATE src ${GIO_INCLUDE_DIRS})
-    target_link_libraries(hyprcapture-in-place-editor-test PRIVATE Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
-    add_test(NAME in-place-editor COMMAND hyprcapture-in-place-editor-test)
-    set_tests_properties(in-place-editor PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME hyprcapture-audio-finalize-test COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/audio_finalize_test.py $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(hyprcapture-audio-finalize-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
   endif()
-
   add_executable(hyprcapture-scroll-capture-test tests/scroll_capture_test.cpp src/shared/config.cpp src/shared/protocol.cpp src/ui/scroll_capture.cpp src/ui/scroll_stitcher.cpp src/ui/clipboard_utils.cpp src/ui/i18n.cpp src/shared/process_environment.cpp src/shared/trusted_path.cpp)
   target_include_directories(hyprcapture-scroll-capture-test PRIVATE src)
   target_link_libraries(hyprcapture-scroll-capture-test PRIVATE Qt6::Widgets Qt6::Test LayerShellQt::Interface nlohmann_json::nlohmann_json)
@@ -291,6 +267,14 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-session-startup-test PRIVATE src)
   add_test(NAME session-startup COMMAND hyprcapture-session-startup-test)
   set_tests_properties(session-startup PROPERTIES TIMEOUT 10)
+
+  add_executable(hyprcapture-supervised-process-test
+    tests/supervised_process_test.cpp
+    src/shared/supervised_process.cpp
+  )
+  target_include_directories(hyprcapture-supervised-process-test PRIVATE src)
+  add_test(NAME hyprcapture-supervised-process-test COMMAND hyprcapture-supervised-process-test)
+  set_tests_properties(hyprcapture-supervised-process-test PROPERTIES TIMEOUT 10)
 
   add_executable(hyprcapture-config-test
     tests/config_test.cpp
@@ -348,6 +332,16 @@ if(BUILD_TESTING)
   target_compile_options(hyprcapture-recording-codec-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-recording-codec-test COMMAND hyprcapture-recording-codec-test)
 
+  add_executable(hyprcapture-timestamped-rgba-fixture tests/timestamped_rgba_fixture.cpp src/plugin/timestamped_rgba.cpp)
+  target_include_directories(hyprcapture-timestamped-rgba-fixture PRIVATE src)
+  target_link_libraries(hyprcapture-timestamped-rgba-fixture PRIVATE PkgConfig::FFMPEG_MUX)
+  if(Python3_Interpreter_FOUND)
+    add_test(NAME hyprcapture-recording-timestamps-test COMMAND ${Python3_EXECUTABLE} -E
+      ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_timestamps_test.py
+      $<TARGET_FILE:hyprcapture-timestamped-rgba-fixture> $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(hyprcapture-recording-timestamps-test PROPERTIES TIMEOUT 90 SKIP_RETURN_CODE 77)
+  endif()
+
   add_executable(hyprcapture-rgba-transform-test
     tests/rgba_transform_test.cpp
     src/shared/rgba_transform.cpp
@@ -362,7 +356,7 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-trusted-path-test PRIVATE src)
   add_test(NAME hyprcapture-trusted-path-test COMMAND hyprcapture-trusted-path-test)
   if(Python3_Interpreter_FOUND)
-    add_test(NAME hyprcapture-trusted-path-namespace-test COMMAND ${Python3_EXECUTABLE}
+    add_test(NAME hyprcapture-trusted-path-namespace-test COMMAND ${Python3_EXECUTABLE} -E
       ${CMAKE_CURRENT_SOURCE_DIR}/tests/trusted_path_namespace_test.py $<TARGET_FILE:hyprcapture-trusted-path-test>)
     set_tests_properties(hyprcapture-trusted-path-namespace-test PROPERTIES TIMEOUT 20 SKIP_RETURN_CODE 77)
   endif()
