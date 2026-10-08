@@ -1,0 +1,25 @@
+frame,0,0.48783,0
+frame,720,36.3363,1
+frame,1440,24.6716,1
+frame,2160,22.3277,1
+frame,2880,21.0576,1
+frame,3600,21.498,1
+frame,4320,21.6683,1
+frame,5040,21.9183,1
+frame,5760,21.1757,1
+frame,6480,21.2293,1
+frame,7200,21.7767,1
+frame,7920,21.1881,1
+frame,8640,21.0977,1
+frame,9360,21.0597,1
+frame,10080,21.1179,1
+frame,10800,21.3449,1
+frame,11520,21.4301,1
+frame,12240,21.5519,1
+frame,12960,21.387,1
+frame,13680,21.4516,1
+frame,14400,21.5163,1
+frame,14944,21.7556,1
+summary,cpu=8,threads=1,opencl=0,frames=22,median_ms=21.4516,p95_ms=22.3277,max_ms=36.3363,assemble_ms=85.7714,total_ms=591.81,maxrss_kib=661688,pixel_exact=1
+VmHWM:	  661764 kB
+VmRSS:	  661764 kB

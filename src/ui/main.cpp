@@ -822,6 +822,7 @@ int main(int argc, char** argv) {
         {"language", "Interface language, or auto for environment/system language.", "locale", "auto"},
         {"pin-image", "Show an image as a desktop pin.", "path"},
         {"pin-monitor", "Initial output for a desktop pin.", "name"},
+        {"pin-geometry", "Initial desktop logical rectangle for a desktop pin.", "x,y,width,height"},
         {"pin-consume-source", "Consume a validated private runtime image after loading a pin."},
         {"pin-ready-socket", "Private socket for acknowledging a desktop pin launch.", "path"},
         {{"fushion-mode", "fusion-mode"}, "Enable fushion toolbar behavior.", "0|1", "0"},
@@ -895,12 +896,25 @@ int main(int argc, char** argv) {
             if (!readySocket.waitForConnected(1500))
                 return 1;
         }
+        QRect pinGeometry;
+        if (parser.isSet("pin-geometry")) {
+            const auto fields = parser.value("pin-geometry").split(',');
+            int values[4]{};
+            bool valid = fields.size() == 4;
+            for (int i = 0; valid && i < 4; ++i)
+                values[i] = fields[i].toInt(&valid);
+            if (!valid || values[2] <= 0 || values[3] <= 0) {
+                qWarning("HyprCapture: invalid pin geometry");
+                return 1;
+            }
+            pinGeometry = QRect(values[0], values[1], values[2], values[3]);
+        }
         QString error;
         QScreen* pinScreen = nullptr;
         for (QScreen* screen : QGuiApplication::screens())
             if (screen->name() == parser.value("pin-monitor"))
                 pinScreen = screen;
-        std::unique_ptr<QWidget> pin(createPinnedImage(parser.value("pin-image"), parser.isSet("pin-consume-source"), &error, pinScreen));
+        std::unique_ptr<QWidget> pin(createPinnedImage(parser.value("pin-image"), parser.isSet("pin-consume-source"), &error, pinScreen, pinGeometry));
         if (!pin) {
             if (!readyPath.isEmpty()) {
                 readySocket.write("error:" + error.toUtf8().replace('\n', ' ').left(1000) + '\n');
@@ -1119,7 +1133,7 @@ int main(int argc, char** argv) {
         QObject::connect(candidate, &CaptureOverlay::scrollingChanged, &app, [&, candidate](bool scrolling) {
             activeOverlay = candidate;
             for (CaptureOverlay* peer : overlays) {
-                if (scrolling)
+                if (scrolling && peer != candidate)
                     peer->hide();
                 else
                     peer->show();

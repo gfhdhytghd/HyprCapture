@@ -30,7 +30,7 @@ struct CaptureDefaults {
     bool             save = true;
     bool             clipboard = true;
     bool             showThumbnail = true;
-    bool             inPlaceEditToolbar = false;
+    bool             inPlaceEditToolbar = false; // Per-launch choice, not a plugin configuration option.
     bool             screenshotNotification = true;
     bool             includeCursor = false;
     bool             rememberSettings = false;

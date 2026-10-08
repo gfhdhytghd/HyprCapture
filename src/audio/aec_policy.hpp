@@ -1,6 +1,7 @@
 #pragma once
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 namespace hyprcapture::audio::aec {
 constexpr int policyVersion = 1;
@@ -13,6 +14,7 @@ QString runtimeLibrary();
 QString nativeComponent(const QString& name);
 QString workerPath();
 QString fingerprint(const QString& backend);
+QString effectiveCpuQuota(const QStringList& limits);
 QString cachePath(const QString& backend);
 bool modelsValid(int size, QString* error = nullptr);
 QJsonObject readCache(const QString& backend);

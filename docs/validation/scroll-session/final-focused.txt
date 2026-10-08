@@ -1,0 +1,13 @@
+Test project /home/wilf/data/hyprland_plugins/hyprcapture/build-scroll
+    Start  4: annotation-editor
+1/4 Test  #4: annotation-editor ................   Passed    0.44 sec
+    Start  8: in-place-editor
+2/4 Test  #8: in-place-editor ..................   Passed    2.98 sec
+    Start 15: scroll-capture
+3/4 Test #15: scroll-capture ...................   Passed    0.13 sec
+    Start 16: scroll-stitcher
+4/4 Test #16: scroll-stitcher ..................   Passed    0.30 sec
+
+100% tests passed out of 4
+
+Total Test time (real) =   3.85 sec

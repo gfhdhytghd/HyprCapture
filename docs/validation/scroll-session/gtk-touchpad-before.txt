@@ -1,0 +1,4 @@
+Baseline GTK FINGER run (repeated progress lines summarized)
+progress: 400 800x600 [observed 704 times]
+
+live test timeout

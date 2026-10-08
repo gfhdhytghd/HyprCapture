@@ -15,8 +15,8 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QSignalSpy>
-#include <QScopeGuard>
 #include <QStandardPaths>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
@@ -48,7 +48,8 @@ QString writeArtifact(const QImage& image) {
 }
 
 QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWindow = true,
-                    QSize logicalSize = QSize(kLogicalWidth, kLogicalHeight), QRect windowGeometry = QRect(100, 100, 200, 120)) {
+                    QSize logicalSize = QSize(kLogicalWidth, kLogicalHeight), QRect windowGeometry = QRect(100, 100, 200, 120),
+                    QRect stagePreview = {}, bool fullscreen = false) {
     QImage desktop(logicalSize * 2, QImage::Format_RGBA8888);
     desktop.fill(QColor(17, 29, 53));
     const QString desktopPath = writeArtifact(desktop);
@@ -87,6 +88,12 @@ QString sessionJson(const hyprcapture::CaptureDefaults& defaults, bool includeWi
         info.appClass = "test-app";
         info.title = "Native resolution test";
         info.focused = true;
+        info.fullscreen = fullscreen;
+        if (stagePreview.isValid()) {
+            info.stagePreview = true;
+            info.selectionGeometry = hyprcapture::Rect{double(stagePreview.x()), double(stagePreview.y()), double(stagePreview.width()), double(stagePreview.height())};
+            info.selectionClipGeometry = *info.selectionGeometry;
+        }
         info.fullGeometry = {static_cast<double>(windowGeometry.x()), static_cast<double>(windowGeometry.y()),
                              static_cast<double>(windowGeometry.width()), static_cast<double>(windowGeometry.height())};
         info.visibleGeometry = info.fullGeometry;
@@ -306,6 +313,55 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clipboard-before-editor"));
     }
 
+    void realBackgroundIsHydratedWithoutReplacingForeground() {
+        QTemporaryDir commands;
+        QVERIFY(commands.isValid());
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        defaults.inPlaceEditToolbar = true;
+        const QString initial = sessionJson(defaults);
+        auto response = hyprcapture::decodeSessionJson(initial.toStdString());
+        QVERIFY(response.has_value());
+        response->monitors.clear();
+        QImage changedForeground(kWindowPixels, QImage::Format_RGBA8888);
+        changedForeground.fill(Qt::magenta);
+        QImage background(kWindowPixels, QImage::Format_RGBA8888);
+        background.fill(QColor(19, 63, 117));
+        auto& window = response->windows.front();
+        window.artifactPath = writeArtifact(changedForeground).toStdString();
+        window.realBackgroundPath = writeArtifact(background).toStdString();
+        window.realBackgroundWidth = background.width();
+        window.realBackgroundHeight = background.height();
+        QFile responseFile(QDir::homePath() + "/.nix-profile/bin/response.json");
+        QVERIFY(responseFile.open(QIODevice::WriteOnly));
+        const auto bytes = hyprcapture::encodeSessionJson(*response);
+        responseFile.write(bytes.data(), bytes.size()); responseFile.close();
+        QFile hyprctl(QDir::homePath() + "/.nix-profile/bin/hyprctl");
+        const auto removeStub = qScopeGuard([&] { hyprctl.remove(); responseFile.remove(); });
+        QVERIFY(hyprctl.open(QIODevice::WriteOnly));
+        hyprctl.write("#!/usr/bin/python3\nimport json,pathlib,sys\n"
+                      "expr=sys.argv[-1]\n"
+                      "if 'window_capture(' in expr:\n"
+                      " p=pathlib.Path(json.loads(expr.split('(',1)[1][:-1]))\n"
+                      " p.write_bytes(pathlib.Path(__file__).with_name('response.json').read_bytes())\n"
+                      "print('ok')\n");
+        hyprctl.close();
+        QVERIFY(hyprctl.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        CaptureOverlay overlay(defaults, false, false, false, initial);
+        overlay.show(); QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(150,150));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor);
+        const auto original = editor->resultImage();
+        QVERIFY(chooseBackground(overlay, "real"));
+        const auto composed = editor->resultImage();
+        QCOMPARE(composed.pixelColor(8,8), QColor(19,63,117));
+        QCOMPARE(composed.copy(kOpaquePatch), original.copy(kOpaquePatch));
+        QVERIFY(chooseBackground(overlay, "transparent"));
+        QCOMPARE(editor->resultImage(), original);
+    }
+
     void regionEditorResizesEveryEdgeAndCorner_data() {
         QTest::addColumn<QPoint>("handle");
         QTest::addColumn<QPoint>("delta");
@@ -378,7 +434,7 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(editor);
         auto* canvas = editor->findChild<QWidget*>("annotationCanvas");
         const QPoint center = editor->canvasGeometry().center();
-        QWheelEvent wheel(center, canvas->mapToGlobal(center), {}, QPoint(0, 120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+        QWheelEvent wheel(center, canvas->mapToGlobal(center), {}, QPoint(0, 120), Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(canvas, &wheel);
         const QRect zoomed = editor->canvasGeometry();
         QVERIFY(zoomed.width() > 150);
@@ -396,6 +452,100 @@ class InPlaceEditorTest final : public QObject {
         QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(-1000, left.y()));
         QVERIFY(editor->resultImage().width() <= 1600);
         QVERIFY(editor->resultImage().width() > 600);
+    }
+
+    void stageOutlineScalesRoundingBeforeClipping_data() {
+        QTest::addColumn<bool>("authoritative");
+        QTest::newRow("legacy-scaled") << false;
+        QTest::newRow("rendered-radius") << true;
+    }
+    void stageOutlineScalesRoundingBeforeClipping() {
+        QFETCH(bool, authoritative);
+        QTemporaryDir commands;
+        QFile hyprctl(commands.filePath("hyprctl"));
+        QVERIFY(hyprctl.open(QIODevice::WriteOnly));
+        hyprctl.write("#!/bin/sh\nprintf 'ok\\n'\n");
+        hyprctl.close();
+        QVERIFY(hyprctl.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", commands.path().toUtf8());
+        const auto restorePath = qScopeGuard([&] { qputenv("PATH", oldPath); });
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        const QRect thumbnail(12, 80, 90, 66);
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, true, QSize(800,600),
+            QRect(1100,300,300,220), thumbnail).toStdString());
+        QVERIFY(session.has_value());
+        session->windows.front().rounding = authoritative ? 100 : 40;
+        if (authoritative)
+            session->windows.front().selectionRounding = 12;
+        session->windows.front().selectionClipGeometry->width /= 2;
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+        overlay.show(); QTest::qWait(30);
+        const auto image = overlay.grab().toImage();
+        const auto ratio = image.devicePixelRatio();
+        int brightness = 0;
+        for (int y = 0; y < 2; ++y) {
+            const auto color = image.pixelColor(qRound((thumbnail.x()+20)*ratio), qRound((thumbnail.y()+y)*ratio));
+            brightness = std::max(brightness, color.red());
+        }
+        // Radius 40 becomes 12 at 30% scale. The old native-sized radius
+        // curves away here; clipping the preview must not halve it again.
+        QVERIFY2(brightness > 70, "Stage outline still uses the native window radius");
+    }
+
+    void stageWindowOpensCenteredAtNativeResolution_data() {
+        QTest::addColumn<bool>("fullscreen");
+        QTest::addColumn<bool>("fusion");
+        QTest::newRow("window-regular") << false << false;
+        QTest::newRow("window-fullscreen-client") << true << false;
+        QTest::newRow("fusion-regular") << false << true;
+        QTest::newRow("fusion-fullscreen-client") << true << true;
+    }
+    void stageWindowOpensCenteredAtNativeResolution() {
+        QFETCH(bool, fullscreen);
+        QFETCH(bool, fusion);
+        // The input-suppression handshake must never touch a real compositor
+        // from this offscreen test.
+        QTemporaryDir commands;
+        QVERIFY(commands.isValid());
+        QFile hyprctl(commands.filePath("hyprctl"));
+        QVERIFY(hyprctl.open(QIODevice::WriteOnly));
+        hyprctl.write("#!/bin/sh\nprintf 'ok\\n'\n");
+        hyprctl.close();
+        QVERIFY(hyprctl.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", commands.path().toUtf8());
+        const auto restorePath = qScopeGuard([&] { qputenv("PATH", oldPath); });
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.inPlaceEditToolbar = true;
+        defaults.captureFullscreenClientsAsMonitor = true;
+        defaults.fushionMode = fusion;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        const QRect nativeWindow(1100, 300, 300, 220);
+        const QRect thumbnail(12, 80, 90, 66);
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, true, QSize(800, 600), nativeWindow, thumbnail, fullscreen).toStdString());
+        QVERIFY(session.has_value());
+        session->windows.front().selectionClipGeometry->width /= 2;
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+        overlay.show(); QTest::qWait(30);
+        if (!fusion) {
+            QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(thumbnail.right() - 2, thumbnail.center().y()));
+            QVERIFY(!overlay.findChild<AnnotationEditor*>("inPlaceEditor"));
+        }
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(thumbnail.left() + thumbnail.width() / 4, thumbnail.center().y()));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor && editor->isVisible());
+        const QRect canvas = editor->canvasGeometry();
+        QVERIFY(overlay.rect().contains(canvas));
+        QVERIFY(qAbs(canvas.center().x() - overlay.rect().center().x()) <= 2);
+        QVERIFY(canvas.width() > thumbnail.width());
+        QCOMPARE(editor->resultImage().size(), nativeWindow.size() * 2);
+        QVERIFY(chooseBackground(overlay, QStringLiteral("white")));
+        QCOMPARE(editor->canvasGeometry(), canvas);
+        QCOMPARE(editor->resultImage().size(), nativeWindow.size() * 2);
     }
 
     void windowEditorRetainsOffscreenPosition_data() {
@@ -505,7 +655,7 @@ class InPlaceEditorTest final : public QObject {
         const QRect clusterBefore = editorToolbarCluster(overlay, *editor);
         const QPoint zoomPoint = imageBefore.center();
         QWheelEvent zoom(zoomPoint, canvas->mapToGlobal(zoomPoint), {}, QPoint(0, 120),
-                         Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                         Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(canvas, &zoom);
         QTRY_VERIFY(editor->canvasGeometry().width() > imageBefore.width());
         QTRY_VERIFY(editorToolbarCluster(overlay, *editor) != clusterBefore);
@@ -636,11 +786,16 @@ class InPlaceEditorTest final : public QObject {
         QTest::mouseMove(canvas, QPoint(200, 160));
         QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(200, 160));
         const auto expected = editor->resultImage().convertToFormat(QImage::Format_RGBA8888);
+        const QRect expectedGeometry(editor->mapToGlobal(editor->canvasGeometry().topLeft()), editor->canvasGeometry().size());
         QVERIFY(clickEditorAction(*editor, "annotationPin"));
         QTRY_COMPARE_WITH_TIMEOUT(finishing.count(), 1, 5000);
         QTRY_VERIFY_WITH_TIMEOUT(!overlay.isVisible(), 2000);
         QTRY_VERIFY_WITH_TIMEOUT(!QImage(pinPath).isNull(), 2000);
         QCOMPARE(QImage(pinPath).convertToFormat(QImage::Format_RGBA8888), expected);
+        QFile geometryFile(pinPath + ".geometry");
+        QVERIFY(geometryFile.open(QIODevice::ReadOnly));
+        QCOMPARE(QString::fromUtf8(geometryFile.readAll()), QStringLiteral("%1,%2,%3,%4")
+            .arg(expectedGeometry.x()).arg(expectedGeometry.y()).arg(expectedGeometry.width()).arg(expectedGeometry.height()));
         const auto saved = QDir(output.path()).entryList({"*.png"}, QDir::Files);
         QCOMPARE(saved.size(), save ? 1 : 0);
         if (save) QCOMPARE(QImage(output.filePath(saved.front())).convertToFormat(QImage::Format_RGBA8888), expected);
@@ -960,6 +1115,12 @@ int main(int argc, char** argv) {
         if (!resultPath.isEmpty()) {
             const QImage pinned(arguments.at(2));
             if (pinned.isNull()) return 1;
+            const int geometryOption = arguments.indexOf(QStringLiteral("--pin-geometry"));
+            if (geometryOption < 0 || geometryOption + 1 >= arguments.size()) return 1;
+            QFile geometryFile(resultPath + ".geometry");
+            if (!geometryFile.open(QIODevice::WriteOnly)) return 1;
+            geometryFile.write(arguments.at(geometryOption + 1).toUtf8());
+            geometryFile.close();
             socket.write("ready\n");
             socket.flush();
             if (socket.bytesToWrite() && !socket.waitForBytesWritten(1000)) return 1;
@@ -1000,13 +1161,15 @@ int main(int argc, char** argv) {
     if (!copyStub.open(QIODevice::WriteOnly)) return 1;
     QString quotedPath = clipboardPath;
     quotedPath.replace(QChar(0x27), QStringLiteral("'\\''"));
-    QString catPath = QStandardPaths::findExecutable(QStringLiteral("cat"));
-    if (catPath.isEmpty()) {
-        fputs("Cannot find cat for clipboard fixture\n", stderr);
+    QString cat = QStandardPaths::findExecutable(QStringLiteral("cat"));
+    const QString shell = QStandardPaths::findExecutable(QStringLiteral("sh"));
+    if (cat.isEmpty() || shell.isEmpty()) {
+        fputs("clipboard fixture requires cat and sh on PATH\n", stderr);
         return 1;
     }
-    catPath.replace(QChar(0x27), QStringLiteral("'\\''"));
-    copyStub.write((QStringLiteral("#!/bin/sh\n'") + catPath + QStringLiteral("' > '") + quotedPath + QStringLiteral("'\n")).toUtf8());
+    cat.replace(QChar(0x27), QStringLiteral("'\\''"));
+    copyStub.write((QStringLiteral("#!") + shell + QStringLiteral("\nexec '") + cat +
+                    QStringLiteral("' > '") + quotedPath + QStringLiteral("'\n")).toUtf8());
     copyStub.close();
     if (!copyStub.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) return 1;
     qputenv("HOME", clipboardHome.path().toUtf8());

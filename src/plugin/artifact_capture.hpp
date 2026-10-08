@@ -48,6 +48,8 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
 LaunchResult captureRegionArtifactFromRequestFile(const std::string& path);
 LaunchResult captureWindowArtifactFromRequestFile(const std::string& path);
 LaunchResult captureExportPipeFromRequestFile(const std::string& path);
+LaunchResult startScrollSessionFromRequestFile(const std::string& path);
+LaunchResult stopScrollSessionFromRequestFile(const std::string& path);
 LaunchResult startWindowStreamFromRequestFile(const std::string& path);
 LaunchResult stopWindowStreamFromRequestFile(const std::string& path);
 bool isValidWindowStreamStartRequest(const std::string& json);

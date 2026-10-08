@@ -1,0 +1,9 @@
+{
+  "blur_enabled": true,
+  "blur_size": 8,
+  "blur_passes": 2,
+  "background_max_channel_difference_after_foreground_replacement": 0,
+  "foreground_max_channel_difference": 241,
+  "recomposed_long_image_max_channel_error": 1,
+  "recomposed_long_image_blur_enabled": false
+}

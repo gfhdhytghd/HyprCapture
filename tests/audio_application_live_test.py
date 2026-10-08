@@ -80,6 +80,11 @@ time.sleep(2)
  sp.run([helper,'--sound-finalize',str(folder),str(video),origin,'mp4'],env=env,check=True)
  sp.run(['ffmpeg','-v','error','-i',str(video),'-f','null','-'],check=True)
  assert not folder.exists(),'successful application mux removes recovery data'
+ log_path=pathlib.Path(str(video)+'.audio.jsonl')
+ events=[json.loads(line) for line in log_path.read_text().splitlines()]
+ assert events[0]['event']=='capture_start' and events[-1]['event']=='finalize_success','audio diagnostics must survive successful mux'
+ assert events[-1]['video']==str(video),'diagnostics must identify the resulting video'
+ assert log_path.stat().st_mode & 0o777 == 0o600,'audio diagnostics must remain private'
  print('PASS application isolation, child-process matching, multiple streams, late stream and live sum',flush=True)
 finally:
  for child in children:

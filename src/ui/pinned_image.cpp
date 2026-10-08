@@ -293,7 +293,7 @@ bool consumeImageSource(const QString& path, const struct stat& opened) {
 
 } // namespace
 
-QWidget* createPinnedImage(const QString& path, bool consumePrivateRuntimeSource, QString* error, QScreen* targetScreen) {
+QWidget* createPinnedImage(const QString& path, bool consumePrivateRuntimeSource, QString* error, QScreen* targetScreen, const QRect& initialGeometry) {
     if (error)
         error->clear();
     const auto fail = [error](const char* message) -> QWidget* {
@@ -328,13 +328,18 @@ QWidget* createPinnedImage(const QString& path, bool consumePrivateRuntimeSource
 
     auto state = std::make_shared<PinState>();
     state->image = std::move(image);
-    // Saved screenshots contain physical pixels but PNG need not retain Qt's
-    // DPR. Start at the target output's native pixel density, then fit as needed.
-    state->logicalImageSize = QSizeF(state->image.size()) / std::max<qreal>(1, targetScreen->devicePixelRatio());
-    const QRect available = targetScreen->availableGeometry();
-    state->zoom = std::min({qreal{1}, available.width() * 0.65 / state->logicalImageSize.width(),
-                           available.height() * 0.65 / state->logicalImageSize.height()});
-    state->origin = QPointF(available.center()) - QPointF(state->logicalImageSize.width(), state->logicalImageSize.height()) * (state->zoom / 2);
+    if (initialGeometry.isValid()) {
+        state->logicalImageSize = initialGeometry.size();
+        state->origin = initialGeometry.topLeft();
+    } else {
+        // Saved screenshots contain physical pixels but PNG need not retain Qt's
+        // DPR. Start at the target output's native pixel density, then fit as needed.
+        state->logicalImageSize = QSizeF(state->image.size()) / std::max<qreal>(1, targetScreen->devicePixelRatio());
+        const QRect available = targetScreen->availableGeometry();
+        state->zoom = std::min({qreal{1}, available.width() * 0.65 / state->logicalImageSize.width(),
+                               available.height() * 0.65 / state->logicalImageSize.height()});
+        state->origin = QPointF(available.center()) - QPointF(state->logicalImageSize.width(), state->logicalImageSize.height()) * (state->zoom / 2);
+    }
 
     auto* root = new PinSurface(state, targetScreen);
     state->surfaces.emplace_back(root);

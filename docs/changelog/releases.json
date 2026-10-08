@@ -1,0 +1,299 @@
+{
+  "project": "HyprCapture",
+  "repository": "gfhdhytghd/HyprCapture",
+  "site_url": "https://gfhdhytghd.github.io/HyprCapture/",
+  "releases": [
+    {
+      "tag": "v0.3.0-0.56.2",
+      "version": "0.3.0",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-08T19:41:51Z",
+      "headline": "Native scrolling screenshots, in-place editing, desktop pins, and Hymission Stage capture",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            "Native scrolling screenshots: scroll inside a selected region or window in the editor to grow a long image, revisit captured content, and keep annotations aligned with the page.",
+            "In-place screenshot editor through `open_editor()`: rectangles, ellipses, arrows, lines, pen, highlighter, numbered markers, mosaic, spotlight, undo/redo, and zoom/pan.",
+            "Movable, resizable multiline text boxes with a floating toolbar for font, pixel size, and color.",
+            "Desktop pins that stay above normal windows and then follow the normal save, clipboard, and thumbnail flow.",
+            "UI translations for Simplified and Traditional Chinese, Japanese, German, French, Spanish, and Korean, selected through the new `language` option.",
+            "Capture windows from Hymission Stage, center them in the editor, and match selection outlines to their displayed rounded corners."
+          ]
+        },
+        {
+          "title": "Faster",
+          "items": [
+            "The capture overlay starts sooner: the Qt helper launches in parallel with compositor capture, and panels and icons are created on demand and cached.",
+            "Frozen screenshot artifacts are memory-mapped instead of copied pixel by pixel."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Recordings no longer hang when the compositor was started from a terminal; the recorder's stdin now comes from /dev/null (#25, contributed by Vedaru).",
+            "Nix build fixes for #29: read-only store paths whose owner is unmapped inside the build sandbox are now trusted (writable paths are still rejected), and supervised processes handle stop signals under BusyBox ash. A sandboxed build of the repository flake passed its tests locally; the reporter's own setup has not been verified yet.",
+            "Microphone-only recordings ignore changes to application audio, and only capture dropdown settings are persisted.",
+            "Toolbar icons now use Google Material Symbols and render sharply at any scale.",
+            "Fix region scrolling captures that stayed at their original size or misaligned during small movements and repeated text; foreground detail aligns scrolling text over a stationary smooth background, with safer history matching and fixed-header detection.",
+            "Flush pointer motion before forwarding touchpad scrolling so applications such as Zen receive input at the intended capture position.",
+            "Keep the captured window foreground separate from the real or blurred background, and preserve editable backgrounds after a scrolling capture.",
+            "Preserve top-origin monitor crops in region recordings (#32) and editor geometry when creating scaled desktop pins (#33).",
+            "Reset offscreen render state between monitor captures and stabilize asynchronous UI/audio regression checks."
+          ]
+        },
+        {
+          "title": "Upgrade notes",
+          "items": [
+            "Remove the old `in_place_edit_toolbar` setting and bind `hl.plugin.hyprcapture.open_editor()` for editing. `open()` retains its confirmation behavior and `quick()` captures directly.",
+            "Build against Hyprland 0.56.2 and update both the plugin and Qt helper. Scrolling image matching adds an OpenCV dependency.",
+            "Update Hymission alongside HyprCapture to use the Stage renderer's exact selection radius; older Hymission versions use a scaled-radius fallback."
+          ]
+        },
+        {
+          "title": "Validation and remaining checks",
+          "items": [
+            "Release build and automated regression coverage, including isolated GTK scrolling, scale-2 region stitching, independent backgrounds, and Stage selection geometry. A stationary-backdrop fixture preserves opaque foreground pixels exactly; it does not claim whole-image equality for a background that does not scroll.",
+            "Production-desktop kitty and physical touchpad/touchscreen acceptance remain pending after updating the plugin and helper. Dynamic or ambiguous page content may require recovering overlap."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.8-0.56.2",
+      "version": "0.2.8",
+      "hyprland": "0.56.2",
+      "published_at": "2026-09-06T19:13:22Z",
+      "headline": "Audio recording, echo cancellation, and accurate video timing",
+      "sections": [
+        {
+          "title": "Recording",
+          "items": [
+            "Videos keep the frames' real capture timestamps instead of accumulating repeated frames, so audio stays in sync.",
+            "Oversized automatic recordings prefer hardware HEVC encoding.",
+            "Audio modes, device selection, application audio capture, mixing presets, manual gain controls, and live level meters.",
+            "Echo cancellation through PipeWire WebRTC, plus a native DTLN-AEC candidate with a validated CPU selection policy and optional OpenVINO NPU support. Real-recording, speech-quality, and long-duration acceptance tests are still pending.",
+            "First-frame recording previews, a finalization animation, centered recording controls, and optional restoration of capture settings."
+          ]
+        },
+        {
+          "title": "Performance and reliability",
+          "items": [
+            "Less window-capture work thanks to compact render targets and cached GPU exports.",
+            "Fenced window streaming, frame-bound input geometry, and checks on the capture target's lifecycle.",
+            "Better handling of rotated and scaled outputs, encoder/backend fallback, countdown cancellation, screenshot notifications, window selection controls, and narrow toolbars."
+          ]
+        },
+        {
+          "title": "Build",
+          "items": [
+            "New build dependency: FFmpeg development libraries (libavformat, libavcodec, libavutil). Install the DTLN runtime and models with the included AEC scripts."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.7-0.56.1",
+      "version": "0.2.7",
+      "hyprland": "0.56.1",
+      "published_at": "2026-08-07T02:32:30Z",
+      "headline": "Correct window backgrounds and transparency",
+      "sections": [
+        {
+          "title": "Fixed",
+          "items": [
+            "Window screenshots keep the selected background mode; real and transparent output no longer fall back to follow-system.",
+            "Painted window backgrounds are clipped to the visible rounded frame, while transparent edge and shadow pixels are kept.",
+            "Window artifacts are rendered straight into an RGBA framebuffer through Hyprland's snapshot path, preserving client alpha without heuristic matte recovery."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.6-0.56.0",
+      "version": "0.2.6",
+      "hyprland": "0.56.0",
+      "published_at": "2026-07-27T15:47:49Z",
+      "headline": "Lua-only plugin API",
+      "sections": [
+        {
+          "title": "Changed",
+          "items": [
+            "All plugin actions and helper callbacks now go through the Hyprland Lua API. Legacy dispatcher registration and fallback paths have been removed (#20).",
+            "README configuration and key-binding examples are written in Lua."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Immutable Nix store paths are accepted, while writable child directories and executables are still rejected (#19)."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.5-0.56.0",
+      "version": "0.2.5",
+      "hyprland": "0.56.0",
+      "published_at": "2026-07-27T06:46:51Z",
+      "headline": "Hyprland 0.56 support and a Nix flake",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            "Compatibility with Hyprland 0.56 and Nix flake packaging.",
+            "Configurable notification backends and a recording-state socket for status bars and other integrations.",
+            "The `hyprcam` watermark preset."
+          ]
+        },
+        {
+          "title": "Improved",
+          "items": [
+            "Complete fusion capture interactions, plus better multi-monitor overlays, synchronized thumbnails, and monitor targeting."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Captures and recordings on transformed monitors, fullscreen recording, scrolling-window selection, cursor capture, and fullscreen preview geometry."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.4-0.55.4",
+      "version": "0.2.4",
+      "hyprland": "0.55.4",
+      "published_at": "2026-06-23T15:18:11Z",
+      "headline": "Rotated monitors and faster thumbnails",
+      "sections": [
+        {
+          "title": "Fixed",
+          "items": [
+            "Fullscreen screenshots on transformed multi-monitor layouts no longer crop or invert rotated secondary outputs.",
+            "Unsafe compositor readback state, which could crash Hyprland or capture the overlay blur, is avoided."
+          ]
+        },
+        {
+          "title": "Faster",
+          "items": [
+            "Result thumbnails appear sooner because a small preview launches before the full-size PNG save and clipboard work finish."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.3-0.55.4",
+      "version": "0.2.3",
+      "hyprland": "0.55.4",
+      "published_at": "2026-06-20T07:23:46Z",
+      "headline": "hymission overview support",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            "Windows can be captured from the hymission overview."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "The first click now captures correctly in hymission overview windows.",
+            "Result thumbnails scale better on high-DPI displays."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.2-0.55",
+      "version": "0.2.2",
+      "hyprland": "0.55",
+      "published_at": "2026-06-19T20:30:36Z",
+      "headline": "Export pipe for external tools",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            "A trusted, private FIFO export-pipe backend that streams fullscreen compositor RGBA frames to external programs.",
+            "The export pipe is available through both the hyprctl dispatcher and the Lua config API.",
+            "Documentation of the FIFO capture request and response protocol."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.1-0.55",
+      "version": "0.2.1",
+      "hyprland": "0.55",
+      "published_at": "2026-05-09T15:15:40Z",
+      "headline": "Hyprland 0.55 and better window shadows",
+      "sections": [
+        {
+          "title": "Improved",
+          "items": [
+            "Faster window shadow synthesis that uses Hyprland-style shadow geometry and falloff.",
+            "Compositor window recordings stay on the compositor backend instead of silently falling back to visible GSR when alpha is unavailable.",
+            "Recordings keep window shadows and are cropped only when shadow removal is requested.",
+            "When the output cannot carry alpha, shadows are composited over the selected solid or follow-system background."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Lua fallback dispatch from the helper, and the overlay now fades out before window rendering and saving."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.0-0.54.3",
+      "version": "0.2.0",
+      "hyprland": "0.54.3",
+      "published_at": "2026-05-05T06:57:54Z",
+      "headline": "Renamed to HyprCapture, fusion mode, and watermarks",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            "The project is now called HyprCapture.",
+            "Fusion toolbar mode: a single click captures fullscreen, and gestures combine region and window capture.",
+            "Configurable watermarks with built-in Activate Linux and HyperCam-style presets, plus position, size, and offset controls."
+          ]
+        },
+        {
+          "title": "Improved",
+          "items": [
+            "Lower capture latency: the overlay closes without waiting for saving, clipboard, and thumbnail work.",
+            "Simpler region capture, updated toolbar icons and status, cleaner cancel and dropdown controls, and no window titles in window mode.",
+            "Installation steps and default helper path guidance for hyprpm."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Real-background window sampling."
+          ]
+        }
+      ]
+    },
+    {
+      "tag": "v0.1.0-0.54.3",
+      "version": "0.1.0",
+      "hyprland": "0.54.3",
+      "published_at": "2026-05-03T08:24:03Z",
+      "headline": "First release (as hyprshot)",
+      "sections": [
+        {
+          "title": "Highlights",
+          "items": [
+            "Fullscreen, region, and window capture modes with a frozen compositor snapshot behind the overlay.",
+            "Fullscreen and region output at display resolution.",
+            "Window artifacts rendered by the compositor, including windows that are occluded or partly off-screen.",
+            "Window background modes: follow system, white, black, real background, and transparent, with optional border and shadow removal.",
+            "Save to file, persistent Wayland clipboard output through wl-copy, and result thumbnails with open, copy, and delete actions."
+          ]
+        }
+      ]
+    }
+  ]
+}

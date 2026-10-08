@@ -1,4 +1,5 @@
 #include "plugin/artifact_capture.hpp"
+#include "plugin/hymission_capture.hpp"
 
 #include "plugin/session_launcher.hpp"
 #include "plugin/timing.hpp"
@@ -37,6 +38,10 @@
 #include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
 #include <hyprland/src/pointer/PointerManager.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
+#include <hyprland/src/desktop/state/ViewState.hpp>
+#include <hyprland/src/desktop/view/LayerSurface.hpp>
+#include <hyprland/src/managers/SeatManager.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 #include <hyprland/src/notification/NotificationOverlay.hpp>
 #include <hyprland/src/render/gl/GLFramebuffer.hpp>
 #include <hyprland/src/render/gl/GLTexture.hpp>
@@ -73,6 +78,7 @@
 #include <sstream>
 #include <system_error>
 #include <sys/stat.h>
+#include <sys/socket.h>
 #include <sys/un.h>
 #include <thread>
 #include <type_traits>
@@ -1065,8 +1071,7 @@ void resetAsyncPboReadback(AsyncPboReadbackState& state) {
     state = {};
 }
 
-void resetWindowStreamPboReadback() {
-    auto& state = g_windowStreamPboReadback;
+void resetWindowStreamPboReadback(WindowStreamPboReadbackState& state = g_windowStreamPboReadback) {
     for (auto& fence : state.fences) {
         if (fence)
             glDeleteSync(fence);
@@ -1092,10 +1097,10 @@ bool ensureWindowStreamPboReadback(WindowStreamPboReadbackState& state, int widt
         state.height == height && state.bytes == bytes)
         return true;
 
-    resetWindowStreamPboReadback();
+    resetWindowStreamPboReadback(state);
     glGenBuffers(static_cast<GLsizei>(WindowStreamPboReadbackState::BUFFER_COUNT), state.buffers);
     if (!std::all_of(std::begin(state.buffers), std::end(state.buffers), [](GLuint buffer) { return buffer != 0; })) {
-        resetWindowStreamPboReadback();
+        resetWindowStreamPboReadback(state);
         return false;
     }
     state.width = width;
@@ -1137,7 +1142,7 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
         const auto source = (state.next + WindowStreamPboReadbackState::BUFFER_COUNT - state.pending) % WindowStreamPboReadbackState::BUFFER_COUNT;
         if (!state.metadataSlots.discardOldest()) {
             noteWindowStreamDiagnostic("pbo metadata discard mismatch");
-            resetWindowStreamPboReadback();
+            resetWindowStreamPboReadback(state);
             return std::nullopt;
         }
         glDeleteSync(state.fences[source]);
@@ -1151,7 +1156,7 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
     const auto metadata = state.metadataSlots.mapOldest();
     if (!metadata) {
         noteWindowStreamDiagnostic("pbo metadata map mismatch");
-        resetWindowStreamPboReadback();
+        resetWindowStreamPboReadback(state);
         return std::nullopt;
     }
 
@@ -1208,7 +1213,7 @@ bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
     glFlush();
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     if (!state.fences[state.next]) {
-        resetWindowStreamPboReadback();
+        resetWindowStreamPboReadback(state);
         return false;
     }
     state.slotGeometry[state.next] = {.fullBox = fullBox, .visibleBox = visibleBox, .geometryEpoch = metadata.geometryEpoch,
@@ -1855,6 +1860,47 @@ class HymissionRawWindowRenderScope {
     bool        m_active = false;
 };
 
+// A Stage target can live on an invisible workspace. Rendering its window
+// directly must not inherit that workspace's slide offset or fade-to-zero.
+// Change only sampled values for this synchronous capture; never switch the
+// active workspace, alter animation goals, or reset the user's opacity rule.
+class InactiveWorkspaceCaptureScope {
+  public:
+    explicit InactiveWorkspaceCaptureScope(const PHLWINDOW& window) : m_window(window) {
+        if (!window || window->m_pinned || !window->m_workspace || window->m_workspace->isVisible())
+            return;
+        m_workspace = window->m_workspace;
+        m_offset = m_workspace->m_renderOffset->value();
+        m_workspace->m_renderOffset->value() = {};
+        overrideAlpha(m_workspace->m_alpha);
+        for (const auto kind : {Desktop::View::WINDOW_ALPHA_LAYOUT, Desktop::View::WINDOW_ALPHA_FULLSCREEN,
+                                Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE, Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE})
+            overrideAlpha(window->alpha(kind));
+    }
+    ~InactiveWorkspaceCaptureScope() {
+        for (auto& [sample, value] : m_alphas)
+            if (sample)
+                *sample = value;
+        if (m_workspace)
+            m_workspace->m_renderOffset->value() = m_offset;
+    }
+    InactiveWorkspaceCaptureScope(const InactiveWorkspaceCaptureScope&) = delete;
+    InactiveWorkspaceCaptureScope& operator=(const InactiveWorkspaceCaptureScope&) = delete;
+
+  private:
+    void overrideAlpha(const PHLANIMVAR<float>& animation) {
+        if (!animation)
+            return;
+        m_alphas[m_alphaCount++] = {&animation->value(), animation->value()};
+        animation->value() = 1.F;
+    }
+    PHLWINDOW m_window;
+    PHLWORKSPACE m_workspace;
+    Vector2D m_offset;
+    std::array<std::pair<float*, float>, 5> m_alphas{};
+    std::size_t m_alphaCount = 0;
+};
+
 class WindowAnimationGoalOverride {
   public:
     explicit WindowAnimationGoalOverride(const PHLWINDOW& window) : m_window(window) {
@@ -1901,7 +1947,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
                                    int cropTopY,
                                    int cropWidth,
                                    int cropHeight,
-                                   ArtifactBudget* budget = nullptr) {
+                                   ArtifactBudget* budget = nullptr, SP<CFramebuffer>* persistent = nullptr, bool skipReadback = false) {
     if (!monitor || !monitor->m_activeWorkspace || !g_pHyprRenderer || !g_pHyprOpenGL)
         return {};
 
@@ -1913,7 +1959,10 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     if (budget && !budget->canFit(framebufferBytes))
         return {};
 
-    auto framebuffer = createFramebuffer("hyprcapture-monitor", width, height, monitor->m_output->state->state().drmFormat);
+    auto framebuffer = persistent ? *persistent : SP<CFramebuffer>{};
+    if(!framebuffer || framebuffer->m_size != Vector2D(width,height))
+        framebuffer = createFramebuffer("hyprcapture-monitor", width, height, monitor->m_output->state->state().drmFormat);
+    if(persistent) *persistent=framebuffer;
     if (!framebuffer)
         return {};
 
@@ -1938,6 +1987,12 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     }
 
     renderContext().m_blockSurfaceFeedback = true;
+    // renderWorkspace emits the workspace render stages, but not RENDER_PRE:
+    // that normally comes from renderMonitor. This independent capture pass
+    // needs its own reset of frame-local plugin state (e.g. Hymission's Stage
+    // pass deduplication). Emit only after beginRender succeeds so listeners
+    // see the capture monitor and framebuffer, never a stale desktop target.
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
     g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(width), static_cast<double>(height)});
     if (monitor == Desktop::focusState()->monitor())
@@ -1948,7 +2003,10 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     g_pHyprRenderer->endRender();
     restoreRendererState();
 
-    auto readback = readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight);
+    if(skipReadback) return {};
+    // Fake monitor rendering stores the top of the monitor at GL row zero.
+    // Keep crop coordinates in that same space for every monitor capture caller.
+    auto readback = readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight, true);
     if (budget && !readback.pixels.empty() && !budget->consume(readback.pixels.size()))
         return {};
     return readback;
@@ -2452,6 +2510,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
     }
 
     renderContext().m_blockSurfaceFeedback = true;
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
     g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
     renderContext().m_data.blockScreenShader = true;
@@ -2529,6 +2588,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
     }
 
     renderContext().m_blockSurfaceFeedback = true;
+    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
     g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     {
         ScopedTiming timing("realbg.render_workspace");
@@ -3456,6 +3516,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
 CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool quick) {
     CaptureSession session;
     session.regionCaptureAvailable = true;
+    session.scrollSessionVersion = 1;
     session.id = makeSessionId();
     session.defaults = defaults;
     if (g_pInputManager) {
@@ -3512,11 +3573,32 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         return session;
 
     const auto overviewSelectionGeometry = fetchHymissionOverviewSelectionGeometry();
+    const auto stageTargets = overviewSelectionGeometry.empty()
+        ? parseStageCaptureTargets(HyprlandAPI::invokeHyprctlCommand("hymission-stage-state", "", "json"))
+        : std::vector<StageCaptureTarget>{};
+    struct Candidate { PHLWINDOW window; const StageCaptureTarget* stage = nullptr; };
+    std::vector<Candidate> candidates;
+    const auto desktopWindows = windowsInRenderOrder();
+    for (const auto& window : desktopWindows)
+        if (!window->m_pinned || !window->m_isFloating)
+            candidates.push_back({window});
+    for (const auto& target : stageTargets) {
+        const auto window = findWindowByAddress(target.address);
+        if (isLiveWindowCaptureTarget(window))
+            candidates.push_back({window, &target});
+    }
+    // Pinned floating windows are drawn above Stage. Keep separate entries if
+    // a window appears both on the desktop and in an active-workspace card.
+    for (const auto& window : desktopWindows)
+        if (window->m_pinned && window->m_isFloating)
+            candidates.push_back({window});
     int z = 0;
     std::vector<PendingRealBackgroundCapture> pendingRealBackgrounds;
-    for (const auto& window : windowsInRenderOrder()) {
+    for (const auto& candidate : candidates) {
+        const auto& window = candidate.window;
         if (session.windows.size() >= MAX_SESSION_WINDOWS)
             break;
+        InactiveWorkspaceCaptureScope nativeWorkspace(window);
         const CBox fullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
         const Rect full = toRect(fullBox);
         auto monitor = window->m_monitor.lock();
@@ -3526,7 +3608,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         const std::string address = "0x" + pointerId(window.get());
         const auto overviewSelectionIt = overviewSelectionGeometry.find(address);
 
-        bool visible = overviewSelectionIt != overviewSelectionGeometry.end();
+        bool visible = candidate.stage || overviewSelectionIt != overviewSelectionGeometry.end();
         for (const auto& mon : session.monitors)
             visible = visible || intersects(full, mon.logicalGeometry);
         if (!visible)
@@ -3536,7 +3618,12 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.address = address;
         if (overviewSelectionIt != overviewSelectionGeometry.end())
             info.selectionGeometry = overviewSelectionIt->second;
-        if (isScrollingTiledWindow(window))
+        if (candidate.stage) {
+            info.stagePreview = true;
+            info.selectionRounding = candidate.stage->selectionRounding;
+            info.selectionGeometry = candidate.stage->selection;
+            info.selectionClipGeometry = candidate.stage->clip;
+        } else if (isScrollingTiledWindow(window))
             info.selectionClipGeometry = monitorRect(monitor);
         info.title = boundedString(window->metadata().title(), MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->metadata().appID(), MAX_WINDOW_METADATA_BYTES);
@@ -3547,7 +3634,8 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding());
         info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
         info.borderSize = dontRound || window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
-        const auto path = root / ("window-" + pointerId(window.get()) + ".rgba");
+        const std::string artifactId = pointerId(window.get()) + "-" + std::to_string(info.zIndex);
+        const auto path = root / ("window-" + artifactId + ".rgba");
         CBox artifactBox;
         const std::size_t windowIndex = session.windows.size();
         if (renderWindowImages && renderWindowArtifact(window, monitor, frozenTime, renderDecorations, path, info.artifactWidth, info.artifactHeight, artifactBox,
@@ -3559,7 +3647,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
                     .window = window,
                     .monitor = monitor,
                     .artifactBox = artifactBox,
-                    .path = root / ("window-real-" + pointerId(window.get()) + ".rgba"),
+                    .path = root / ("window-real-" + artifactId + ".rgba"),
                     .windowIndex = windowIndex,
                 });
             }
@@ -3618,11 +3706,7 @@ LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
     const int transform = std::clamp(static_cast<int>(target->m_transform), 0, 7);
     RgbaReadback readback;
     if (transform == 0) {
-        // Hyprland's fake monitor render is already top-down in GL row order.
-        // The generic framebuffer reader converts a top-origin crop to GL Y,
-        // so mirror the crop argument (not the resulting pixel rows) here.
-        const int readTop = positiveRoundedIntFromDouble(target->m_pixelSize.y) - y - height;
-        readback = renderMonitorReadback(target, Time::steadyNow(), x, readTop, width, height);
+        readback = renderMonitorReadback(target, Time::steadyNow(), x, y, width, height);
     } else {
         readback = renderMonitorReadback(target, Time::steadyNow(), 0, 0,
             positiveRoundedIntFromDouble(target->m_pixelSize.x), positiveRoundedIntFromDouble(target->m_pixelSize.y));
@@ -3671,6 +3755,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     if (!monitor)
         return {.success = false, .error = "window capture monitor unavailable"};
 
+    InactiveWorkspaceCaptureScope nativeWorkspace(window);
     CaptureSession session;
     session.id = makeSessionId();
     session.defaults = request->defaults;
@@ -3706,6 +3791,14 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     info.artifactPath = artifactPath.string();
     info.fullGeometry = toRect(artifactBox);
     session.windows.push_back(std::move(info));
+
+    if (request->defaults.windowBackground == WindowBackground::Real) {
+        PendingRealBackgroundCapture background{
+            .window = window, .monitor = monitor, .artifactBox = artifactBox,
+            .path = root / ("window-real-" + pointerId(window.get()) + ".rgba"), .windowIndex = 0,
+        };
+        renderRealBackgroundArtifactsForMonitor(monitor, Time::steadyNow(), {&background}, session, artifactBudget);
+    }
 
     const auto responseJson = encodeSessionJson(session);
     if (!writePrivateResponseFile(path, responseJson)) {
@@ -4412,6 +4505,8 @@ LaunchResult stopWindowStreamFromRequestFile(const std::string& path) {
     return {.success = true};
 }
 
+#include "plugin/scroll_session.inc"
+
 void resetRecordingCaptureState() {
     if (g_pHyprOpenGL)
         g_pHyprOpenGL->makeEGLCurrent();
@@ -4473,6 +4568,9 @@ void cleanupCompositorArtifacts(const CaptureSession& session) {
 }
 
 void shutdownArtifactCapture() {
+    stopScrollSession();
+    removeRealBackgroundHook(g_scrollLayerHook);
+    g_scrollLayerOriginal=nullptr;
     shutdownExportPipeWriters();
     stopWindowStreamSession();
     if (g_pHyprOpenGL)

@@ -1,0 +1,10 @@
+{
+  "cancel_restores_image_geometry_history": true,
+  "scale": 2,
+  "case": "cancel-2-negative",
+  "isolated_compositor": true,
+  "monitor_origin": [
+    -1280,
+    -100
+  ]
+}

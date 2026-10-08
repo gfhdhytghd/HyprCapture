@@ -1,6 +1,7 @@
 #include "ui/scroll_capture.hpp"
 #include <QApplication>
 #include <QPushButton>
+#include <QLabel>
 #include <QSignalSpy>
 #include <QTest>
 #include <cstdlib>
@@ -16,17 +17,12 @@ int main(int argc, char** argv) {
     const QList<QRect> screens{QRect(0, 0, 1920, 1080)};
     const QRect selected(80, 100, 1000, 800);
     auto placed = scrollControlsPlacement(selected, screens, bar);
-    require(placed.isValid() && screens.front().contains(placed) && !placed.intersects(selected), "controls stay out of captured pixels");
-    require(!scrollControlsPlacement(screens.front(), screens, bar).isValid(), "full monitor selection has no free control space");
-    const QList<QRect> dual{screens.front(), QRect(-1920, -200, 1920, 1080)};
-    placed = scrollControlsPlacement(screens.front(), dual, bar);
-    require(placed.isValid() && dual[1].contains(placed), "other monitor with negative origin");
-    const QRect negativeSelection(-1800, -100, 900, 600);
-    placed = scrollControlsPlacement(negativeSelection, {dual[1]}, bar);
-    require(placed.isValid() && dual[1].contains(placed) && !placed.intersects(negativeSelection), "negative selection coordinates");
-    placed = scrollControlsPlacement(QRect(0, 58, 1920, 1022), screens, bar);
-    require(placed.isValid() && placed.bottom() < 58, "controls fit outside app below a normal desktop bar");
-    require(!scrollControlsPlacement({}, screens, bar).isValid(), "invalid selection rejected");
+    require(placed.isValid() && screens.front().contains(placed), "preview on capture monitor");
+    require(scrollControlsPlacement(screens.front(), screens, bar).isValid(), "full monitor selection supported by native layer exclusion");
+    const QRect negative(-1920,-200,1920,1080);
+    placed=scrollControlsPlacement(QRect(-1800,-100,900,600),{negative},bar);
+    require(negative.contains(placed),"negative monitor placement");
+    require(!scrollControlsPlacement({},screens,bar).isValid(),"invalid selection");
     ScrollCaptureController controller;
     QString error;
     require(!controller.prepare(selected, error) && !error.isEmpty(), "offscreen tests cannot capture the live desktop");
@@ -35,6 +31,13 @@ int main(int argc, char** argv) {
     auto* finish = controller.findChild<QPushButton*>("scrollCaptureFinish");
     auto* cancel = controller.findChild<QPushButton*>("scrollCaptureCancel");
     require(finish && !finish->isEnabled() && cancel, "no result before a real frame");
+    auto* preview=controller.findChild<QLabel*>("thumbnailImage");
+    auto* menu=controller.findChild<QWidget*>("thumbnailMenu");
+    require(preview && menu && menu->isHidden(), "preview uses the result thumbnail image with collapsed actions");
+    require(preview->toolTip().isEmpty(), "preview help cannot spawn a fullscreen tooltip");
+    controller.show();
+    QTest::mouseClick(preview,Qt::RightButton);
+    require(menu->isVisible(), "right click reveals finish and cancel actions");
     QSignalSpy cancelled(&controller, &ScrollCaptureController::cancelled);
     cancel->click();
     cancel->click();

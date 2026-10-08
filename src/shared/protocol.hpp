@@ -50,6 +50,8 @@ struct WindowInfo {
     Rect        fullGeometry;
     std::optional<Rect> selectionGeometry;
     std::optional<Rect> selectionClipGeometry;
+    std::optional<double> selectionRounding;
+    bool        stagePreview = false;
     double      rounding = 0.0;
     double      roundingPower = 2.0;
     double      borderSize = 0.0;
@@ -68,6 +70,7 @@ struct WindowInfo {
 struct CaptureSession {
     std::string              id;
     bool                     regionCaptureAvailable = false;
+    int                      scrollSessionVersion = 0;
     CaptureDefaults          defaults;
     std::optional<Point>     cursorPosition;
     std::vector<MonitorInfo> monitors;

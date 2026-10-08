@@ -4,6 +4,9 @@
 #include <QRect>
 #include <QWidget>
 #include <memory>
+#include "ui/scroll_stitcher.hpp"
+
+struct AnnotationSnapshot;
 
 // An image editor embedded in the capture overlay. Annotation coordinates are
 // native image pixels, independent of display scale, zoom and the export path.
@@ -20,6 +23,13 @@ class AnnotationEditor final : public QWidget {
     void setRegionResizeBounds(const QRect& bounds);
     void replaceCaptureImage(const QImage& image, const QRect& displayRect);
 
+    std::shared_ptr<const AnnotationSnapshot> snapshot() const;
+    void restore(const std::shared_ptr<const AnnotationSnapshot>& snapshot);
+    // Original object coordinates and history remain immutable as the canvas grows.
+    void setScrollImage(const QImage& image, const hyprcapture::ui::ScrollLayout& layout, bool live);
+    void setScrollEnabled(bool enabled);
+    void setAnnotationPresentation(bool ready, qreal opacity = 1, qreal offset = 0);
+    QImage annotatedPreview(const QImage& preview, const hyprcapture::ui::ScrollLayout& layout) const;
     QRect canvasGeometry() const;
     QWidget* toolbarWidget() const;
     QRect toolbarGeometry() const;
@@ -35,6 +45,7 @@ class AnnotationEditor final : public QWidget {
     void setImageDisplayRect(const QRect& rect);
 
   signals:
+    void scrollRequested(const QPointF& globalPosition, double delta, int discrete, bool finger, bool inverted);
     void confirmRequested();
     void cancelRequested();
     void pinRequested();
@@ -44,6 +55,7 @@ class AnnotationEditor final : public QWidget {
     void toolbarGeometryChanged(const QRect& geometry);
 
   protected:
+    bool eventFilter(QObject* object, QEvent* event) override;
     void changeEvent(QEvent* event) override;
     void resizeEvent(QResizeEvent* event) override;
     void hideEvent(QHideEvent* event) override;

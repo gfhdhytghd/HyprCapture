@@ -1,4 +1,5 @@
 #include "ui/result_thumbnail.hpp"
+#include "ui/thumbnail_style.hpp"
 
 #include "ui/clipboard_utils.hpp"
 #include "ui/i18n.hpp"
@@ -48,10 +49,8 @@
 
 namespace {
 
-constexpr int kThumbnailMaxWidth = 180;
-constexpr int kThumbnailMaxHeight = 120;
-constexpr qreal kThumbnailMaxDevicePixelRatio = 4.0;
-constexpr int kThumbnailScreenMargin = 24;
+using hyprcapture::ui::thumbnail::kThumbnailScreenMargin;
+
 constexpr int kTranscodeProgressRingSize = 64;
 constexpr double kSwipeCloseThreshold = 120.0;
 constexpr double kSwipeDeleteThreshold = 90.0;
@@ -71,44 +70,6 @@ QColor interpolateColor(const QColor& from, const QColor& to, double amount) {
     return QColor(mix(from.red(), to.red()), mix(from.green(), to.green()), mix(from.blue(), to.blue()), mix(from.alpha(), to.alpha()));
 }
 
-qreal thumbnailTargetDevicePixelRatio(const QPixmap& pixmap, const QScreen* targetScreen) {
-    qreal dpr = std::max<qreal>(1.0, pixmap.devicePixelRatio());
-    const QScreen* screen = targetScreen;
-    if (!screen)
-        screen = QGuiApplication::screenAt(QCursor::pos());
-    if (!screen)
-        screen = QGuiApplication::primaryScreen();
-    if (screen)
-        dpr = std::max(dpr, screen->devicePixelRatio());
-    return std::clamp(dpr, qreal{1.0}, kThumbnailMaxDevicePixelRatio);
-}
-
-QPixmap scaledThumbnailPixmap(const QPixmap& pixmap, const QScreen* targetScreen) {
-    if (pixmap.isNull())
-        return {};
-
-    const QSizeF logicalPixmapSize = pixmap.deviceIndependentSize();
-    QSize targetLogicalSize(std::max(1, static_cast<int>(std::ceil(logicalPixmapSize.width()))),
-                            std::max(1, static_cast<int>(std::ceil(logicalPixmapSize.height()))));
-    if (logicalPixmapSize.width() > kThumbnailMaxWidth || logicalPixmapSize.height() > kThumbnailMaxHeight)
-        targetLogicalSize = targetLogicalSize.scaled(kThumbnailMaxWidth, kThumbnailMaxHeight, Qt::KeepAspectRatio);
-    targetLogicalSize = targetLogicalSize.expandedTo(QSize(1, 1));
-
-    qreal dpr = thumbnailTargetDevicePixelRatio(pixmap, targetScreen);
-    dpr = std::min(dpr, static_cast<qreal>(pixmap.width()) / targetLogicalSize.width());
-    dpr = std::min(dpr, static_cast<qreal>(pixmap.height()) / targetLogicalSize.height());
-    dpr = std::clamp(dpr, qreal{1.0}, kThumbnailMaxDevicePixelRatio);
-
-    const QSize targetPhysicalSize(std::max(1, static_cast<int>(std::ceil(targetLogicalSize.width() * dpr))),
-                                   std::max(1, static_cast<int>(std::ceil(targetLogicalSize.height() * dpr))));
-
-    QPixmap scaledPixmap = pixmap;
-    if (scaledPixmap.size() != targetPhysicalSize || !qFuzzyCompare(scaledPixmap.devicePixelRatio(), dpr)) {
-        scaledPixmap = scaledPixmap.scaled(targetPhysicalSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-        scaledPixmap.setDevicePixelRatio(dpr);
-    }
-    return scaledPixmap;
-}
 
 } // namespace
 
@@ -359,9 +320,8 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     const QColor bg = palette.color(QPalette::Window);
     const QColor fg = palette.color(QPalette::WindowText);
     const QColor highlight = palette.color(QPalette::Highlight);
-    setStyleSheet(QStringLiteral(
+    setStyleSheet(hyprcapture::ui::thumbnail::imageStyleSheet() + QStringLiteral(
                       "#thumbnail { background: transparent; border: none; }"
-                      "#thumbnailImage { background: transparent; border: none; }"
                       "#thumbnailMenu { background: rgba(%1,%2,%3,242); border: 1px solid rgba(%4,%5,%6,90); border-radius: 7px; }"
                       "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,242); border: 1px solid rgba(%4,%5,%6,90); border-radius: 7px; }"
                       "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; border-radius: 5px; text-align: left; }"
@@ -453,7 +413,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     m_menuShell->hide();
     layout->addWidget(m_menuShell, 0, Qt::AlignRight);
 
-    QPixmap scaledPixmap = scaledThumbnailPixmap(pixmap, targetScreen);
+    QPixmap scaledPixmap = hyprcapture::ui::thumbnail::scaledPixmap(pixmap, targetScreen);
     const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize();
     m_card = new QWidget(this);
     m_card->setObjectName("thumbnailImageCard");
@@ -796,7 +756,7 @@ void ResultThumbnail::leaveEvent(QEvent*) {
 void ResultThumbnail::setImagePixmap(const QPixmap& pixmap) {
     if (!m_imageLabel || pixmap.isNull())
         return;
-    m_imageLabel->setPixmap(scaledThumbnailPixmap(pixmap, m_targetScreen));
+    m_imageLabel->setPixmap(hyprcapture::ui::thumbnail::scaledPixmap(pixmap, m_targetScreen));
 }
 
 void ResultThumbnail::setTranscodeProgress(double progress) {

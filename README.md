@@ -10,6 +10,8 @@ HyprCapture is a Hyprland-only screenshot tool split into a compositor plugin an
 
 All Hyprland configuration examples in this document use the Lua config API available in Hyprland 0.56 and later.
 
+See the [changelog](https://gfhdhytghd.github.io/HyprCapture/) for release history and unreleased changes.
+
 > [!IMPORTANT]
 > `hyprpm` builds the compositor plugin and installs the helper to `~/.local/bin/hyprcapture-ui`. Set `plugin.hyprcapture.helper` with `hl.config` only when you want to override that default helper path.
 
@@ -42,7 +44,7 @@ The screenshot annotation interface is inspired by [Omarchy Screenshot](https://
 - Recording does not use `wf-recorder`, `grim`, screencopy, PipeWire portals, or Hyprland managed screenshare sessions
 
 
-https://github.com/user-attachments/assets/2c986639-7a3d-44ee-9f33-1b9b79ad9f1d
+https://github.com/user-attachments/assets/03a642d3-569d-4b77-8ccf-17934620bc20
 
 
 ## Installation
@@ -53,8 +55,9 @@ https://github.com/user-attachments/assets/2c986639-7a3d-44ee-9f33-1b9b79ad9f1d
 - `pkg-config`
 - a C++23-capable compiler
 - nlohmann-json
-- Qt 6 Core, Gui, and Widgets
+- Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
+- OpenCV `core` and `imgproc` (CPU image registration; no neural-network runtime)
 - libpipewire-0.3 development headers (`libpipewire` on Arch, `libpipewire-0.3-dev` on Debian/Ubuntu)
 - PipeWire development files, FFTW3 and FFmpeg libswresample/libavutil for the native DTLN-AEC candidate
 - Optional TensorFlow Lite 2.14.0 runtime (installed by `hyprcapture-install-aec`); OpenVINO is only needed for experimental NPU
@@ -83,6 +86,59 @@ hl.permission("/usr/(bin|local/bin)/hyprpm", "plugin", "allow")
 
 Do not also manually `hyprctl plugin load` the same `.so` if you manage it through `hyprpm`.
 
+### Install on Arch Linux
+
+These steps target Arch's official `hyprland` package and Hyprland 0.56 or later. If you use `hyprland-git` or a custom build, keep its matching development headers instead of replacing it with the repository package.
+
+#### 1. Install dependencies
+
+Perform a full system upgrade while installing the build tools and libraries:
+
+```sh
+sudo pacman -Syu --needed base-devel cmake git cpio \
+    hyprland nlohmann-json lua glib2 \
+    qt6-base qt6-svg qt6-wayland layer-shell-qt opencv \
+    pipewire libpipewire fftw libpulse ffmpeg wl-clipboard
+```
+
+`base-devel` supplies GCC, Make, and `pkgconf` (the `pkg-config` command), but not CMake. [Qt SVG](https://archlinux.org/packages/extra/x86_64/qt6-svg/) is a separate package; `qt6-wayland` supplies the helper's native Wayland support. `libpipewire` supplies the PipeWire development files, and `ffmpeg` supplies both the recording tools and the required FFmpeg libraries. `git` and `cpio` are used by `hyprpm` when preparing sources and headers.
+
+For sound recording, use a running PulseAudio server or PipeWire's PulseAudio compatibility service. If your desktop uses PipeWire, install the service and session manager if missing:
+
+```sh
+sudo pacman -S --needed pipewire-pulse wireplumber
+```
+
+Keep your existing PulseAudio setup if you use it; `pipewire-pulse` replaces the PulseAudio server. If the upgrade changed Hyprland or you changed audio services, log out and back in before continuing so the running session matches the installed packages.
+
+#### 2. Build and enable the plugin
+
+Run these commands as your normal desktop user, inside the Hyprland session:
+
+```sh
+hyprpm update
+hyprpm add https://github.com/gfhdhytghd/HyprCapture
+hyprpm enable hyprcapture
+hyprpm reload
+```
+
+If you use Hyprland's permission system, first add the `hyprpm` permission shown in [Install with `hyprpm`](#install-with-hyprpm). The manifest builds and tests the plugin and installs `hyprcapture-ui` to `~/.local/bin`; no separate manual helper installation is needed.
+
+The installer also attempts to prepare the optional DTLN-AEC runtime. If it reports that AEC is pending, normal capture remains available; retry later with `~/.local/bin/hyprcapture-install-aec`.
+
+#### 3. Configure and check capture
+
+Add the Lua shortcuts from [Lua actions and key bindings](#lua-actions-and-key-bindings) to your Hyprland Lua configuration and reload the config. The examples bind **Super + Shift + S** to the overlay, **Super + Shift + W** to window capture, and **Super + Shift + F** to fullscreen capture.
+
+Check that the plugin is loaded and the helper was installed:
+
+```sh
+hyprctl plugin list
+test -x "$HOME/.local/bin/hyprcapture-ui" && echo "HyprCapture helper installed"
+```
+
+Press **Super + Shift + S**, take a screenshot, and verify saving or copying it. If the build reports missing `Qt6Svg`, install `qt6-svg`; if it reports missing `libpipewire-0.3`, install `libpipewire`. For a Hyprland version/header mismatch after an upgrade, restart into the updated Hyprland session, run `hyprpm update`, then `hyprpm reload`.
+
 ### Install on NixOS
 
 For this development branch, the example below pins the adaptation target. Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
@@ -98,6 +154,8 @@ For this development branch, the example below pins the adaptation target. Add H
   };
 }
 ```
+
+After changing the release tag, run `nix flake update hyprland hyprcapture` from your configuration's flake directory and rebuild. Ensure the system's Hyprland package also uses this same input; setting Home Manager's `package = null` does not automatically make the plugin build against the system compositor. Log out and back in after upgrading Hyprland so the running compositor matches the rebuilt plugin.
 
 With the Home Manager Hyprland module:
 
@@ -214,6 +272,7 @@ Build outputs:
 
 ```lua
 hl.bind("SUPER + SHIFT + s", hl.plugin.hyprcapture.open)
+hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.open_editor)
 
 hl.bind("SUPER + SHIFT + w", function()
     hl.plugin.hyprcapture.open("window")
@@ -226,15 +285,18 @@ end)
 
 | Lua action | Description |
 | --- | --- |
-| `hl.plugin.hyprcapture.open()` | Open the overlay using `default_mode`. |
-| `hl.plugin.hyprcapture.open(mode)` | Open the overlay in `region`, `fullscreen`, or `window` mode. |
+| `hl.plugin.hyprcapture.open()` | Select a screenshot target using `default_mode`, then capture without the annotation toolbar. |
+| `hl.plugin.hyprcapture.open(mode)` | Select a target in `region`, `fullscreen`, or `window` mode, then capture without the annotation toolbar. |
+| `hl.plugin.hyprcapture.open_editor()` | Select a screenshot target using `default_mode`, then open the annotation toolbar before output. |
+| `hl.plugin.hyprcapture.open_editor(mode)` | Select a target in `region`, `fullscreen`, or `window` mode, then open the annotation toolbar before output. |
 | `hl.plugin.hyprcapture.quick()` | Capture immediately using `default_mode`; disabled unless `allow_quick = true`. |
 | `hl.plugin.hyprcapture.quick(mode)` | Capture immediately in `region`, `fullscreen`, or `window` mode; disabled unless `allow_quick = true`. |
 | `hl.plugin.hyprcapture.export_pipe(fifo)` | Export fullscreen compositor RGBA frames to a trusted private FIFO client. Intended for tools such as screenland. |
 | `hl.plugin.hyprcapture.cancel()` | Reserved action; currently returns successfully without changing an active helper. |
 
-Available Lua functions are `open`, `quick`, `record`, `record_toggle`, `record_stop`, `record_start`, `window_capture`, `export_pipe`, `cancel`, and `dispatch`.
+Available Lua functions are `open`, `open_editor`, `quick`, `record`, `record_toggle`, `record_stop`, `record_start`, `window_capture`, `export_pipe`, `cancel`, and `dispatch`.
 `dispatch` accepts the dispatcher name plus an optional argument, for example `hl.plugin.hyprcapture.dispatch("open", "fullscreen")`.
+Use `hl.plugin.hyprcapture.dispatch("open_editor", "fullscreen")` for the editor flow.
 
 Use lowercase `s` for `SUPER + s`. In Lua config key strings, uppercase `S` means Shift is part of the binding.
 
@@ -249,17 +311,21 @@ Use lowercase `s` for `SUPER + s`. In Lua config key strings, uppercase `S` mean
 
 ### Scrolling screenshots
 
-Click **Scrolling capture** (the vertical arrows) in the overlay toolbar, then drag a region around the scrolling content. Leave space outside the region for the capture controls. Scroll **down slowly**, pausing between movements: HyprCapture samples stable frames and appends matching content automatically. Click **Finish** to annotate, zoom, copy, save or pin the long image through the existing editor. **Cancel** returns to the selection without exporting.
+After selecting a region or window in `open_editor()` (or an `open()` confirmation session), scroll inside it to start a long screenshot. Ordinary `open()` and `quick()` retain their direct-output behavior. Use **Ctrl + wheel** to zoom while editing. The separate scrolling-mode button is no longer needed.
 
-Select content within one monitor and exclude fixed headers, footers, sidebars and scrollbars. Scrolling capture uses the plugin's native cursor-free renderer; both the plugin and helper must be updated for the button to appear. It does not drive application scrolling. If the page moves too far or has ambiguous repeating content, no pixels are appended and the controls ask you to scroll back slightly. Upward scrolling does not extend the image. Animated or changing pages may not align reliably.
+Scroll in either direction, including back over captured content. A live preview appears at the bottom right; click it or **Finish** to move the image smoothly into the central editor. Pausing does not finish the session. **Cancel** restores the original selection, annotations and undo history; the source application stays at its current scroll position.
 
-Capture stops at 200 accepted frames, 64 megapixels, 32,768 pixels in height, or five minutes; an existing result can still be finished. A display change or capture failure also stops sampling while retaining the collected result. A single sampled region is limited to 32 megapixels and 16,384 pixels per side.
+On touchscreens, one finger draws with the current tool and two fingers scroll the source application. A second finger cancels the unfinished stroke; lift all fingers before drawing again. During scrolling, annotations move slightly and fade out. Once the page is stable and aligned, they reappear at their measured content positions and drawing resumes. In the completed editor, two fingers pan the long image.
+
+The plugin captures native, cursor-free frames while excluding this helper's layers. A window uses its own native render; a region stays within one monitor. Fixed headers and footers are retained once. Fixed sidebars expand at a quiet pixel band near the bottom, outside the footer: a linear gradient fills the added space without stretching text or icons. Dense stationary backgrounds can repeat captured pixel blocks while moving foreground anchors determine alignment. If there is no safe insertion band or alignment is ambiguous, capture retains confirmed content and asks you to recover overlap.
+
+Image matching uses a bounded CPU worker and preserves source pixels; it does not infer displacement from wheel distances. The limits are 200 accepted frames, 64 megapixels, 32,768 output rows and five minutes. Closing the target or changing its geometry/scale stops new capture and leaves confirmed content available. Both plugin and helper must support scroll-session version 1; older plugins retain ordinary capture and editing.
 
 ### In-place screenshot editing
 
-Set `in_place_edit_toolbar = true` to keep the capture overlay open after selecting a screenshot target. The editor shows the rendered screenshot with the configured window background, border, shadow, cursor, and watermark options. Annotations use native image coordinates, so exported edits retain their position at the original capture resolution.
+Use `hl.plugin.hyprcapture.open_editor()` or `open_editor(mode)` to keep the capture overlay open after selecting a screenshot target. Bind it to a separate shortcut from `open()` to choose the editor or direct-output flow for each capture. The editor shows the rendered screenshot with the configured window background, border, shadow, cursor, and watermark options. Annotations use native image coordinates, so exported edits retain their position at the original capture resolution.
 
-The switch is off by default. When enabled it replaces the extra `confirm_before_capture` step, including for quick screenshots. Full-desktop captures that extend outside the active output are fitted into the editor. Window captures remain at their original desktop position, including windows that cross an output edge; Ctrl + 0 fits them on demand.
+The `in_place_edit_toolbar` configuration option has been removed: delete it from existing configs and use `open_editor()` for shortcuts that need editing. `open()` keeps the existing `confirm_before_capture` behavior, while `open_editor()` uses the editor's confirmation instead. `quick()` captures without entering the editor. Full-desktop captures that extend outside the active output are fitted into the editor. Window captures remain at their original desktop position, including windows that cross an output edge; Ctrl + 0 fits them on demand.
 
 The annotation toolbar provides selection and movement, outlined or filled rectangles (including rounded corners) and ellipses, straight/curved/double-headed arrows, lines, pen, highlighter, multiline text, numbered markers, opaque mosaic, and elliptical spotlight. It also includes undo/redo, preset or custom colors, stroke width, and light/dark toolbar themes. Text entry stays in a visible box inside the capture overlay. Drag empty space inside the text box or its border to move it; drag a corner or the short handle at the center of each edge to resize; text wraps to the box width. A separate floating toolbar follows the text box, with controls for a scalable system font, pixel size with +/− buttons, and color. The color input sits beside the palette button on the second row. Its color picker provides a visual saturation/value palette and hue strip, presets, and hexadecimal input. Enter inserts a new line, Ctrl + Enter confirms, and Esc cancels the text edit. Font, color, size, and box geometry survive confirmation, undo/redo, and reopening. Click existing text with the selection or text tool to edit it, or press Delete to remove a selected annotation.
 
@@ -270,6 +336,25 @@ Use the wheel to zoom around the cursor, Space + left drag or middle drag to pan
 Tool shortcuts: V selection, R rectangle, E ellipse, A arrow, W line, D pen, H highlighter, T text, B numbered marker, G mosaic, Shift + B spotlight, and Shift + D filled rectangle. Color, stroke width, and toolbar theme are remembered in `~/.config/hyprcapture/editor.ini`.
 
 Pins stay above normal windows, support dragging across outputs and wheel zoom, and close with their × button or Esc after focusing the pin. Each pin has its own helper process, so later captures can create additional pins. Pinning also follows the configured screenshot saving, clipboard, and thumbnail settings; disabled outputs remain disabled.
+
+### Hymission Stage window capture
+
+With a matching Hymission build, window mode and fusion-mode clicks can select
+individual windows inside the Stage sidebar. The highlight follows the actual
+preview and its card clipping; the screenshot renders the original window at
+native resolution, including windows on inactive workspaces, without activating
+them. Pinned floating windows retain priority above the sidebar.
+
+`open_editor()` opens a Stage-selected image centered and fitted into the editor;
+zoom and pan affect only its display, not the saved resolution. Desktop window
+captures retain their normal position. A fullscreen window selected inside Stage
+is captured as a window rather than redirecting to the current monitor. If the
+window closes before capture, no thumbnail or unrelated desktop crop is used as
+a substitute.
+
+This integration requires Hymission's `hymission-stage-state` response to expose
+`captureVersion: 1` and `captureWindows`. Older Hymission builds keep ordinary
+window/overview capture but do not expose Stage targets. Update both plugins.
 
 ### UI language
 
@@ -356,7 +441,6 @@ hl.config({
             save = true,
             clipboard = true,
             show_thumbnail = true,
-            in_place_edit_toolbar = false,
             language = "auto",
             remember_settings = false,
             allow_quick = false,
@@ -422,7 +506,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
-| `default_mode` | string | `region` | Default mode for `hl.plugin.hyprcapture.open()` and `hl.plugin.hyprcapture.quick()`. Supports `region`, `fullscreen`, and `window`. |
+| `default_mode` | string | `region` | Default mode for `hl.plugin.hyprcapture.open()`, `open_editor()`, and `quick()`. Supports `region`, `fullscreen`, and `window`. |
 | `fullscreen_scope` | string | `all` | Fullscreen capture scope. Supports `all`, `current`, and `per-monitor`. |
 | `overlay_scope` | string | `fix` | Overlay monitor behavior. `fix` keeps it on the monitor where capture starts, `focus` moves it to the monitor under the pointer while it is open, and `all` shows it on every monitor. The legacy typo `forcus` is accepted as `focus`. |
 | `window_background` | string | `follow-system` | Background behind transparent window pixels. Supports `follow-system`, `white`, `black`, `real`, and `transparent`. |
@@ -430,7 +514,6 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `window_shadow` | string | `keep` | Window shadow policy. Supports `keep` and `remove`. Transparent window recordings keep shadows and normalize the alpha falloff so the shadow fades out instead of encoding as a hard border. |
 | `notification_backend` | string | `hyprland` | Backend for screenshot notifications plus non-error recording status and warnings. `hyprland` uses Hyprland's overlay; `system` uses the desktop notification service through `notify-send` (libnotify), includes the saved screenshot as its image/icon hint, and falls back to the Hyprland overlay when the command cannot be launched. Errors always use the Hyprland overlay so missing external notification infrastructure cannot hide failures. |
 | `include_cursor` | bool | `false` | Include the cursor visible when the capture session starts in fullscreen, region, and window screenshots. The interactive overlay cursor is not baked into the output. |
-| `in_place_edit_toolbar` | bool | `false` | Keep the screenshot overlay open after selection to edit the rendered capture and its background. ✓ or Enter continues with configured save/clipboard settings; × cancels. Pin is in the overflow menu. Recording uses its existing flow. |
 | `language` | string | `auto` | UI language: `auto`, `en`, `zh_CN`, `zh_TW`, `ja`, `de`, `fr`, `es`, or `ko`. `auto` uses `HYPRCAPTURE_LANGUAGE` when set, then the system locale. Explicit language values take precedence; missing translations fall back to English. |
 | `remember_settings` | bool | `false` | Restore only dropdown choices: fullscreen scope, window background, recording format/codec/FPS/duration/backend and sound mode/devices/mix preset. Capture mode and volume sliders are not saved or restored. Saves on capture or cancel (including Esc) to `$XDG_CONFIG_HOME/hyprcapture/last-settings.ini` (default `~/.config/hyprcapture/last-settings.ini`). Quick capture and the stop-recording UI bypass this state. The open/record dispatcher still determines screenshot versus recording. Saved choices override configured defaults while enabled; disabling this option uses the configured defaults again. |
 | `allow_quick` | bool | `false` | Enable no-confirmation `hl.plugin.hyprcapture.quick()` calls. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |

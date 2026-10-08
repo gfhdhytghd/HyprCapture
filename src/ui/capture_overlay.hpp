@@ -2,6 +2,7 @@
 
 #include "shared/config.hpp"
 #include "ui/overlay_paint.hpp"
+#include "ui/scroll_stitcher.hpp"
 
 #include <QImage>
 #include <QMainWindow>
@@ -33,6 +34,7 @@ class AnnotationEditor;
 
 namespace hyprcapture::ui {
 struct ClipboardSnapshotData;
+class ScrollCaptureController;
 }
 
 class CaptureOverlay final : public QMainWindow {
@@ -89,12 +91,15 @@ class CaptureOverlay final : public QMainWindow {
         QRect   fullGeometry;
         QRect   visibleGeometry;
         QRect   selectionGeometry;
+        std::optional<double> selectionRounding;
         QRect   selectionClipGeometry;
+        bool    stagePreview = false;
         double  rounding = 0.0;
         double  roundingPower = 2.0;
         double  borderSize = 0.0;
         QImage  image;
         QImage  realBackground;
+        bool    realBackgroundAttempted = false;
         QString address;
         QString title;
         QString appClass;
@@ -130,6 +135,8 @@ class CaptureOverlay final : public QMainWindow {
     void beginInPlaceEdit(const QImage& capturedImage = {});
     void beginScrollCapture();
     void refreshInPlaceImage();
+    QImage scrollWindowBackground(const QImage& frame, const QRect& geometry);
+    QImage renderScrollResultImage();
     void leaveInPlaceEdit();
     void exportInPlaceImage();
     void pinInPlaceImage();
@@ -223,13 +230,18 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_quick = false;
     bool                      m_record = false;
     bool                      m_recordActive = false;
-    bool                      m_scrollMode = false;
     bool                      m_scrolling = false;
     bool                      m_scrollResult = false;
+    QImage                    m_scrollOriginal, m_scrollFirstFrame;
+    QRect                     m_scrollGeometry;
+    hyprcapture::ui::ScrollLayout m_scrollLayout;
     QString                   m_recordError;
     bool                      m_sessionDecoded = false;
     bool                      m_regionCaptureAvailable = false;
+    int                       m_scrollSessionVersion = 0;
+    hyprcapture::ui::ScrollCaptureController* m_scrollController = nullptr;
     bool                      m_hymissionOverviewSession = false;
+    bool                      m_hymissionStageSession = false;
     bool                      m_hymissionCaptureInputSuppressed = false;
     bool                      m_confirmBeforeCapture = false;
     bool                      m_pendingConfirm = false;
@@ -259,7 +271,6 @@ class CaptureOverlay final : public QMainWindow {
     QString                   m_hymissionCaptureInputToken;
 
     QWidget*     m_toolbar = nullptr;
-    QPushButton* m_scrollToggle = nullptr;
     QGraphicsOpacityEffect* m_toolbarOpacity = nullptr;
     QPropertyAnimation* m_fadeAnimation = nullptr;
     InlineSelect* m_fullscreenScope = nullptr;
@@ -272,6 +283,8 @@ class CaptureOverlay final : public QMainWindow {
     InlineSelect* m_echoCancellation = nullptr;
     InlineSelect* m_echoBackend = nullptr;
     QLabel* m_aecStatus = nullptr;
+    QPushButton* m_aecTest = nullptr;
+    QString m_aecTestResult;
     bool m_aecChecking = false;
     QWidget* m_soundMixer = nullptr;
     InlineSelect* m_soundPreset = nullptr;

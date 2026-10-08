@@ -1,11 +1,14 @@
 #include "ui/annotation_editor.hpp"
 #include "ui/material_icon.hpp"
+#include "ui/touch_gesture.hpp"
+#include <QPointingDevice>
 
 #include <QApplication>
 #include <QAbstractButton>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QImage>
+#include <QHelpEvent>
 #include <QListWidget>
 #include <QLineEdit>
 #include <QLabel>
@@ -110,6 +113,107 @@ void defaults() {
 class AnnotationEditorTest final : public QObject {
     Q_OBJECT
   private slots:
+    void touchGestureCancelsDraftAndRequiresAllFingersUp() {
+        using G=hyprcapture::ui::TouchGesture;
+        G g;
+        QCOMPARE(g.update({{1,{20,20}}}).front().action,G::Action::BeginStroke);
+        QCOMPARE(g.update({{1,{30,30}},{2,{50,30}}}).front().action,G::Action::CancelStroke);
+        auto u=g.update({{1,{30,10}},{2,{50,10}}});
+        QCOMPARE(u.front().action,G::Action::Scroll); QCOMPARE(u.front().delta,20.);
+        QCOMPARE(g.update({{1,{30,10}}}).front().action,G::Action::EndScroll);
+        QVERIFY(g.update({{1,{40,20}}}).empty()); g.update({});
+        QCOMPARE(g.update({{3,{10,10}}}).front().action,G::Action::BeginStroke);
+        QCOMPARE(g.update({{3,{10,10}}},true).front().action,G::Action::CancelStroke);
+        QVERIFY(g.update({{3,{30,40}}}).empty());
+    }
+    void canvasHelpDoesNotCreateNativeTooltip() {
+        AnnotationEditor editor;
+        initialize(editor,image({240,160},Qt::white));
+        auto* canvas=editor.findChild<QWidget*>("annotationCanvas");
+        QVERIFY(canvas);
+        QVERIFY(canvas->toolTip().isEmpty());
+        QVERIFY(!canvas->accessibleDescription().isEmpty());
+    }
+    void finalTouchPanIncludesHorizontalMotion() {
+        using Gesture=hyprcapture::ui::TouchGesture;
+        Gesture gesture;
+        gesture.update({{1,{10,20}},{2,{30,20}}},false,true);
+        const auto motion=gesture.update({{1,{25,20}},{2,{45,20}}},false,true);
+        QCOMPARE(motion.size(),1);
+        QCOMPARE(motion[0].action,Gesture::Action::Scroll);
+        QCOMPARE(motion[0].movement,QPointF(15,0));
+        QCOMPARE(motion[0].delta,0.0);
+    }
+    void scrollingKeepsObjectsAndUndoAtDocumentCoordinates() {
+        AnnotationEditor editor; const QImage source=image({240,160},Qt::white); initialize(editor,source);
+        selectTool(editor,5); drag(editor,{60,40},{100,40});
+        const auto before=editor.resultImage(); const auto snapshot=editor.snapshot();
+        hyprcapture::ui::ScrollLayout layout{source.rect(),source.size()};
+        editor.setScrollImage(source,layout,true);
+        layout.minimumY=-80; layout.maximumY=120; layout.viewportY=120;
+        QImage output=image({240,360},Qt::white);
+        editor.setScrollImage(output,layout,false); editor.setImageDisplayRect({});
+        auto result=editor.resultImage(); QCOMPARE(result.pixelColor(80,120),QColor("#ff5252"));
+        editor.undo(); QCOMPARE(editor.resultImage(),output); editor.redo(); QCOMPARE(editor.resultImage(),result);
+        editor.restore(snapshot); QCOMPARE(editor.resultImage(),before);
+    }
+    void scrollingInkStaysPutWhileFadingThenRelocates() {
+        AnnotationEditor editor;
+        const auto source = image({240,160}, Qt::white);
+        initialize(editor, source);
+        selectTool(editor, 5);
+        drag(editor, {60,100}, {100,100});
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        hyprcapture::ui::ScrollLayout layout{source.rect(), source.size()};
+        editor.setScrollImage(source, layout, true);
+        editor.setAnnotationPresentation(false, 1, 0);
+        const auto before = canvas->grab().toImage();
+        QCOMPARE(before.pixelColor(displayed({80,100})), QColor("#ff5252"));
+        layout.viewportY = layout.maximumY = 20;
+        editor.setScrollImage(source, layout, true);
+        const auto fading = canvas->grab().toImage();
+        QCOMPARE(fading.pixelColor(displayed({80,100})), before.pixelColor(displayed({80,100})));
+        editor.setAnnotationPresentation(false, 0, -12);
+        const auto hidden = canvas->grab().toImage();
+        QVERIFY(hidden.pixelColor(displayed({80,100})) != QColor("#ff5252"));
+        editor.setAnnotationPresentation(true, 1, 0);
+        const auto stopped = canvas->grab().toImage();
+        QCOMPARE(stopped.pixelColor(displayed({80,80})), QColor("#ff5252"));
+        QVERIFY(stopped.pixelColor(displayed({80,100})) != QColor("#ff5252"));
+    }
+    void newCaptureResetsHiddenInkPresentation() {
+        AnnotationEditor editor;
+        const auto source = image({240,160}, Qt::white);
+        initialize(editor, source);
+        editor.setAnnotationPresentation(false, 0, -12);
+        editor.setImage(source);
+        selectTool(editor, 5);
+        drag(editor, {60,100}, {100,100});
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        QCOMPARE(canvas->grab().toImage().pixelColor(displayed({80,100})), QColor("#ff5252"));
+    }
+    void toolbarHelpCannotCreateNativeTooltipWindow() {
+        AnnotationEditor editor;
+        initialize(editor, image());
+        auto* button = editor.findChild<QToolButton*>("annotationTool5");
+        QVERIFY(button && !button->toolTip().isEmpty());
+        QHelpEvent help(QEvent::ToolTip, button->rect().center(), button->mapToGlobal(button->rect().center()));
+        QApplication::sendEvent(button, &help);
+        QCOMPARE(button->accessibleDescription(), button->toolTip());
+        for (auto* window : QApplication::topLevelWidgets())
+            QVERIFY(!window->isVisible() || window->windowType() != Qt::ToolTip);
+    }
+    void touchSecondFingerDoesNotCommitInkOrNumber() {
+        AnnotationEditor editor; auto source=image({240,160},Qt::white); initialize(editor,source); selectTool(editor,5);
+        auto* canvas=editor.findChild<QWidget*>("annotationCanvas");
+        auto* device=QTest::createTouchDevice(QInputDevice::DeviceType::TouchScreen);
+        QTest::touchEvent(canvas,device).press(0,displayed({40,40}),canvas);
+        QTest::touchEvent(canvas,device).move(0,displayed({80,40}),canvas);
+        QTest::touchEvent(canvas,device).stationary(0).press(1,displayed({100,50}),canvas);
+        QTest::touchEvent(canvas,device).release(0,displayed({80,40}),canvas).release(1,displayed({100,50}),canvas);
+        QCOMPARE(editor.resultImage(),source);
+        auto* undo=editor.findChild<QPushButton*>("annotationUndo"); if(undo) QVERIFY(!undo->isEnabled());
+    }
     void materialIconsRenderAtRequestedDeviceResolution() {
         const auto icon = hyprcapture::ui::materialIcon("edit", QColor("#26313d"));
         QVERIFY(!icon.isNull());
@@ -571,7 +675,7 @@ class AnnotationEditorTest final : public QObject {
         const QRect initialToolbar = editor.toolbarWidget()->geometry();
         const QPoint zoomPoint = initialImage.center();
         QWheelEvent zoom(zoomPoint, canvas->mapToGlobal(zoomPoint), {}, QPoint(0, 120),
-                         Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+                         Qt::NoButton, Qt::ControlModifier, Qt::NoScrollPhase, false);
         QApplication::sendEvent(canvas, &zoom);
         QTRY_VERIFY(editor.canvasGeometry().width() > initialImage.width());
         QTRY_VERIFY(editor.toolbarWidget()->geometry() != initialToolbar);

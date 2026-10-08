@@ -374,7 +374,7 @@ bool windowValue(const Json& obj, WindowInfo& out) {
         !intValue(obj, "realBackgroundWidth", window.realBackgroundWidth, 0, MAX_ARTIFACT_DIMENSION, false) ||
         !intValue(obj, "realBackgroundHeight", window.realBackgroundHeight, 0, MAX_ARTIFACT_DIMENSION, false) ||
         !boolValue(obj, "realBackgroundTopDown", window.realBackgroundTopDown, false) || !intValue(obj, "zIndex", window.zIndex, 0, MAX_SESSION_WINDOWS) ||
-        !boolValue(obj, "selectable", window.selectable, false))
+        !boolValue(obj, "selectable", window.selectable, false) || !boolValue(obj, "stagePreview", window.stagePreview, false))
         return false;
 
     if (!window.artifactPath.empty() && (window.artifactWidth <= 0 || window.artifactHeight <= 0))
@@ -393,6 +393,14 @@ bool windowValue(const Json& obj, WindowInfo& out) {
             return false;
         window.selectionClipGeometry = clip;
     }
+    if (obj.contains("selectionRounding")) {
+        double radius = 0;
+        if (!doubleValue(obj, "selectionRounding", radius, 0.0, 1000000.0, true))
+            return false;
+        window.selectionRounding = radius;
+    }
+    if (window.stagePreview && (!window.selectionGeometry || !window.selectionClipGeometry))
+        return false;
     out = std::move(window);
     return true;
 }
@@ -413,6 +421,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
     root["id"] = boundedString(session.id, MAX_METADATA_STRING_BYTES);
     root["defaults"] = defaultsJson(session.defaults);
     root["regionCaptureAvailable"] = session.regionCaptureAvailable;
+    root["scrollSessionVersion"] = session.scrollSessionVersion;
     if (session.cursorPosition)
         root["cursorPosition"] = pointJson(*session.cursorPosition);
 
@@ -469,6 +478,10 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"zIndex", std::clamp(win.zIndex, 0, static_cast<int>(MAX_SESSION_WINDOWS))},
             {"selectable", win.selectable},
         };
+        if (win.stagePreview)
+            windowJson["stagePreview"] = true;
+        if (win.selectionRounding)
+            windowJson["selectionRounding"] = boundedDouble(*win.selectionRounding, 0.0, 1000000.0, 0.0);
         if (win.selectionGeometry)
             windowJson["selectionGeometry"] = rectJson(*win.selectionGeometry);
         if (win.selectionClipGeometry)
@@ -488,6 +501,8 @@ std::optional<CaptureSession> decodeSessionJson(const std::string& json) {
         return std::nullopt;
 
     CaptureSession session;
+    if (!intValue(root, "scrollSessionVersion", session.scrollSessionVersion, 0, 65535, false))
+        return std::nullopt;
     if (!boolValue(root, "regionCaptureAvailable", session.regionCaptureAvailable, false))
         return std::nullopt;
     if (!stringValue(root, "id", session.id, MAX_METADATA_STRING_BYTES) || session.id.empty())
