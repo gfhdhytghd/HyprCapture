@@ -295,5 +295,17 @@
         }
       ]
     }
-  ]
+  ],
+  "unreleased": {
+    "since": "v0.3.0-0.56.2",
+    "summary": "Installation and build changes after 0.3.0.",
+    "sections": [
+      {
+        "title": "Build",
+        "items": [
+          "Keep the test suite available for development, but disable it by default and skip automatic tests in hyprpm and Nix builds. Enable tests manually with `-DBUILD_TESTING=ON`."
+        ]
+      }
+    ]
+  }
 }

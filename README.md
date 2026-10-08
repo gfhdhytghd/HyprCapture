@@ -116,7 +116,7 @@ hyprpm enable hyprcapture
 hyprpm reload
 ```
 
-If you use Hyprland's permission system, first add the `hyprpm` permission shown in [Install with `hyprpm`](#install-with-hyprpm). The manifest builds and tests the plugin and installs `hyprcapture-ui` to `~/.local/bin`; no separate manual helper installation is needed.
+If you use Hyprland's permission system, first add the `hyprpm` permission shown in [Install with `hyprpm`](#install-with-hyprpm). The manifest builds the plugin and installs `hyprcapture-ui` to `~/.local/bin`; no separate manual helper installation is needed.
 
 The installer also attempts to prepare the optional DTLN-AEC runtime. If it reports that AEC is pending, normal capture remains available; retry later with `~/.local/bin/hyprcapture-install-aec`.
 
@@ -180,9 +180,8 @@ The `hyprpm` manifest installs the helper automatically:
 
 ```toml
 build = [
-    "cmake -S . -B build-hyprpm -DCMAKE_BUILD_TYPE=Release",
+    "cmake -S . -B build-hyprpm -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF",
     "cmake --build build-hyprpm",
-    "ctest --test-dir build-hyprpm --output-on-failure",
     "install -Dm755 build-hyprpm/hyprcapture-ui \"$HOME/.local/bin/hyprcapture-ui\""
 ]
 ```
@@ -217,7 +216,6 @@ Build and install the helper:
 ```sh
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release
-ctest --test-dir build-release --output-on-failure
 install -Dm755 build-release/hyprcapture-ui "$HOME/.local/bin/hyprcapture-ui"
 ```
 
@@ -226,7 +224,6 @@ To build against a Hyprland source checkout, point CMake at the matching tree so
 ```sh
 cmake -S . -B build-local -DCMAKE_BUILD_TYPE=RelWithDebInfo -DHYPRLAND_SOURCE_DIR="$HOME/data/Hyprland"
 cmake --build build-local
-ctest --test-dir build-local --output-on-failure
 ```
 
 For development without installing, point `helper` at the build-tree executable or launch Hyprland with:
@@ -240,7 +237,7 @@ HYPRCAPTURE_HELPER=/path/to/hyprcapture-ui Hyprland
 For local development, the plugin output is `build-cmake/libhyprcapture.so`.
 
 ```sh
-cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Debug
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
 cmake --build build-cmake
 ctest --test-dir build-cmake --output-on-failure
 ```
@@ -614,10 +611,12 @@ The compositor recording path uses synchronous compositor readback. To avoid mak
 
 ## Development
 
+Tests are retained but disabled by default. Hyprpm and Nix builds explicitly disable them and do not run CTest. Enable them with `-DBUILD_TESTING=ON` when running the suite manually.
+
 Useful commands:
 
 ```sh
-cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Debug
+cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTING=ON
 cmake --build build-cmake
 ctest --test-dir build-cmake --output-on-failure
 ./build-cmake/hyprcapture-ui --help
