@@ -145,16 +145,24 @@ int main(int argc, char** argv) {
     waitForDiscovery(overlay);
     auto* discovered = visibleOption(overlay, expectedOutput);
     require(discovered && discovered->isVisible(), "async discovery must show device in open popup");
-    auto* viewport = discovered->parentWidget()->parentWidget();
-    require(viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size())), "discovered device must fit visible scroll viewport, not just hidden content");
+    waitFor([&] {
+        discovered = visibleOption(overlay, expectedOutput);
+        if (!discovered) return false;
+        auto* viewport = discovered->parentWidget()->parentWidget();
+        return viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size()));
+    }, "discovered device must fit visible scroll viewport, not just hidden content");
     QTest::mouseClick(discovered, Qt::LeftButton);
     require(button(overlay, "soundOutput")->toolTip().contains(expectedLabel), "discovered device selectable");
     QTest::mouseClick(button(overlay, "soundOutput"), Qt::LeftButton);
     waitForDiscovery(overlay);
     discovered = visibleOption(overlay, expectedOutput);
     require(discovered && discovered->isVisible(), "device survives repeated refresh");
-    viewport = discovered->parentWidget()->parentWidget();
-    require(viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size())), "reopening must not collapse popup to default row");
+    waitFor([&] {
+        discovered = visibleOption(overlay, expectedOutput);
+        if (!discovered) return false;
+        auto* viewport = discovered->parentWidget()->parentWidget();
+        return viewport->rect().contains(QRect(discovered->mapTo(viewport, QPoint(0, 0)), discovered->size()));
+    }, "reopening must not collapse popup to default row");
     QTest::mouseClick(discovered, Qt::LeftButton);
 
     choose(overlay, "soundOutput", "auto");
@@ -209,7 +217,7 @@ int main(int argc, char** argv) {
         waitFor([&] { return std::abs(meter->property("postGainPeak").toDouble() - .1) < .0001; }, "live helper telemetry reaches visible meter");
     } else meter->setLevels(.1, .05, true);
     gain->setValue(6);
-    require(std::abs(meter->property("postGainPeak").toDouble() - .199526) < .0001, "meter shows post gain samples");
+    waitFor([&] { return std::abs(meter->property("postGainPeak").toDouble() - .199526) < .0001; }, "meter shows post gain samples");
     gain->setValue(-61);
     require(meter->property("postGainPeak").toDouble() == 0, "mute truly silences meter");
     gain->setValue(6);
