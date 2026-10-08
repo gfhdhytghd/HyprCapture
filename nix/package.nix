@@ -30,7 +30,7 @@ let
   '';
 in hyprlandPlugins.mkHyprlandPlugin {
   pluginName = "hyprcapture";
-  version = "0.2.8";
+  version = "0.3.0";
   inherit src;
 
   nativeBuildInputs = [
