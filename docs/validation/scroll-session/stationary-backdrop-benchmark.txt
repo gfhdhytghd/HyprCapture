@@ -1,0 +1,53 @@
+Candidate
+frame,0,0.533255,0
+frame,720,25.6029,1
+frame,1440,20.404,1
+frame,2160,20.0241,1
+frame,2880,19.3145,1
+frame,3600,19.2486,1
+frame,4320,19.1431,1
+frame,5040,19.4876,1
+frame,5760,15.2518,1
+frame,6480,18.7787,1
+frame,7200,19.2732,1
+frame,7920,18.877,1
+frame,8640,19.2227,1
+frame,9360,19.0553,1
+frame,10080,18.9392,1
+frame,10800,18.7399,1
+frame,11520,18.9908,1
+frame,12240,19.2866,1
+frame,12960,19.2291,1
+frame,13680,18.8791,1
+frame,14400,19.4425,1
+frame,14944,18.8687,1
+summary,cpu=15,threads=1,opencl=0,frames=22,median_ms=19.2227,p95_ms=20.0241,max_ms=25.6029,assemble_ms=30.1961,total_ms=468.295,maxrss_kib=670924,pixel_exact=1
+VmHWM:	  671804 kB
+VmRSS:	  671804 kB
+
+Baseline (before matcher changes)
+frame,0,0.333601,0
+frame,720,27.5376,1
+frame,1440,19.2183,1
+frame,2160,19.7276,1
+frame,2880,19.2404,1
+frame,3600,21.6894,1
+frame,4320,20.8124,1
+frame,5040,17.7163,1
+frame,5760,18.322,1
+frame,6480,18.2553,1
+frame,7200,19.583,1
+frame,7920,20.8912,1
+frame,8640,20.3619,1
+frame,9360,20.3836,1
+frame,10080,20.4964,1
+frame,10800,20.7632,1
+frame,11520,20.4972,1
+frame,12240,20.493,1
+frame,12960,17.6538,1
+frame,13680,18.2247,1
+frame,14400,18.2762,1
+frame,14944,18.279,1
+summary,cpu=17,threads=1,opencl=0,frames=22,median_ms=19.7276,p95_ms=20.8912,max_ms=27.5376,assemble_ms=28.5008,total_ms=482.339,maxrss_kib=2059068,pixel_exact=1
+VmHWM:	  664768 kB
+VmRSS:	  664768 kB

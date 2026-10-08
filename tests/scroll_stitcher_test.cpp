@@ -1,6 +1,7 @@
 #include "ui/scroll_stitcher.hpp"
 #include <QGuiApplication>
 #include <QPainter>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -147,6 +148,61 @@ int main(int argc, char** argv) {
     require(backdrop.append(layered(450)).status==Status::Appended,"foreground registers over stationary patterned backdrop");
     const auto layeredResult=backdrop.image();
     require(layeredResult.copy(60,165,240,65)==layered(300).copy(60,165,240,65),"retained foreground pixels never blended");
+
+    // A translucent terminal moves glyphs over a stationary, blurred backdrop.
+    // Repeated line spacing must not turn a 40px scroll into a -1px match.
+    QImage terminalText(1032,4000,QImage::Format_ARGB32);
+    for (bool dark : {false,true}) {
+        terminalText.fill(Qt::transparent);
+        {
+            QPainter p(&terminalText); p.setFont(QFont("monospace",22));
+            p.setPen(dark ? QColor(238,240,244) : QColor(18,20,24));
+            for(int y=35,n=0;y<terminalText.height();y+=41,++n)
+                p.drawText(30,y,QString("Row %1: terminal scroll value %2").arg(n).arg(n*7919));
+        }
+        for (int amplitude : {10,25,50}) {
+            QImage backdropImage(1032,898,QImage::Format_ARGB32);
+            for(int y=0;y<backdropImage.height();++y)
+                for(int x=0;x<backdropImage.width();++x) {
+                    const int c=(dark?55:200)+int(amplitude*std::sin(y/190.0+x/510.0));
+                    backdropImage.setPixel(x,y,qRgb(c,c,std::min(255,c+8)));
+                }
+            const auto terminalFrame=[&](int y) {
+                auto image=backdropImage; QPainter p(&image);
+                p.drawImage(QPoint{},terminalText.copy(0,y,1032,898));
+                return image;
+            };
+            ScrollStitcher terminal;
+            const auto initial=terminalFrame(400);
+            terminal.append(initial);
+            int previousOffset=400, maximumOffset=400;
+            for(int offset : {440,520,400,600,1000,1400,400}) {
+                const auto current=terminalFrame(offset);
+                const auto result=terminal.append(current);
+                if(result.status!=Status::Appended && result.status!=Status::Relocated)
+                    std::cerr << "dark=" << dark << " backdrop=" << amplitude << " offset=" << offset
+                              << " status=" << int(result.status) << '\n';
+                require(result.status==Status::Appended || result.status==Status::Relocated,
+                        "terminal text registers over a stationary smooth backdrop");
+                if(terminal.layout().viewportY!=offset-400 || result.displacement!=offset-previousOffset)
+                    std::cerr << "dark=" << dark << " backdrop=" << amplitude << " offset=" << offset
+                              << " viewport=" << terminal.layout().viewportY << " delta=" << result.displacement << '\n';
+                require(terminal.layout().viewportY==offset-400 && result.displacement==offset-previousOffset,
+                        "terminal registration preserves exact displacement and direction");
+                maximumOffset=std::max(maximumOffset,offset);
+                require(terminal.size().height()==898+maximumOffset-400,
+                        "terminal backdrop cannot pin the output height");
+                const auto content=terminal.layout().content;
+                require(terminal.image().copy(content)==initial.copy(content),
+                        "foreground registration retains original captured pixels");
+                previousOffset=offset;
+            }
+            const auto acceptedTerminal=terminal.image();
+            require(terminal.append(texture(1032,898,111)).status==Status::NoOverlap,
+                    "unrelated terminal scene is not stitched");
+            require(terminal.image()==acceptedTerminal,"rejected terminal scene leaves result intact");
+        }
+    }
 
     ScrollStitcher retained;
     auto translucent = [&](int offset) {

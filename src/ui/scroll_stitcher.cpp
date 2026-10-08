@@ -2,6 +2,7 @@
 #include <QLinearGradient>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <opencv2/core.hpp>
@@ -25,9 +26,20 @@ cv::Mat compact(const cv::Mat &input) {
   cv::resize(input, out, {320, input.rows}, 0, 0, cv::INTER_AREA);
   return out;
 }
+// Glyph contrast changes as it moves over a translucent backdrop. Compare
+// detail correlation rather than treating that change as a different glyph.
+double detailError(const cv::Mat &a, const cv::Mat &b) {
+  cv::Scalar mean, deviation;
+  cv::meanStdDev(b, mean, deviation);
+  if (std::max({deviation[0], deviation[1], deviation[2]}) < .1)
+    return 1e9;
+  cv::Mat score;
+  cv::matchTemplate(a, b, score, cv::TM_CCOEFF_NORMED);
+  return 100.0 * (1.0 - score.at<float>(0, 0));
+}
 // Use textured tiles as evidence. White margins never vote for alignment.
 // A small changing subregion (caret, clock) cannot outvote the page itself.
-double verify(const cv::Mat &a, const cv::Mat &b, int position) {
+double verify(const cv::Mat &a, const cv::Mat &b, int position, bool foreground) {
   const int top = std::max(0, position),
             bottom = std::min(a.rows, position + b.rows);
   if (bottom - top < std::max(64, b.rows / 4))
@@ -42,14 +54,21 @@ double verify(const cv::Mat &a, const cv::Mat &b, int position) {
       cv::meanStdDev(a(ra), mean, deviation);
       if (deviation[0] < 3)
         continue;
-      cv::Mat diff;
-      cv::absdiff(a(ra), b(rb), diff);
-      errors.push_back(cv::mean(diff)[0]);
+      if (foreground)
+        errors.push_back(detailError(a(ra), b(rb)));
+      else {
+        cv::Mat diff;
+        cv::absdiff(a(ra), b(rb), diff);
+        errors.push_back(cv::mean(diff)[0]);
+      }
     }
   if (errors.size() < 4)
     return 1e9;
   std::sort(errors.begin(), errors.end());
-  const size_t accepted = std::max<size_t>(1, (errors.size() * 4 + 4) / 5);
+  // Detail registration needs broader agreement: a repeated phrase alone
+  // must not outweigh the differing line numbers or values beside it.
+  const size_t accepted = std::max<size_t>(1, foreground ? (errors.size() * 19 + 19) / 20
+                                                       : (errors.size() * 4 + 4) / 5);
   if (errors[accepted - 1] > 3.0)
     return 1e9;
   double sum = 0;
@@ -61,7 +80,7 @@ struct Match {
   int position = 0;
   bool found = false, ambiguous = false;
 };
-Match match(const cv::Mat &page, const cv::Mat &frame) {
+Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false) {
   std::set<int> candidates;
   const int h = std::min(48, frame.rows / 4);
   // Several independent templates, retaining every peak rather than a top-N
@@ -97,7 +116,7 @@ Match match(const cv::Mat &page, const cv::Mat &frame) {
     return {0, false, true};
   std::vector<std::pair<double, int>> verified;
   for (int candidate : candidates) {
-    const auto error = verify(page, frame, candidate);
+    const auto error = verify(page, frame, candidate, foreground);
     if (error < 1e8)
       verified.emplace_back(error, candidate);
   }
@@ -177,34 +196,62 @@ Match matchForeground(const cv::Mat &a, const cv::Mat &b) {
     return {0, false, accepted.size() > 1};
   return {accepted.front(), true, false};
 }
+// Remove slowly varying illumination for registration only. A translucent
+// terminal's wallpaper stays fixed while its glyphs move. Comparing their
+// composited intensities can reject the true shift or favor a neighboring
+// repeated line. Horizontal filtering preserves vertical scroll coordinates.
+cv::Mat foregroundDetail(const cv::Mat &input) {
+  cv::Mat background, detail;
+  cv::blur(input, background, {31, 1});
+  cv::subtract(input, background, detail, cv::noArray(), CV_16S);
+  detail.convertTo(detail, CV_8U, .5, 128);
+  return detail;
+}
+bool exactOverlap(const QImage &first, const QImage &second, QRect content, int d) {
+  const int top = std::max(0, d), bottom = std::min(content.height(), content.height() + d);
+  if (bottom - top < std::max(64, content.height() / 4))
+    return false;
+  for (int y = top; y < bottom; ++y)
+    if (std::memcmp(first.constScanLine(content.y() + y) + 4 * content.x(),
+                    second.constScanLine(content.y() + y - d) + 4 * content.x(),
+                    size_t(content.width()) * 4) != 0)
+      return false;
+  return true;
+}
 bool verifyOriginalPixels(const QImage &first, const QImage &second,
-                          QRect content, int d) {
+                          QRect content, int d, bool foreground = false) {
+  cv::Mat firstPixels(first.height(), first.width(), CV_8UC4,
+                      const_cast<uchar *>(first.constBits()), first.bytesPerLine());
+  cv::Mat secondPixels(second.height(), second.width(), CV_8UC4,
+                       const_cast<uchar *>(second.constBits()), second.bytesPerLine());
+  if (foreground) {
+    firstPixels = foregroundDetail(firstPixels);
+    secondPixels = foregroundDetail(secondPixels);
+  }
   const int start = std::max(0, d),
             end = std::min(content.height(), content.height() + d);
   int votes = 0, agree = 0;
   for (int y = start; y < end; y += 32)
     for (int x = 0; x < content.width(); x += 64) {
       int w = std::min(64, content.width() - x), h = std::min(32, end - y);
-      cv::Mat a(h, w, CV_8UC4,
-                const_cast<uchar *>(first.constScanLine(content.y() + y)) +
-                    4 * (content.x() + x),
-                first.bytesPerLine());
-      cv::Mat b(h, w, CV_8UC4,
-                const_cast<uchar *>(second.constScanLine(content.y() + y - d)) +
-                    4 * (content.x() + x),
-                second.bytesPerLine());
+      const auto a = firstPixels(cv::Rect(content.x() + x, content.y() + y, w, h));
+      const auto b = secondPixels(cv::Rect(content.x() + x, content.y() + y - d, w, h));
       cv::Scalar mean, dev;
       cv::meanStdDev(a, mean, dev);
       if (std::max({dev[0], dev[1], dev[2]}) < 3)
         continue;
       ++votes;
+      if (foreground) {
+        agree += detailError(a, b) <= 3.0;
+        continue;
+      }
       cv::Mat diff;
       cv::absdiff(a, b, diff);
       const auto error = cv::mean(diff);
-      if (std::max({error[0], error[1], error[2], error[3]}) <= 3)
+      if (std::max({error[0], error[1], error[2], error[3]}) <= 3.0)
         ++agree;
     }
-  return votes >= 4 && agree >= votes * .8;
+  return votes >= 4 && agree >= votes * (foreground ? .95 : .8);
 }
 QRect detectContent(const cv::Mat &a, const cv::Mat &b) {
   cv::Mat difference;
@@ -274,6 +321,18 @@ bool texturedBackdrop(const cv::Mat &image, QRect side) {
   // Sparse text and icons cannot qualify as a dense background texture.
   return cv::countNonZero(dx > 12) > dx.total() * .70;
 }
+bool texturedFrames(const cv::Mat &a, const cv::Mat &b) {
+  int firstTiles = 0, secondTiles = 0;
+  for (int y = 0; y + 16 <= a.rows; y += 16)
+    for (int x = 0; x + 32 <= a.cols; x += 32) {
+      const QRect tile(x, y, 32, 16);
+      firstTiles += texturedBackdrop(a, tile);
+      secondTiles += texturedBackdrop(b, tile);
+      if (firstTiles >= 3 && secondTiles >= 3)
+        return true;
+    }
+  return false;
+}
 cv::Mat crop(const cv::Mat &image, const QRect &rect) {
   return image(cv::Rect(rect.x(), rect.y(), rect.width(), rect.height()));
 }
@@ -322,28 +381,52 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       m_layoutLocked ? m_layout.content : detectContent(previous, current);
   if (content.width() < 64 || content.height() < 96)
     return {Status::NoOverlap};
-  auto alignment =
-      match(compact(crop(previous, content)), compact(crop(current, content)));
-  if (alignment.found &&
-      !verifyOriginalPixels(m_previous, frame, content, alignment.position))
-    alignment.found = false;
-  if (!alignment.found && !alignment.ambiguous)
-    alignment = matchForeground(compact(crop(previous, content)),
-                                compact(crop(current, content)));
+  const auto previousCompact = compact(crop(previous, content));
+  const auto currentCompact = compact(crop(current, content));
+  const auto rawAlignment = match(previousCompact, currentCompact);
+  auto alignment = rawAlignment;
+  // Opaque documents usually have a byte-identical overlap. This stronger,
+  // inexpensive check avoids filtering full-resolution frames on that path.
+  if (!alignment.found || !exactOverlap(m_previous, frame, content, alignment.position)) {
+    alignment = match(foregroundDetail(previousCompact), foregroundDetail(currentCompact), true);
+    if (alignment.found &&
+        !verifyOriginalPixels(m_previous, frame, content, alignment.position, true))
+      alignment.found = false;
+    if (!alignment.found) {
+      const bool detailAmbiguous = alignment.ambiguous;
+      alignment = rawAlignment;
+      if (alignment.found &&
+          (!verifyOriginalPixels(m_previous, frame, content, alignment.position) ||
+           !verifyOriginalPixels(m_previous, frame, content, alignment.position, true)))
+        alignment.found = false;
+      // The sparse-patch fallback is only evidence for a stationary textured
+      // backdrop. Repeated terminal phrases alone can vote for a false shift.
+      if (!alignment.found && !alignment.ambiguous &&
+          texturedFrames(crop(previous, content), crop(current, content)))
+        alignment = matchForeground(previousCompact, currentCompact);
+      if (!alignment.found)
+        alignment.ambiguous |= detailAmbiguous;
+    }
+  }
   int position = m_layout.viewportY + alignment.position;
   if (!alignment.found && !alignment.ambiguous && m_layoutLocked) {
-    alignment =
-        match(compact(gray(bodyImage())), compact(crop(current, content)));
+    const auto body = bodyImage();
+    const auto history = compact(gray(body));
+    const auto visible = compact(crop(current, content));
+    alignment = match(foregroundDetail(history), foregroundDetail(visible), true);
+    const bool foreground = alignment.found;
+    if (!alignment.found && !alignment.ambiguous)
+      alignment = match(history, visible);
     position = m_layout.minimumY + alignment.position;
     // Relocation may only land wholly within retained history. A lost gap
     // must not create an unobserved interval in the output.
     if (position < m_layout.minimumY || position > m_layout.maximumY)
       alignment.found = false;
     if (alignment.found) {
-      const auto retained = bodyImage().copy(0, alignment.position,
-                                             content.width(), content.height());
-      const auto visible = frame.copy(content);
-      if (!verifyOriginalPixels(retained, visible, visible.rect(), 0))
+      const auto retained = body.copy(0, alignment.position,
+                                      content.width(), content.height());
+      const auto visibleFrame = frame.copy(content);
+      if (!verifyOriginalPixels(retained, visibleFrame, visibleFrame.rect(), 0, foreground))
         alignment.found = false;
     }
   }
@@ -352,16 +435,26 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (!m_layoutLocked && alignment.position != 0) {
     // Tiny scrolls can leave a glyph edge unchanged at the viewport boundary.
     // A proposed fixed band that also matches the translated page belongs to
-    // the document. Compare every pixel, including alpha, before retaining it
-    // as moving content; stationary chrome must keep its original geometry.
+    // the document. A stationary smooth backdrop must not pin glyph stems at
+    // this boundary either; require actual detail before using that comparison.
     const int d = std::abs(alignment.position);
     const QImage& upper = alignment.position > 0 ? m_previous : frame;
     const QImage& lower = alignment.position > 0 ? frame : m_previous;
     const auto translatedBand = [&](int y, int height) {
       if (height <= 0 || y < 0 || y + height + d > frame.height())
         return false;
-      return upper.copy(content.x(), y + d, content.width(), height) ==
-             lower.copy(content.x(), y, content.width(), height);
+      const auto a = upper.copy(content.x(), y + d, content.width(), height);
+      const auto b = lower.copy(content.x(), y, content.width(), height);
+      if (a == b)
+        return true;
+      const auto first = foregroundDetail(cv::Mat(a.height(), a.width(), CV_8UC4,
+                          const_cast<uchar *>(a.constBits()), a.bytesPerLine()));
+      const auto second = foregroundDetail(cv::Mat(b.height(), b.width(), CV_8UC4,
+                           const_cast<uchar *>(b.constBits()), b.bytesPerLine()));
+      cv::Scalar mean, deviation;
+      cv::meanStdDev(first, mean, deviation);
+      return std::max({deviation[0], deviation[1], deviation[2]}) >= 3 &&
+             detailError(first, second) <= 1.0;
     };
     if (translatedBand(0, content.top()))
       content.setTop(0);

@@ -23,11 +23,13 @@
 #include <QWheelEvent>
 #include <QWindow>
 #include <array>
+#include <cmath>
 #include <iostream>
 QImage document(int width, int height, qreal scale) {
   QImage out(qRound(width * scale), qRound(height * scale),
              QImage::Format_ARGB32);
   out.fill(QColor(250, 249, 246,
+                   qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_BACKDROP") ? 0 :
                    qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_ALPHA") ? 128 : 255));
   QPainter p(&out);
   p.scale(scale, scale);
@@ -62,6 +64,16 @@ public:
       page = document(width(), 3000, scale);
     QPainter p(this);
     p.setCompositionMode(QPainter::CompositionMode_Source);
+    if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_BACKDROP")) {
+      QImage background(page.width(),qRound(height()*scale),QImage::Format_ARGB32);
+      for(int y=0;y<background.height();++y)
+        for(int x=0;x<background.width();++x) {
+          const int c=200+int(40*std::sin(y/190.0+x/510.0));
+          background.setPixel(x,y,qRgb(c,c,c+8));
+        }
+      p.drawImage(rect(),background);
+      p.setCompositionMode(QPainter::CompositionMode_SourceOver);
+    }
     p.drawImage(rect(), page,
                 QRect(0, qRound(offset * scale), page.width(),
                       qRound(height() * scale)));
@@ -120,6 +132,7 @@ int main(int argc, char **argv) {
   const bool continuous = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_CONTINUOUS");
   bool continuousDone = !continuous, continuousGrowth = false;
   const bool partialRegion = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_PARTIAL_REGION");
+  const bool backdropFixture = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_BACKDROP");
   const std::array<int, 6> offsets = partialRegion ? std::array<int, 6>{460,340,400,480,520,340}
                                                    : std::array<int, 6>{520,200,450,700,920,200};
   const int minimumOffset = *std::min_element(offsets.begin(), offsets.end());
@@ -411,6 +424,20 @@ int main(int argc, char **argv) {
             actual.save(dir + "/stitched.png");
             expected.save(dir + "/expected.png");
             int maximumError = 0;
+            int foregroundPixels = 0;
+            if (backdropFixture && actual.size() == expected.size()) {
+              // The wallpaper does not move with the document. Validate every
+              // opaque glyph/marker against the known document coordinates;
+              // unit tests separately verify retained background strip pixels.
+              for(int y=0;y<expected.height();++y)
+                for(int x=0;x<expected.width();++x) {
+                  const auto e=expected.pixelColor(x,y), a=actual.pixelColor(x,y);
+                  if(e.alpha()!=255) continue;
+                  ++foregroundPixels;
+                  maximumError=std::max({maximumError,std::abs(a.red()-e.red()),
+                                        std::abs(a.green()-e.green()),std::abs(a.blue()-e.blue())});
+                }
+            }
             if (alphaFixture && actual.size() == expected.size()) {
               for (int y = 0; y < actual.height(); ++y)
                 for (int x = 0; x < actual.width(); ++x) {
@@ -424,7 +451,7 @@ int main(int argc, char **argv) {
                 }
             }
             if (actual.size() != expected.size() ||
-                actual != expected) {
+                (backdropFixture ? foregroundPixels<1000 || maximumError!=0 : actual != expected)) {
               fail(QString("native pixels mismatch: %1x%2 expected %3x%4")
                        .arg(actual.width())
                        .arg(actual.height())
@@ -528,7 +555,9 @@ int main(int argc, char **argv) {
                 return;
               }
               report.write(
-                  QJsonDocument(QJsonObject{{"pixel_exact", !alphaFixture || maximumError == 0},
+                  QJsonDocument(QJsonObject{{"pixel_exact", !backdropFixture && (!alphaFixture || maximumError == 0)},
+                                            {"stationary_backdrop", backdropFixture},
+                                            {"foreground_pixels_exact", backdropFixture && maximumError == 0},
                                             {"maximum_rgb_error", maximumError},
                                             {"alpha_verified", alphaFixture},
                                             {"background_controls_round_trip", alphaFixture},
