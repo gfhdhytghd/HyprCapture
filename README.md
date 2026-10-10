@@ -59,6 +59,7 @@ https://github.com/user-attachments/assets/03a642d3-569d-4b77-8ccf-17934620bc20
 - FFmpeg (including `ffprobe`, AAC and Opus encoders) for recording output
 - FFmpeg development libraries `libavformat`, `libavcodec`, and `libavutil` for timestamped RGBA transport (`ffmpeg` on Arch; `libavformat-dev libavcodec-dev libavutil-dev` on Debian/Ubuntu)
 - PulseAudio or PipeWire with its PulseAudio compatibility service for sound recording
+- Optional libheif >= 1.16 and a 10-bit HEVC encoder (x265) for HDR HEIC screenshots (`libheif` and `x265` on Arch; `libheif-dev` with HEVC encoding support on Debian/Ubuntu)
 - `wl-clipboard` for persistent Wayland clipboard ownership
 
 ### Install with `hyprpm`
@@ -206,6 +207,24 @@ hl.config({
     },
 })
 ```
+
+### HDR screenshots and SDR recording
+
+On a color-managed HDR output, screenshots retain the compositor's half-float linear sRGB/scRGB pixels (1.0 = 80 cd/m²) until export. The overlay, editor, thumbnails, clipboard and PNG output use an sRGB rendition normalized to the output's SDR reference white, with a smooth highlight shoulder and gamut compression. SDR monitor captures stay on the sRGB path.
+
+Choose **Format → HEIC · HDR** to preserve HDR highlights, or set:
+
+```lua
+hl.config({
+    plugin = { hyprcapture = { screenshot_format = "heic" } },
+})
+```
+
+The helper also accepts `--screenshot-format heic`. HEIC output carries 10-bit HEVC samples, BT.2020 primaries, ST 2084 PQ, NCLX and measured content-light metadata. Its suffix becomes `.heic`; the clipboard always receives an SDR PNG. Screenshots spanning HDR and SDR monitors combine the HDR pixels with the SDR monitor images promoted to a 203 cd/m² diffuse white. Window backgrounds, cursor layers, annotations and watermarks preserve the floating-point foreground through HDR export. HEIC encoding is optional: builds without libheif still capture and export SDR PNG, and unavailable HDR pixels/encoders produce an explicit error rather than an SDR file mislabeled as HDR. The compositor plugin and helper must both be updated for the float transport.
+
+HDR export currently covers region, fullscreen and window screenshots on outputs with a linear HDR work buffer. Scrolling screenshots remain SDR. HDR preview is an SDR rendition; native HDR presentation by the Qt overlay is not enabled. HEIC rendering in external applications depends on their HDR/color-management support; these files use PQ rather than an Apple gain map.
+
+Video output stays SDR. Captures touching HDR, wide-gamut or ICC-managed outputs use the compositor backend, including when `record_window_backend` requests the external recorder. The offscreen target is explicitly sRGB, so Hyprland performs source transfer-function/gamut conversion and HDR tone mapping on the GPU before RGBA readback or GPU export. Encoders use an explicit BT.709 YCbCr matrix and limited range, tagged with sRGB transfer/BT.709 primaries; RGB-preserving and animation formats keep their appropriate RGB path. No HDR recording option is introduced.
 
 ### Manual helper install
 
@@ -528,6 +547,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `show_thumbnail` | bool | `true` | Show the result thumbnail after capture. |
 | `screenshot_notification` | bool | `true` | Show a notification after a screenshot is successfully saved. Disable this independently of recording status notifications. |
 | `save_dir` | string | `$XDG_PICTURES_DIR/Screenshots` | Output directory. `~` is expanded against `HOME`; `$XDG_PICTURES_DIR` is read from XDG user-dirs with `~/Pictures` as fallback. |
+| `screenshot_format` | string | `png` | `png` saves SDR sRGB; `heic` saves 10-bit BT.2020/PQ HDR. The toolbar offers HEIC when libheif and an HEVC encoder are available. |
 | `filename_template` | string | `Screenshot-%Y-%m-%d-%H%M%S.png` | `strftime` template for saved screenshot filenames. `{window_class}` and `{window_title}` follow `dynamic_window_metadata`; values are filename-sanitized and missing metadata expands to `unknown`. Existing `strftime` directives, including `%w`, keep their original meaning. |
 | `notification_title_template` | string | `Screenshot captured` | Screenshot notification title. Supports `strftime` directives and `{mode}`, `{window_class}`, `{window_title}`, `{filename}`, and `{path}`. Window metadata is not filename-sanitized. |
 | `notification_body_template` | string | `Saved {filename} ({window_title})` | Screenshot notification body. Supports the same placeholders and `strftime` directives as `notification_title_template`. |

@@ -1,4 +1,5 @@
 #include "ui/annotation_editor.hpp"
+#include "ui/hdr_image.hpp"
 #include "ui/material_icon.hpp"
 #include "ui/touch_gesture.hpp"
 #include <QTouchEvent>
@@ -628,6 +629,22 @@ class AnnotationCanvas final : public QWidget {
         QPainter painter(&output);
         for (const auto& annotation : m_annotations)
             drawMappedAnnotation(painter, base, annotation,scrollLayout,false);
+        return output;
+    }
+
+    QImage resultOn(const QImage& hdrBase) const {
+        if (!hyprcapture::ui::isHdrImage(hdrBase) || hdrBase.size() != base.size()) return {};
+        QImage output = hdrBase.convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
+        if (output.isNull()) return {};
+        QImage layer(base.size(), QImage::Format_ARGB32_Premultiplied);
+        if (layer.isNull()) return {};
+        layer.fill(Qt::transparent);
+        {
+            QPainter painter(&layer);
+            for (const auto& annotation : m_annotations) drawMappedAnnotation(painter, base, annotation, scrollLayout, false);
+        }
+        QPainter painter(&output);
+        painter.drawImage(QPoint(0, 0), hyprcapture::ui::sdrToHdr(layer));
         return output;
     }
 
@@ -2166,6 +2183,7 @@ void AnnotationEditor::setImage(const QImage& image, bool preserveAnnotations) {
     m_impl->positionToolbar();
 }
 QImage AnnotationEditor::resultImage() const { return m_impl->canvas->result(); }
+QImage AnnotationEditor::resultImageOn(const QImage& hdrBase) const { return m_impl->canvas->resultOn(hdrBase); }
 void AnnotationEditor::setRegionResizeBounds(const QRect& bounds) { m_impl->canvas->resizeBounds = bounds; m_impl->canvas->update(); }
 void AnnotationEditor::replaceCaptureImage(const QImage& image, const QRect& displayRect) {
     m_impl->canvas->replaceCapture(image, displayRect);

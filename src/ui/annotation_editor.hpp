@@ -20,6 +20,7 @@ class AnnotationEditor final : public QWidget {
     // Existing edits and history survive background changes of the same size.
     void setImage(const QImage& image, bool preserveAnnotations = false);
     QImage resultImage() const;
+    QImage resultImageOn(const QImage& hdrBase) const;
     void setRegionResizeBounds(const QRect& bounds);
     void replaceCaptureImage(const QImage& image, const QRect& displayRect);
 

@@ -368,6 +368,7 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(request.defaults.fullscreenPreviewRounding);
     args.push_back("--save-dir");
     args.push_back(request.defaults.saveDir);
+    args.insert(args.end(), {"--screenshot-format", request.defaults.screenshotFormat});
     args.push_back("--filename-template");
     args.push_back(request.defaults.filenameTemplate);
     args.push_back("--notification-title-template");

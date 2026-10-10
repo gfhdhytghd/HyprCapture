@@ -12,6 +12,7 @@
   kdePackages,
   lua,
   libpulseaudio,
+  libheif,
   ffmpeg,
   nlohmann_json,
   opencv,
@@ -50,6 +51,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
     kdePackages.qtsvg
     lua
     libpulseaudio
+    libheif
     nlohmann_json
     opencv
   ];

@@ -832,6 +832,7 @@ int main(int argc, char** argv) {
         {"window-wheel-scope", "Window wheel selection scope: workspace or under-cursor.", "scope", "workspace"},
         {"fullscreen-preview-rounding", "Fullscreen preview rounding: auto, 0, or logical pixels.", "rounding", "auto"},
         {"save-dir", "Save directory.", "path", "$XDG_PICTURES_DIR/Screenshots"},
+        {"screenshot-format", "Screenshot format: png (SDR) or heic (HDR).", "format", "png"},
         {"filename-template", "Filename strftime template with {window_class}/{window_title}.", "template", "Screenshot-%Y-%m-%d-%H%M%S.png"},
         {"notification-title-template", "Screenshot notification title template.", "template", "Screenshot captured"},
         {"notification-body-template", "Screenshot notification body template.", "template", "Saved {filename} ({window_title})"},
@@ -990,6 +991,8 @@ int main(int argc, char** argv) {
         hyprcapture::parseWindowWheelScope(parser.value("window-wheel-scope").toStdString(), defaults.windowWheelScope);
     defaults.fullscreenPreviewRounding = parser.value("fullscreen-preview-rounding").toStdString();
     defaults.saveDir = parser.value("save-dir").toStdString();
+    defaults.screenshotFormat = parser.value("screenshot-format").toStdString();
+    if (defaults.screenshotFormat != "png" && defaults.screenshotFormat != "heic") parser.showHelp(1);
     defaults.filenameTemplate = parser.value("filename-template").toStdString();
     defaults.notificationTitleTemplate = parser.value("notification-title-template").toStdString();
     defaults.notificationBodyTemplate = parser.value("notification-body-template").toStdString();

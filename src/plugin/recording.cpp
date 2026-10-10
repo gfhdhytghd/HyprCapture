@@ -4,6 +4,7 @@
 #include "plugin/audio_session.hpp"
 #include "shared/audio_timeline.hpp"
 #include "shared/audio_source.hpp"
+#include "shared/sdr_video.hpp"
 
 #include "plugin/artifact_capture.hpp"
 #include "plugin/notification.hpp"
@@ -491,7 +492,7 @@ bool probeHardwareEncoder(std::string_view codec, int width, int height) {
     args.insert(args.end(), inputArgs.begin(), inputArgs.end());
     if (isVaapiCodec(codec)) {
         args.push_back("-vf");
-        args.push_back("format=rgba,hwupload,scale_vaapi=format=nv12");
+        args.push_back(sdrVaapiFilter);
     }
     args.push_back("-c:v");
     args.emplace_back(codec);
@@ -867,6 +868,12 @@ class RawVideoEncoder {
             "-an",
         };
         args.insert(args.end(), inputArgs.begin(), inputArgs.end());
+        const bool rgbOutput = m_format == "gif" || m_format == "apng" || m_codec == "ffv1" || m_codec == "libx264rgb";
+        if (!rgbOutput && !isVaapiCodec(m_codec))
+            args.insert(args.end(), {"-vf", sdrVideoFilter});
+        if (!rgbOutput)
+            args.insert(args.end(), {"-color_primaries", "bt709", "-color_trc", "iec61966-2-1", "-colorspace", "bt709", "-color_range", "tv"});
+
 
         if (m_format == "gif") {
             args.push_back("-c:v");
@@ -895,7 +902,7 @@ class RawVideoEncoder {
             args.push_back("0");
         } else if (isVaapiCodec(m_codec)) {
             args.push_back("-vf");
-            args.push_back("format=rgba,hwupload,scale_vaapi=format=nv12");
+            args.push_back(sdrVaapiFilter);
             args.push_back("-c:v");
             args.push_back(m_codec);
             args.push_back("-qp");
@@ -1886,7 +1893,16 @@ bool recordingCanUseGsr(const RecordingRequest& request) {
 }
 
 LaunchResult startRecordingBackends(const RecordingRequest& request) {
-    const bool canUseGsr = recordingCanUseGsr(request);
+    const bool managedOutput = std::ranges::any_of(State::monitorState()->monitors(), [&](const auto& monitor) {
+        if (!monitor || !monitor->m_imageDescription) return false;
+        if (!recordingRectsIntersect(request.targetGeometry, recordingMonitorRect(monitor))) return false;
+        const auto& description = monitor->m_imageDescription->value();
+        return description.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_ST2084_PQ ||
+            description.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_HLG ||
+            description.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_EXT_LINEAR ||
+            description.getPrimaries() != NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION->value().getPrimaries() || description.icc.present;
+    });
+    const bool canUseGsr = !managedOutput && recordingCanUseGsr(request);
     const bool preferGsr = canUseGsr &&
         (request.defaults.recordWindowBackend == RecordWindowBackend::GsrVisible ||
          (request.defaults.recordWindowBackend == RecordWindowBackend::Auto && request.mode != CaptureMode::Window));

@@ -9,10 +9,11 @@ namespace hyprcapture::ui {
 // Only completed private compositor artifacts may be mapped: their producer
 // must never modify/truncate them after publishing the session. Unlinking is
 // safe; the mapping remains alive until the final implicitly shared image dies.
-inline QImage mapRawRgba(QFile& file, int width, int height) {
+inline QImage mapRawRgba(QFile& file, int width, int height, QImage::Format format = QImage::Format_RGBA8888) {
     if (width <= 0 || height <= 0 || width > 32768 || height > 32768)
         return {};
-    const qint64 bytes = static_cast<qint64>(width) * height * 4;
+    const int bytesPerPixel = format == QImage::Format_RGBA16FPx4 ? 8 : 4;
+    const qint64 bytes = static_cast<qint64>(width) * height * bytesPerPixel;
     if (!file.isOpen() || file.size() != bytes)
         return {};
     void* data = mmap(nullptr, static_cast<size_t>(bytes), PROT_READ, MAP_PRIVATE, file.handle(), 0);
@@ -25,8 +26,8 @@ inline QImage mapRawRgba(QFile& file, int width, int height) {
     auto* mapping = new Mapping{data, static_cast<size_t>(bytes)};
     // The const-data overload is essential: QImage must detach before any
     // writer obtains bits(), rather than writing into this read-only mapping.
-    return QImage(static_cast<const uchar*>(data), width, height, static_cast<qsizetype>(width) * 4,
-                  QImage::Format_RGBA8888, [](void* context) {
+    return QImage(static_cast<const uchar*>(data), width, height, static_cast<qsizetype>(width) * bytesPerPixel,
+                  format, [](void* context) {
                       auto* mapping = static_cast<Mapping*>(context);
                       munmap(mapping->data, mapping->bytes);
                       delete mapping;

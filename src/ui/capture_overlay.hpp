@@ -77,7 +77,9 @@ class CaptureOverlay final : public QMainWindow {
     struct MonitorArtifact {
         QRect   logicalGeometry;
         QImage  image;
+        QImage  hdrImage;
         QImage  cursorImage;
+        QImage  hdrCursorImage;
         QString name;
         int     transform = 0;
         bool    focused = false;
@@ -98,7 +100,9 @@ class CaptureOverlay final : public QMainWindow {
         double  roundingPower = 2.0;
         double  borderSize = 0.0;
         QImage  image;
+        QImage  hdrImage;
         QImage  realBackground;
+        QImage  hdrRealBackground;
         bool    realBackgroundAttempted = false;
         QString address;
         QString title;
@@ -148,16 +152,17 @@ class CaptureOverlay final : public QMainWindow {
     bool stopRecording();
     void renderAndSaveCapture();
     void saveImage(const QImage& image,
+                   const QImage& hdrImage,
                    hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot,
                    const QString& outputPath,
                    const QString& restoreClipboardPath,
                    bool thumbnailStarted,
                    hyprcapture::CaptureMode mode,
                    hyprcapture::FilenameMetadata filenameMetadata);
-    QImage renderResultImage();
-    QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect) const;
+    QImage renderResultImage(bool hdr = false);
+    QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect, bool hdr = false) const;
     void paintDesktop(QPainter& painter, const QRect& target) const;
-    void paintCursorLayers(QPainter& painter, const QRect& outputRect, const QRect& globalRect) const;
+    void paintCursorLayers(QPainter& painter, const QRect& outputRect, const QRect& globalRect, bool hdr = false) const;
     QRect normalizedSelection() const;
     QRect captureRectForMode() const;
     QRect fullscreenCaptureRect() const;
@@ -251,6 +256,8 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_editing = false;
     AnnotationEditor*         m_editor = nullptr;
     QImage                    m_editedOutput;
+    QImage                    m_editHdrBase;
+    QImage                    m_editedHdrOutput;
     QRect                     m_editImageRect;
     bool                      m_fadeOutStarted = false;
     bool                      m_overlayActive = true;
@@ -307,6 +314,7 @@ class CaptureOverlay final : public QMainWindow {
     InlineSelect* m_recordDuration = nullptr;
     InlineSelect* m_recordBackend = nullptr;
     QLabel*       m_recordWarning = nullptr;
+    InlineSelect* m_screenshotFormat = nullptr;
     QPushButton*  m_recordToggle = nullptr;
     QPushButton*  m_confirmButton = nullptr;
     QLabel*      m_status = nullptr;

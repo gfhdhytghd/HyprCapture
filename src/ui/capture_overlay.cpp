@@ -12,6 +12,8 @@
 #include <QJsonObject>
 #include <QCoreApplication>
 #include "ui/capture_overlay.hpp"
+#include "ui/hdr_image.hpp"
+#include <QColorSpace>
 
 #include "ui/clipboard_utils.hpp"
 #include "ui/overlay_paint.hpp"
@@ -480,6 +482,15 @@ QString recordTemplateWithFormat(const std::string& filenameTemplate, const QStr
 using hyprcapture::ui::traceTiming;
 using hyprcapture::ui::ScopedUiTiming;
 
+void applyHdrWatermark(QImage& image, const hyprcapture::CaptureDefaults& defaults) {
+    if (image.isNull() || defaults.watermark.empty()) return;
+    QImage layer(image.size(), QImage::Format_ARGB32_Premultiplied);
+    layer.fill(Qt::transparent);
+    hyprcapture::ui::applyWatermark(layer, defaults);
+    QPainter painter(&image);
+    painter.drawImage(QPoint(0, 0), hyprcapture::ui::sdrToHdr(layer));
+}
+
 bool savePng(const QImage& image, const QString& path) {
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly))
@@ -491,7 +502,9 @@ bool savePng(const QImage& image, const QString& path) {
 
     QImageWriter writer(&file, "PNG");
     writer.setQuality(75);
-    if (!writer.write(image)) {
+    QImage tagged = image;
+    tagged.setColorSpace(QColorSpace::SRgb);
+    if (!writer.write(tagged)) {
         file.remove();
         return false;
     }
@@ -660,6 +673,7 @@ void cleanupArtifactFiles(const QStringList& paths) {
 }
 
 CaptureOutputResult writeCaptureOutput(const QImage& image,
+                                        const QImage& hdrImage,
                                         const hyprcapture::CaptureDefaults& defaults,
                                         const hyprcapture::ui::ClipboardSnapshotData& clipboardSnapshot,
                                         const QString& outputPath,
@@ -678,7 +692,7 @@ CaptureOutputResult writeCaptureOutput(const QImage& image,
     if (!outputPath.isEmpty()) {
         QElapsedTimer timer;
         timer.start();
-        if (savePng(image, outputPath))
+        if (defaults.save && defaults.screenshotFormat == "heic" ? hyprcapture::ui::saveHdrHeic(hdrImage, outputPath) : savePng(image, outputPath))
             result.savedPath = outputPath;
         traceTiming(defaults.save ? QStringLiteral("image_save") : QStringLiteral("thumbnail_full_temp_save"), timer.elapsed());
     }
@@ -696,7 +710,7 @@ CaptureOutputResult writeCaptureOutput(const QImage& image,
     if (defaults.clipboard) {
         QElapsedTimer timer;
         timer.start();
-        if (result.savedPath.isEmpty() || !hyprcapture::ui::copyImageFileToClipboardDetached(result.savedPath))
+        if (defaults.screenshotFormat == "heic" || result.savedPath.isEmpty() || !hyprcapture::ui::copyImageFileToClipboardDetached(result.savedPath))
             result.clipboardCopied = hyprcapture::ui::copyImageToClipboardDetached(image);
         else
             result.clipboardCopied = true;
@@ -714,9 +728,8 @@ QString plannedCaptureOutputPath(const hyprcapture::CaptureDefaults& defaults, c
     QDir       dir(QString::fromStdString(dirPath.string()));
     if (!dir.exists())
         dir.mkpath(".");
-    return uniqueOutputPath(
-        dir,
-        QString::fromStdString(hyprcapture::makeTimestampedFilename(defaults.filenameTemplate, windowClass.toStdString(), windowTitle.toStdString())));
+    const QString filename = QString::fromStdString(hyprcapture::makeTimestampedFilename(defaults.filenameTemplate, windowClass.toStdString(), windowTitle.toStdString()));
+    return uniqueOutputPath(dir, QFileInfo(filename).completeBaseName() + (defaults.screenshotFormat == "heic" ? ".heic" : ".png"));
 }
 
 QString thumbnailTargetPath(const hyprcapture::CaptureDefaults& defaults, const QString& plannedOutputPath) {
@@ -869,6 +882,8 @@ bool imageSizeWithinBounds(const QSize& size) {
 QImage boundedImage(const QSize& size, QImage::Format format) {
     if (!imageSizeWithinBounds(size))
         return {};
+    const int bytesPerPixel = format == QImage::Format_RGBA16FPx4_Premultiplied || format == QImage::Format_RGBA16FPx4 ? 8 : 4;
+    if (qint64(size.width()) * size.height() * bytesPerPixel > kMaxArtifactBytes) return {};
     return QImage(size, format);
 }
 
@@ -921,26 +936,38 @@ bool protocolPoint(const hyprcapture::Point& input, QPoint& point) {
     return true;
 }
 
-QImage loadRawRgba(const QString& path, int width, int height, bool topDown, qint64& remainingSessionBytes) {
+QImage loadRawRgba(const QString& path, int width, int height, bool topDown, qint64& remainingSessionBytes,
+                   const std::string& format = "rgba8", double referenceNits = 80.0, QImage* hdr = nullptr) {
     QFile file(path);
     if (path.isEmpty() || width <= 0 || height <= 0 || width > kMaxArtifactDimension || height > kMaxArtifactDimension)
         return {};
 
-    const qint64 expected = static_cast<qint64>(width) * static_cast<qint64>(height) * 4;
+    const bool linear = format == "rgba16f-linear-srgb";
+    const auto pixelFormat = linear ? QImage::Format_RGBA16FPx4 : QImage::Format_RGBA8888;
+    const qint64 expected = static_cast<qint64>(width) * static_cast<qint64>(height) * (linear ? 8 : 4);
+    const auto finish = [&](QImage image) {
+        if (!topDown) image = image.flipped(Qt::Vertical);
+        image.setColorSpace(linear ? QColorSpace::SRgbLinear : QColorSpace::SRgb);
+        if (linear) {
+            if (hdr) *hdr = image;
+            return hyprcapture::ui::hdrToSdr(image, referenceNits);
+        }
+        return image;
+    };
     if (expected <= 0 || expected > kMaxArtifactBytes || expected > remainingSessionBytes || !hyprcapture::ui::isPrivateRuntimeFile(path, expected) ||
         !file.open(QIODevice::ReadOnly))
         return {};
 
     if (file.size() != expected)
         return {};
-    QImage image = hyprcapture::ui::mapRawRgba(file, width, height);
+    QImage image = hyprcapture::ui::mapRawRgba(file, width, height, pixelFormat);
     if (!image.isNull()) {
         remainingSessionBytes -= expected;
-        return topDown ? image : image.flipped(Qt::Vertical);
+        return finish(image);
     }
     // Mapping is an optimization, not a prerequisite (e.g. address-space
     // pressure). Retain the bounded owned-buffer path as a fallback.
-    image = QImage(width, height, QImage::Format_RGBA8888);
+    image = QImage(width, height, pixelFormat);
     if (image.isNull())
         return {};
     qint64 read = 0;
@@ -953,7 +980,7 @@ QImage loadRawRgba(const QString& path, int width, int height, bool topDown, qin
     if (!file.atEnd())
         return {};
     remainingSessionBytes -= expected;
-    return topDown ? image : std::move(image).flipped(Qt::Vertical);
+    return finish(std::move(image));
 }
 
 int inverseRotationDegreesForMonitorTransform(int transform) {
@@ -1570,6 +1597,8 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
     if (&source == this)
         return;
 
+    m_defaults.screenshotFormat = source.m_defaults.screenshotFormat;
+    if (m_screenshotFormat) m_screenshotFormat->setCurrentText(qString(m_defaults.screenshotFormat));
     m_mode = source.m_mode;
     m_record = source.m_record;
     m_recordError = source.m_recordError;
@@ -1658,8 +1687,9 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.singleWorkspaceWindowTitle = qString(info.singleWorkspaceWindowTitle);
         const QString artifactPath = qString(info.artifactPath);
         const QString cursorArtifactPath = qString(info.cursorArtifactPath);
-        artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes);
+        artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes, info.artifactFormat, info.artifactReferenceNits, &artifact.hdrImage);
         artifact.image = normalizeMonitorArtifactImage(artifact.image, artifact.transform, artifact.logicalGeometry);
+        artifact.hdrImage = normalizeMonitorArtifactImage(artifact.hdrImage, artifact.transform, artifact.logicalGeometry);
         artifact.previewCornerRadii =
             hyprcapture::ui::detectScreenCornerRadii(artifact.image, artifact.logicalGeometry.size());
         artifact.cursorImage =
@@ -1667,8 +1697,9 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
                         info.cursorArtifactWidth,
                         info.cursorArtifactHeight,
                         info.cursorArtifactTopDown,
-                        remainingArtifactBytes);
+                        remainingArtifactBytes, info.artifactFormat, info.artifactReferenceNits, &artifact.hdrCursorImage);
         artifact.cursorImage = normalizeMonitorArtifactImage(artifact.cursorImage, artifact.transform, artifact.logicalGeometry);
+        artifact.hdrCursorImage = normalizeMonitorArtifactImage(artifact.hdrCursorImage, artifact.transform, artifact.logicalGeometry);
         artifactFiles.push_back(artifactPath);
         artifactFiles.push_back(cursorArtifactPath);
         if (!artifact.logicalGeometry.isValid())
@@ -1707,9 +1738,9 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.borderSize = info.borderSize;
         const QString artifactPath = qString(info.artifactPath);
         const QString realBackgroundPath = qString(info.realBackgroundPath);
-        artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes);
+        artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes, info.artifactFormat, info.artifactReferenceNits, &artifact.hdrImage);
         artifact.realBackground =
-            loadRawRgba(realBackgroundPath, info.realBackgroundWidth, info.realBackgroundHeight, info.realBackgroundTopDown, remainingArtifactBytes);
+            loadRawRgba(realBackgroundPath, info.realBackgroundWidth, info.realBackgroundHeight, info.realBackgroundTopDown, remainingArtifactBytes, info.artifactFormat, info.artifactReferenceNits, &artifact.hdrRealBackground);
         artifactFiles.push_back(artifactPath);
         artifactFiles.push_back(realBackgroundPath);
         if (artifact.fullGeometry.isValid())
@@ -1902,6 +1933,16 @@ void CaptureOverlay::buildToolbar() {
     addMode("Fullscreen", hyprcapture::CaptureMode::Fullscreen, toolbarIcon("screenshot_monitor"));
     addMode("Region", hyprcapture::CaptureMode::Region, toolbarIcon("select_all"));
     addMode("Window", hyprcapture::CaptureMode::Window, toolbarIcon("select_window"));
+
+    m_screenshotFormat = new InlineSelect(this, m_toolbar);
+    m_screenshotFormat->setObjectName("screenshotFormat");
+    m_screenshotFormat->setPrefix("Format");
+    m_screenshotFormat->setLabels({{"png", "PNG · SDR"}, {"heic", "HEIC · HDR"}});
+    m_screenshotFormat->addItems(hyprcapture::ui::hdrHeicAvailable() ? QStringList{"png", "heic"} : QStringList{"png"});
+    m_screenshotFormat->setCurrentText(qString(m_defaults.screenshotFormat));
+    m_screenshotFormat->setToolTip(tr("PNG and clipboard use sRGB. HEIC preserves HDR highlights."));
+    m_screenshotFormat->setOnChanged([this] { m_defaults.screenshotFormat = m_screenshotFormat->currentText().toStdString(); });
+    layout->addWidget(m_screenshotFormat);
 
     m_fullscreenScope = new InlineSelect(this, m_toolbar);
     m_fullscreenScope->setPrefix("Full");
@@ -2506,6 +2547,7 @@ void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
 }
 
 void CaptureOverlay::updateToolbarControlsForMode() {
+    if (m_screenshotFormat) m_screenshotFormat->setVisible(!m_record && !m_recordActive);
     if (auto* cancel = m_toolbar->findChild<QPushButton*>("captureCancel"))
         cancel->setVisible(!m_editing);
     for (auto* button : m_toolbar->findChildren<QPushButton*>("captureModeButton")) {
@@ -2985,7 +3027,7 @@ void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const 
         painter.fillRect(target, QColor(30, 34, 38));
 }
 
-void CaptureOverlay::paintCursorLayers(QPainter& painter, const QRect& outputRect, const QRect& globalRect) const {
+void CaptureOverlay::paintCursorLayers(QPainter& painter, const QRect& outputRect, const QRect& globalRect, bool hdr) const {
     if (!m_defaults.includeCursor || !outputRect.isValid() || !globalRect.isValid())
         return;
 
@@ -2999,7 +3041,7 @@ void CaptureOverlay::paintCursorLayers(QPainter& painter, const QRect& outputRec
         const QRect target = hyprcapture::ui::mapLogicalRectToPixels(logicalPart, globalRect, outputRect);
         if (!source.isValid() || !target.isValid())
             continue;
-        hyprcapture::ui::paintImageLayer(painter, target, artifact.cursorImage, source);
+        hyprcapture::ui::paintImageLayer(painter, target, hdr ? (artifact.hdrCursorImage.isNull() ? hyprcapture::ui::sdrToHdr(artifact.cursorImage) : artifact.hdrCursorImage) : artifact.cursorImage, source);
     }
 }
 
@@ -3877,9 +3919,9 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
 
         const QString artifactPath = qString(info.artifactPath);
         const QString realBackgroundPath = qString(info.realBackgroundPath);
-        capturedWindow.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes);
+        capturedWindow.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes, info.artifactFormat, info.artifactReferenceNits, &capturedWindow.hdrImage);
         capturedWindow.realBackground =
-            loadRawRgba(realBackgroundPath, info.realBackgroundWidth, info.realBackgroundHeight, info.realBackgroundTopDown, remainingArtifactBytes);
+            loadRawRgba(realBackgroundPath, info.realBackgroundWidth, info.realBackgroundHeight, info.realBackgroundTopDown, remainingArtifactBytes, info.artifactFormat, info.artifactReferenceNits, &capturedWindow.hdrRealBackground);
         artifactFiles.push_back(artifactPath);
         artifactFiles.push_back(realBackgroundPath);
         cleanupArtifactFiles(artifactFiles);
@@ -3890,6 +3932,7 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         if (keepImage) {
             // Changing the background must not replace the frozen foreground or
             // the geometry used by existing annotations / scrolling results.
+            window.hdrRealBackground = capturedWindow.hdrRealBackground.scaled(window.image.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
             window.realBackground = capturedWindow.realBackground.scaled(window.image.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         } else {
             capturedWindow.realBackgroundAttempted = needsBackground;
@@ -4100,7 +4143,7 @@ void CaptureOverlay::relayoutToolbar() {
     }
 }
 
-QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalRect) const {
+QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalRect, bool hdr) const {
     if (!globalRect.isValid() || m_monitorArtifacts.empty())
         return {};
 
@@ -4186,20 +4229,22 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
         outputBounds = outputBounds.isValid() ? outputBounds.united(target) : target;
         drawParts.push_back({.artifact = &artifact, .logical = logicalPart, .source = source, .target = target});
     }
+    if (hdr && std::ranges::none_of(drawParts, [](const auto& part) { return !part.artifact->hdrImage.isNull(); })) return {};
     if (!outputBounds.isValid() || drawParts.empty())
         return {};
 
-    QImage image = boundedImage(outputBounds.size(), QImage::Format_ARGB32_Premultiplied);
+    QImage image = boundedImage(outputBounds.size(), hdr ? QImage::Format_RGBA16FPx4_Premultiplied : QImage::Format_ARGB32_Premultiplied);
     if (image.isNull())
         return {};
-    image.fill(QColor(30, 34, 38));
+    image.fill(Qt::transparent);
+    image.setColorSpace(hdr ? QColorSpace::SRgbLinear : QColorSpace::SRgb);
 
     QPainter painter(&image);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
     for (const auto& part : drawParts) {
         const QRect target = part.target.translated(-outputBounds.topLeft()).intersected(image.rect());
         if (target.isValid())
-            painter.drawImage(target, part.artifact->image, part.source);
+            painter.drawImage(target, hdr ? (part.artifact->hdrImage.isNull() ? hyprcapture::ui::sdrToHdr(part.artifact->image) : part.artifact->hdrImage) : part.artifact->image, part.source);
     }
     if (m_defaults.includeCursor) {
         for (const auto& part : drawParts) {
@@ -4207,14 +4252,14 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
                 continue;
             const QRect source = logicalRectToImageRect(part.logical, part.artifact->logicalGeometry, part.artifact->cursorImage.size());
             const QRect target = part.target.translated(-outputBounds.topLeft()).intersected(image.rect());
-            hyprcapture::ui::paintImageLayer(painter, target, part.artifact->cursorImage, source);
+            hyprcapture::ui::paintImageLayer(painter, target, hdr ? (part.artifact->hdrCursorImage.isNull() ? hyprcapture::ui::sdrToHdr(part.artifact->cursorImage) : part.artifact->hdrCursorImage) : part.artifact->cursorImage, source);
         }
     }
 
     return image;
 }
 
-QImage CaptureOverlay::renderResultImage() {
+QImage CaptureOverlay::renderResultImage(bool hdr) {
     const auto bg = currentWindowBackground();
     if (m_mode == hyprcapture::CaptureMode::Window) {
         auto* windowArtifact = selectedWindow() ? selectedWindow() : hoveredWindow();
@@ -4223,7 +4268,7 @@ QImage CaptureOverlay::renderResultImage() {
         if (!hydrateWindowArtifact(*windowArtifact) && windowArtifact->image.isNull()) {
             if (hasOverviewSelectionGeometry(*windowArtifact))
                 return {};
-            return renderDesktopRectAtDisplayResolution(windowFrameGeometry(*windowArtifact));
+            return renderDesktopRectAtDisplayResolution(windowFrameGeometry(*windowArtifact), hdr);
         }
 
         QRect artifactSource = windowArtifact->image.rect();
@@ -4239,13 +4284,15 @@ QImage CaptureOverlay::renderResultImage() {
         }
 
         ensureDesktopImage();
-        QImage repairedArtifact = windowArtifact->image;
-        repairMissingWindowTail(repairedArtifact, windowArtifact->fullGeometry, windowArtifact->visibleGeometry, m_desktopImage, m_desktopGeometry);
+        if (hdr && windowArtifact->hdrImage.isNull()) return {};
+        QImage repairedArtifact = hdr ? windowArtifact->hdrImage : windowArtifact->image;
+        if (!hdr) repairMissingWindowTail(repairedArtifact, windowArtifact->fullGeometry, windowArtifact->visibleGeometry, m_desktopImage, m_desktopGeometry);
 
-        QImage image = boundedImage(artifactSource.size().expandedTo(QSize(1, 1)), QImage::Format_ARGB32_Premultiplied);
+        QImage image = boundedImage(artifactSource.size().expandedTo(QSize(1, 1)), hdr ? QImage::Format_RGBA16FPx4_Premultiplied : QImage::Format_ARGB32_Premultiplied);
         if (image.isNull())
             return {};
         image.fill(Qt::transparent);
+        image.setColorSpace(hdr ? QColorSpace::SRgbLinear : QColorSpace::SRgb);
 
         QPainter painter(&image);
         QImage background = boundedImage(image.size(), QImage::Format_RGBA8888);
@@ -4265,17 +4312,30 @@ QImage CaptureOverlay::renderResultImage() {
         if (!paintedBackground && paintWindowBackground(background, bg)) {
             paintedBackground = true;
         }
+        if (hdr && bg == hyprcapture::WindowBackground::Real && windowArtifact->hdrRealBackground.isNull()) return {};
         if (paintedBackground) {
             clipWindowBackgroundToFrame(background,
                                         logicalSource,
                                         windowArtifact->visibleGeometry,
                                         windowArtifact->rounding,
                                         windowArtifact->roundingPower);
-            painter.drawImage(QPoint(0, 0), background);
+            if (hdr) {
+                auto linearBackground = hyprcapture::ui::sdrToHdr(background);
+                if (bg == hyprcapture::WindowBackground::Real) {
+                    linearBackground.fill(Qt::transparent);
+                    QPainter lp(&linearBackground);
+                    const QRect src = projectedImageRect(logicalSource, windowArtifact->fullGeometry, windowArtifact->hdrRealBackground.size());
+                    lp.drawImage(linearBackground.rect(), windowArtifact->hdrRealBackground, src);
+                    lp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                    lp.drawImage(QPoint(0, 0), background);
+                }
+                painter.drawImage(QPoint(0, 0), linearBackground);
+            } else
+                painter.drawImage(QPoint(0, 0), background);
         }
 
         painter.drawImage(image.rect(), repairedArtifact, artifactSource);
-        paintCursorLayers(painter, image.rect(), logicalSource);
+        paintCursorLayers(painter, image.rect(), logicalSource, hdr);
         return image;
     }
 
@@ -4284,15 +4344,16 @@ QImage CaptureOverlay::renderResultImage() {
         return {};
 
     if (!m_monitorArtifacts.empty()) {
-        const QImage highResolution = renderDesktopRectAtDisplayResolution(localToDesktopLogicalRect(cap));
+        const QImage highResolution = renderDesktopRectAtDisplayResolution(localToDesktopLogicalRect(cap), hdr);
         if (!highResolution.isNull())
             return highResolution;
     }
 
+    if (hdr) return {}; // No HDR synthesis from an SDR/grim fallback.
     ensureDesktopImage();
     const QRect desktopSource = localToDesktopSourceRect(cap);
     const QSize outputSize = desktopSource.isValid() ? desktopSource.size() : cap.size();
-    QImage image = boundedImage(outputSize.expandedTo(QSize(1, 1)), QImage::Format_ARGB32_Premultiplied);
+    QImage image = boundedImage(outputSize.expandedTo(QSize(1, 1)), hdr ? QImage::Format_RGBA16FPx4_Premultiplied : QImage::Format_ARGB32_Premultiplied);
     if (image.isNull())
         return {};
     image.fill(Qt::transparent);
@@ -4572,6 +4633,9 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
         updateStatus();
         return;
     }
+    m_editHdrBase = capturedImage.isNull() ? renderResultImage(true) : QImage{};
+    applyHdrWatermark(m_editHdrBase, m_defaults);
+    m_editedHdrOutput = {};
     hyprcapture::ui::applyWatermark(image, m_defaults);
     hideOptionPopups();
     m_editImageRect = captureRectForMode();
@@ -4601,6 +4665,8 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
             m_dragEnd = target.bottomRight();
             auto image = renderResultImage();
             if (image.isNull()) { m_dragStart = previousStart; m_dragEnd = previousEnd; return; }
+            m_editHdrBase = renderResultImage(true);
+            applyHdrWatermark(m_editHdrBase, m_defaults);
             hyprcapture::ui::applyWatermark(image, m_defaults);
             m_editImageRect = target;
             m_editor->replaceCaptureImage(image, target);
@@ -4652,6 +4718,8 @@ void CaptureOverlay::refreshInPlaceImage() {
         updateStatus();
         return;
     }
+    m_editHdrBase = m_scrollResult ? QImage{} : renderResultImage(true);
+    applyHdrWatermark(m_editHdrBase, m_defaults);
     hyprcapture::ui::applyWatermark(image, m_defaults);
     if (m_scrollResult)
         m_editor->setScrollImage(image, m_scrollLayout, false);
@@ -4689,6 +4757,7 @@ void CaptureOverlay::exportInPlaceImage() {
         return;
     if(m_scrollController) { auto* controller=m_scrollController; m_scrollController=nullptr; controller->disconnect(this); delete controller; }
     m_editedOutput = m_editor->resultImage();
+    m_editedHdrOutput = m_editor->resultImageOn(m_editHdrBase);
     if (m_editedOutput.isNull())
         return;
     m_finishing = true;
@@ -4867,6 +4936,26 @@ void CaptureOverlay::renderAndSaveCapture() {
         return;
     }
 
+    QImage hdrImage;
+    if (m_defaults.save && m_defaults.screenshotFormat == "heic") {
+        hdrImage = edited ? m_editedHdrOutput : renderResultImage(true);
+        if (hdrImage.isNull() || !hyprcapture::ui::hdrHeicAvailable()) {
+            m_finishing = false;
+            m_recordError = tr("HDR capture data or a HEIC encoder is unavailable. Choose PNG for SDR output.");
+            if (m_editor) m_editor->setEnabled(true);
+            if (m_toolbar) m_toolbar->setEnabled(true);
+            show(); updateStatus();
+            return;
+        }
+        if (!edited && !m_defaults.watermark.empty()) {
+            QImage layer(image.size(), QImage::Format_ARGB32_Premultiplied);
+            layer.fill(Qt::transparent);
+            hyprcapture::ui::applyWatermark(layer, m_defaults);
+            QPainter p(&hdrImage);
+            p.drawImage(QPoint(0, 0), hyprcapture::ui::sdrToHdr(layer));
+        }
+    }
+
     QElapsedTimer watermarkTimer;
     watermarkTimer.start();
     if (!edited)
@@ -4903,6 +4992,7 @@ void CaptureOverlay::renderAndSaveCapture() {
     }
 
     saveImage(image,
+              hdrImage,
               clipboardSnapshot,
               m_defaults.save ? plannedOutputPath : targetPath,
               restoreClipboardPath,
@@ -4912,6 +5002,7 @@ void CaptureOverlay::renderAndSaveCapture() {
 }
 
 void CaptureOverlay::saveImage(const QImage& image,
+                               const QImage& hdrImage,
                                hyprcapture::ui::ClipboardSnapshotData clipboardSnapshot,
                                const QString& outputPath,
                                const QString& restoreClipboardPath,
@@ -4922,6 +5013,7 @@ void CaptureOverlay::saveImage(const QImage& image,
     const bool edited = !m_editedOutput.isNull();
     auto*      worker = QThread::create([this,
                                          image,
+                                         hdrImage,
                                          defaults,
                                          edited,
                                          outputPath,
@@ -4932,18 +5024,18 @@ void CaptureOverlay::saveImage(const QImage& image,
                                          clipboardSnapshot = std::move(clipboardSnapshot)] {
         QElapsedTimer totalTimer;
         totalTimer.start();
-        const CaptureOutputResult result = writeCaptureOutput(image, defaults, clipboardSnapshot, outputPath, restoreClipboardPath);
+        const CaptureOutputResult result = writeCaptureOutput(image, hdrImage, defaults, clipboardSnapshot, outputPath, restoreClipboardPath);
         traceTiming(QStringLiteral("output_worker_total"), totalTimer.elapsed());
         QMetaObject::invokeMethod(
             this,
             [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata, edited, outputPath] {
                 traceTiming(QStringLiteral("output_ready"));
-                if (edited && defaults.save && result.savedPath != outputPath) {
+                if (defaults.save && result.savedPath != outputPath) {
                     m_finishing = false;
-                    m_editor->setEnabled(true);
-                    m_toolbar->setEnabled(true);
+                    if (m_editor) m_editor->setEnabled(true);
+                    if (m_toolbar) m_toolbar->setEnabled(true);
                     m_recordError = tr("Could not save the image. Check the output directory and try again.");
-                    updateStatus();
+                    show(); updateStatus();
                     return;
                 }
                 const auto complete = [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata] {
@@ -4953,7 +5045,8 @@ void CaptureOverlay::saveImage(const QImage& image,
                     if (defaults.save)
                         hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
                     if (result.showThumbnail && !thumbnailStarted)
-                        showThumbnail(result.savedPath, result.savedPath, result.restoreClipboardPath);
+                        showThumbnail(defaults.screenshotFormat == "heic" ? saveThumbnailPreview(image) : result.savedPath,
+                                      result.savedPath, result.restoreClipboardPath);
                     qApp->quit();
                 };
                 if (edited) {

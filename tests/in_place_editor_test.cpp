@@ -3,6 +3,9 @@
 #include "ui/capture_overlay.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/i18n.hpp"
+#include "ui/hdr_image.hpp"
+#include <QtCore/qfloat16.h>
+#include <QColorSpace>
 
 #include <QApplication>
 #include <QAbstractButton>
@@ -179,6 +182,70 @@ class InPlaceEditorTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void hdrArtifactPreviewAndEditing() {
+        QTemporaryDir output;
+        QVERIFY(output.isValid());
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Fullscreen;
+        defaults.fullscreenScope = hyprcapture::FullscreenScope::Current;
+        defaults.inPlaceEditToolbar = true;
+        defaults.clipboard = false;
+        defaults.showThumbnail = false;
+        defaults.screenshotFormat = hyprcapture::ui::hdrHeicAvailable() ? "heic" : "png";
+        defaults.saveDir = output.path().toStdString();
+        QImage linear(QSize(kLogicalWidth, kLogicalHeight) * 2, QImage::Format_RGBA16FPx4);
+        for (int y = 0; y < linear.height(); ++y) {
+            auto* row = reinterpret_cast<qfloat16*>(linear.scanLine(y));
+            for (int x = 0; x < linear.width(); ++x) {
+                const float v = x < linear.width() / 2 ? 0.18F * 203 / 80 : 1000.0F / 80;
+                for (int c = 0; c < 3; ++c) row[x * 4 + c] = qfloat16(v);
+                row[x * 4 + 3] = qfloat16(1.0F);
+            }
+        }
+        const QString path = hyprcapture::ui::runtimeFile("hdr-ui-test", ".rgba");
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        QVERIFY(file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        QCOMPARE(file.write(reinterpret_cast<const char*>(linear.constBits()), linear.sizeInBytes()), linear.sizeInBytes());
+        file.close();
+        hyprcapture::CaptureSession session;
+        session.id = "hdr-ui-test"; session.defaults = defaults;
+        hyprcapture::MonitorInfo monitor;
+        monitor.name = "HDR"; monitor.focused = true;
+        monitor.logicalGeometry = {0, 0, kLogicalWidth, kLogicalHeight}; monitor.scale = 2;
+        monitor.artifactFormat = "rgba16f-linear-srgb"; monitor.artifactReferenceNits = 203;
+        monitor.artifactPath = path.toStdString(); monitor.artifactWidth = linear.width(); monitor.artifactHeight = linear.height();
+        session.monitors.push_back(monitor);
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(session)));
+        QVERIFY(!QFile::exists(path)); // mapped float pixels must survive unlink
+        overlay.show();
+        QTest::qWait(30);
+        auto* full = modeButton(overlay, "fullscreen");
+        QVERIFY(full);
+        QTest::mouseClick(full, Qt::LeftButton);
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QTRY_VERIFY(editor && editor->isVisible());
+        const auto result = editor->resultImage();
+        QCOMPARE(result.size(), linear.size());
+        const auto expected = hyprcapture::ui::hdrToSdr(linear);
+        QCOMPARE(result.pixelColor(100, 100), expected.pixelColor(100, 100));
+        QCOMPARE(result.pixelColor(1500, 100), expected.pixelColor(1500, 100));
+        const auto untouched = editor->resultImageOn(linear).convertToFormat(QImage::Format_RGBA16FPx4);
+        QCOMPARE(float(reinterpret_cast<const qfloat16*>(untouched.constScanLine(100))[1500 * 4]), 12.5F);
+        if (hyprcapture::ui::hdrHeicAvailable()) {
+            QVERIFY(QMetaObject::invokeMethod(editor, "confirmRequested", Qt::DirectConnection));
+            QTRY_VERIFY_WITH_TIMEOUT(!QDir(output.path()).entryList({"*.heic"}, QDir::Files).isEmpty(), 15000);
+            const auto files = QDir(output.path()).entryList({"*.heic"}, QDir::Files);
+            QCOMPARE(files.size(), 1);
+            QFile heic(QDir(output.path()).filePath(files.front()));
+            QVERIFY(heic.open(QIODevice::ReadOnly));
+            QTRY_VERIFY_WITH_TIMEOUT(heic.size() > 100, 15000);
+            const auto signature = heic.read(12);
+            QCOMPARE(signature.mid(4, 4), QByteArray("ftyp"));
+        }
+
+    }
+
     void rawRowsRemainOwnedAfterArtifactCleanup_data() {
         QTest::addColumn<bool>("topDown");
         QTest::newRow("top-down") << true;
@@ -215,6 +282,7 @@ class InPlaceEditorTest final : public QObject {
         selectRegion(overlay, QPoint(200, 180), QPoint(349, 279));
         auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
         QVERIFY(editor && editor->isVisible());
+        expected.setColorSpace(QColorSpace::SRgb);
         QCOMPARE(editor->resultImage().convertToFormat(QImage::Format_RGBA8888), expected.copy(QRect(400, 360, 300, 200)));
     }
 

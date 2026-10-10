@@ -12,6 +12,7 @@
 #include "plugin/window_gpu_export.hpp"
 #include "plugin/window_gpu_sender.hpp"
 #include "shared/rgba_transform.hpp"
+#include "shared/hdr_color.hpp"
 #include "shared/audio_timeline.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -70,6 +71,7 @@
 #include <memory>
 #include <mutex>
 #include <poll.h>
+#include <span>
 #include <pthread.h>
 #include <signal.h>
 #include <sstream>
@@ -98,8 +100,41 @@ using Render::RPT_EXPORT;
 using Render::eRenderPassMode;
 using Json = nlohmann::ordered_json;
 
+bool g_captureLinear = false;
+struct LinearCaptureScope {
+    bool previous = g_captureLinear;
+    LinearCaptureScope() {
+        static auto enabled = CConfigValue<Config::INTEGER>("render:cm_enabled");
+        g_captureLinear = g_pHyprOpenGL && g_pHyprOpenGL->m_cmSupported && *enabled;
+    }
+    ~LinearCaptureScope() { g_captureLinear = previous; }
+};
+
+bool linearCaptureFor(const PHLMONITOR& monitor) {
+    if (!g_captureLinear || !monitor) return false;
+    const auto& description = monitor->workBufferImageDescription()->value();
+    return description.transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_EXT_LINEAR &&
+        description.getPrimaries() == NColorManagement::LINEAR_IMAGE_DESCRIPTION->value().getPrimaries();
+}
+struct LinearMonitorScope {
+    bool previous = g_captureLinear;
+    LinearMonitorScope(const PHLMONITOR& monitor) { g_captureLinear = linearCaptureFor(monitor); }
+    ~LinearMonitorScope() { g_captureLinear = previous; }
+};
+
+// Hardware CTM is an output optimization. Offscreen captures need shader CM
+// into their own color space, independent of the display's KMS transform.
+struct CaptureColorScope {
+    PHLMONITOR monitor;
+    bool previous;
+    CaptureColorScope(const PHLMONITOR& m) : monitor(m), previous(m->m_noShaderCTM) { monitor->m_noShaderCTM = false; }
+    ~CaptureColorScope() { monitor->m_noShaderCTM = previous; }
+};
+
 struct RgbaReadback {
     std::vector<unsigned char> pixels;
+    std::vector<std::uint16_t> linear;
+    float referenceNits = 80.0F;
     int                        cropX = 0;
     int                        cropTopY = 0;
     int                        width = 0;
@@ -965,7 +1000,7 @@ void rememberParent(std::vector<std::filesystem::path>& parents, const std::file
         parents.push_back(parent);
 }
 
-bool writeRgbaFile(const std::filesystem::path& path, const std::vector<unsigned char>& pixels, ArtifactBudget* budget = nullptr) {
+bool writeRgbaFile(const std::filesystem::path& path, std::span<const unsigned char> pixels, ArtifactBudget* budget = nullptr) {
     if (budget && !budget->consume(pixels.size()))
         return false;
 
@@ -998,6 +1033,12 @@ bool writeRgbaFile(const std::filesystem::path& path, const std::vector<unsigned
         return false;
     }
     return true;
+}
+
+bool writeArtifact(const std::filesystem::path& path, const RgbaReadback& readback, ArtifactBudget* budget = nullptr) {
+    if (readback.linear.empty()) return writeRgbaFile(path, readback.pixels, budget);
+    const auto* data = reinterpret_cast<const unsigned char*>(readback.linear.data());
+    return writeRgbaFile(path, std::span<const unsigned char>(data, readback.linear.size() * sizeof(std::uint16_t)), budget);
 }
 
 unsigned char alphaAt(const RgbaReadback& readback, int x, int y) {
@@ -1046,12 +1087,18 @@ RgbaReadback cropReadback(const RgbaReadback& readback, const PixelBounds& bound
     if (!checkedRgbaByteSize(bounds.width, bounds.height, pixelBytes))
         return {};
     cropped.pixels.assign(pixelBytes, 0);
+    cropped.referenceNits = readback.referenceNits;
+    if (!readback.linear.empty()) cropped.linear.assign(pixelBytes, 0);
 
     const std::size_t rowBytes = static_cast<std::size_t>(bounds.width) * RGBA_BYTES_PER_PIXEL;
     for (int y = 0; y < bounds.height; ++y) {
         const auto* src = readback.pixels.data() + (static_cast<std::size_t>(bounds.y + y) * readback.width + bounds.x) * RGBA_BYTES_PER_PIXEL;
         auto*       dst = cropped.pixels.data() + static_cast<std::size_t>(y) * rowBytes;
         std::copy(src, src + rowBytes, dst);
+        if (!readback.linear.empty()) {
+            const auto* linearSrc = readback.linear.data() + (std::size_t(bounds.y + y) * readback.width + bounds.x) * 4;
+            std::copy_n(linearSrc, rowBytes, cropped.linear.data() + std::size_t(y) * rowBytes);
+        }
     }
 
     return cropped;
@@ -1305,6 +1352,40 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
             return {};
         glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+        if (g_captureLinear && framebuffer.m_drmFormat == DRM_FORMAT_ABGR16161616F) {
+            if (region.outputBytes > MAX_RGBA_READBACK_BYTES / 2) {
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+                return {};
+            }
+            readback.referenceNits = framebuffer.imageDescription() ? framebuffer.imageDescription()->value().luminances.reference : 80.0F;
+            readback.linear.assign(region.outputBytes, 0);
+            std::vector<std::uint16_t> source;
+            if (!canReadDirectly) source.resize(region.sourceBytes);
+            const int readY = directGlY ? region.srcTopY : framebufferHeight - region.srcTopY - region.srcHeight;
+            glReadPixels(region.srcX, readY, region.srcWidth, region.srcHeight, GL_RGBA, GL_HALF_FLOAT, canReadDirectly ? readback.linear.data() : source.data());
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            if (!canReadDirectly) for (int y = 0; y < region.srcHeight; ++y) {
+                const auto* src = source.data() + std::size_t(y) * region.srcWidth * 4;
+                auto* dst = readback.linear.data() + (std::size_t(region.dstY + y) * region.outputWidth + region.dstX) * 4;
+                std::copy_n(src, std::size_t(region.srcWidth) * 4, dst);
+            }
+            // Only alpha bounds and dark-shadow repair consume this byte view.
+            // Keep full fidelity in linear; perform actual SDR tone mapping in
+            // the helper, not millions of pow() calls on the compositor thread.
+            std::array<unsigned char, 65536> analysisColors;
+            for (std::size_t i = 0; i < analysisColors.size(); ++i)
+                analysisColors[i] = color::byte(color::linearToSrgb(color::halfToFloat(i) * color::scRgbNits / readback.referenceNits));
+            for (std::size_t i = 0; i < readback.pixels.size(); i += 4) {
+                const float alpha = std::clamp(color::halfToFloat(readback.linear[i + 3]), 0.0F, 1.0F);
+                for (int c = 0; c < 3; ++c) {
+                    const auto value = alpha > 0 && alpha < 1 ? color::floatToHalf(color::halfToFloat(readback.linear[i + c]) / alpha) : readback.linear[i + c];
+                    readback.pixels[i + c] = static_cast<unsigned char>(std::lround(analysisColors[value] * alpha));
+                }
+                readback.pixels[i + 3] = color::byte(alpha);
+            }
+            return readback;
+        }
 
         if (useAsyncPbo && ensureAsyncPboReadback(g_windowRecordingPboReadback, region.outputWidth, region.outputHeight, region.outputBytes)) {
             bool hasMappedFrame = mapPendingPboReadback(g_windowRecordingPboReadback, readback);
@@ -1643,6 +1724,7 @@ void repairTopTransparentSeam(RgbaReadback& readback) {
             const auto src = (static_cast<std::size_t>(y + 1) * readback.width + x) * 4U;
             const auto dst = (static_cast<std::size_t>(y) * readback.width + x) * 4U;
             std::copy(readback.pixels.data() + src, readback.pixels.data() + src + 4U, readback.pixels.data() + dst);
+            if (!readback.linear.empty()) std::copy_n(readback.linear.data() + src, 4, readback.linear.data() + dst);
         }
 
         return;
@@ -1651,6 +1733,10 @@ void repairTopTransparentSeam(RgbaReadback& readback) {
 
 void unpremultiplyAlpha(RgbaReadback& readback) {
     unpremultiplyRgbaPixels(readback.pixels);
+    for (std::size_t i = 0; i < readback.linear.size(); i += 4) {
+        const float alpha = color::halfToFloat(readback.linear[i + 3]);
+        for (int c = 0; c < 3; ++c) readback.linear[i + c] = color::floatToHalf(alpha > 0 ? color::halfToFloat(readback.linear[i + c]) / alpha : 0.0F);
+    }
 }
 
 SP<CFramebuffer> createFramebuffer(const std::string& name, int width, int height, DRMFormat preferredFormat = DRM_FORMAT_ABGR8888) {
@@ -1661,14 +1747,25 @@ SP<CFramebuffer> createFramebuffer(const std::string& name, int width, int heigh
     if (!framebuffer)
         return {};
 
-    if (!framebuffer->alloc(width, height, DRM_FORMAT_ABGR8888) && !framebuffer->alloc(width, height, preferredFormat))
+    if (!framebuffer->alloc(width, height, g_captureLinear ? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888))
         return {};
 
+    framebuffer->setImageDescription(g_captureLinear ? NColorManagement::LINEAR_IMAGE_DESCRIPTION : NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
     return framebuffer;
 }
 
+void setCaptureImageDescription(const SP<CFramebuffer>& framebuffer, const PHLMONITOR& monitor) {
+    if (!framebuffer) return;
+    if (g_captureLinear) {
+        auto luminances = NColorManagement::LINEAR_IMAGE_DESCRIPTION->value().luminances;
+        luminances.reference = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
+        framebuffer->setImageDescription(NColorManagement::LINEAR_IMAGE_DESCRIPTION->with(luminances));
+    } else
+        framebuffer->setImageDescription(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
+}
+
 bool ensureFramebuffer(SP<CFramebuffer>& framebuffer, const std::string& name, int width, int height, DRMFormat preferredFormat = DRM_FORMAT_ABGR8888) {
-    if (framebuffer && framebuffer->isAllocated() && positiveRoundedIntFromDouble(framebuffer->m_size.x) == width && positiveRoundedIntFromDouble(framebuffer->m_size.y) == height)
+    if (framebuffer && framebuffer->isAllocated() && framebuffer->m_drmFormat == (g_captureLinear ? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888) && positiveRoundedIntFromDouble(framebuffer->m_size.x) == width && positiveRoundedIntFromDouble(framebuffer->m_size.y) == height)
         return true;
 
     if (framebuffer)
@@ -1924,6 +2021,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
                                    int cropWidth,
                                    int cropHeight,
                                    ArtifactBudget* budget = nullptr, SP<CFramebuffer>* persistent = nullptr, bool skipReadback = false) {
+    LinearMonitorScope linearMonitor(monitor);
     if (!monitor || !monitor->m_activeWorkspace || !g_pHyprRenderer || !g_pHyprOpenGL)
         return {};
 
@@ -1942,6 +2040,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     if (!framebuffer)
         return {};
 
+    CaptureColorScope captureColor(monitor);
     const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
     const bool previousTransformDamage = g_pHyprRenderer->m_renderData.transformDamage;
@@ -1958,6 +2057,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
 
     g_pHyprOpenGL->makeEGLCurrent();
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    setCaptureImageDescription(framebuffer, monitor);
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
         restoreRendererState();
         return {};
@@ -1983,7 +2083,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     // Fake monitor rendering stores the top of the monitor at GL row zero.
     // Keep crop coordinates in that same space for every monitor capture caller.
     auto readback = readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight, true);
-    if (budget && !readback.pixels.empty() && !budget->consume(readback.pixels.size()))
+    if (budget && !readback.pixels.empty() && !budget->consume(readback.linear.empty() ? readback.pixels.size() : readback.linear.size() * 2))
         return {};
     return readback;
 }
@@ -2038,7 +2138,7 @@ bool renderMonitorArtifact(const PHLMONITOR& monitor, const Time::steady_tp& fro
     width = positiveRoundedIntFromDouble(monitor ? monitor->m_pixelSize.x : 0.0);
     height = positiveRoundedIntFromDouble(monitor ? monitor->m_pixelSize.y : 0.0);
     auto readback = renderMonitorReadback(monitor, frozenTime, 0, 0, width, height, &budget);
-    return !readback.pixels.empty() && writeRgbaFile(path, readback.pixels);
+    return !readback.pixels.empty() && writeArtifact(path, readback);
 }
 
 bool renderCursorArtifact(const PHLMONITOR& monitor,
@@ -2048,6 +2148,7 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
                           int& width,
                           int& height,
                           ArtifactBudget& budget) {
+    LinearMonitorScope linearMonitor(monitor);
     if (!monitor || !g_pHyprRenderer || !g_pHyprOpenGL || !Pointer::mgr())
         return false;
 
@@ -2061,6 +2162,7 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
     if (!framebuffer)
         return false;
 
+    CaptureColorScope captureColor(monitor);
     const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
     const bool previousTransformDamage = g_pHyprRenderer->m_renderData.transformDamage;
@@ -2076,6 +2178,7 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
 
     g_pHyprOpenGL->makeEGLCurrent();
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    setCaptureImageDescription(framebuffer, monitor);
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
         restoreRendererState();
         return false;
@@ -2092,9 +2195,10 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
 
     auto readback = readRgbaFramebufferRegion(*framebuffer, 0, 0, width, height);
     PixelBounds alphaBounds;
-    if (readback.pixels.empty() || !findAlphaBounds(readback, alphaBounds) || !budget.consume(readback.pixels.size()))
+    if (readback.pixels.empty() || !findAlphaBounds(readback, alphaBounds) || !budget.consume(readback.linear.empty() ? readback.pixels.size() : readback.linear.size() * 2))
         return false;
-    return writeRgbaFile(path, readback.pixels);
+    unpremultiplyAlpha(readback);
+    return writeArtifact(path, readback);
 }
 
 WindowCaptureGeometry windowCaptureGeometry(const CBox& bounds, const PHLMONITOR& monitor) {
@@ -2158,6 +2262,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
                                           ArtifactBudget* budget = nullptr,
                                           bool trimToAlphaBounds = true,
                                           const WindowRenderOptions& options = {}) {
+    LinearMonitorScope linearMonitor(monitor);
     if (!window || !monitor || !g_pHyprRenderer || !g_pHyprOpenGL)
         return {};
 
@@ -2172,7 +2277,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     const int framebufferWidth = width;
     const int framebufferHeight = height;
     std::size_t framebufferBytes = 0;
-    if (!checkedRgbaByteSize(width, height, framebufferBytes) || (budget && !budget->consume(framebufferBytes)))
+    if (!checkedRgbaByteSize(width, height, framebufferBytes) || (budget && !budget->consume(framebufferBytes * (g_captureLinear ? 2 : 1))))
         return {};
 
     const double scale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
@@ -2189,6 +2294,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     if (timingEnabled())
         traceTiming(std::format("window.target.{}x{}", framebufferWidth, framebufferHeight));
 
+    CaptureColorScope captureColor(monitor);
     const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
     const bool previousRenderingSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
@@ -2201,7 +2307,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         g_pHyprOpenGL->makeEGLCurrent();
         WindowLocalProjectionScope projection(monitor);
         g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-        targetFramebuffer->setImageDescription(monitor->workBufferImageDescription());
+        setCaptureImageDescription(targetFramebuffer, monitor);
         if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
             g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
             return false;
@@ -2243,7 +2349,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             g_pHyprOpenGL->makeEGLCurrent();
             WindowLocalProjectionScope projection(monitor);
             g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
-            matteFramebuffer->setImageDescription(monitor->workBufferImageDescription());
+            setCaptureImageDescription(matteFramebuffer, monitor);
             if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, matteFramebuffer)) {
                 g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
                 return false;
@@ -2326,7 +2432,7 @@ bool renderWindowArtifact(const PHLWINDOW& window,
         width = readback.width;
         height = readback.height;
     }
-    return !readback.pixels.empty() && writeRgbaFile(path, readback.pixels);
+    return !readback.pixels.empty() && writeArtifact(path, readback);
 }
 
 void* findFunctionByDemangledName(const std::string& lookupName, const std::string& demangledNeedle) {
@@ -2430,6 +2536,7 @@ bool ensureRealBackgroundHooks() {
 std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONITOR& monitor,
                                                                   const Time::steady_tp& frozenTime,
                                                                   const std::vector<RealBackgroundCaptureTarget>& targets) {
+    LinearMonitorScope linearMonitor(monitor);
     std::vector<RgbaReadback> readbacks(targets.size());
     if (!monitor || !monitor->m_activeWorkspace || targets.empty() || !g_pHyprRenderer || !g_pHyprOpenGL)
         return readbacks;
@@ -2476,12 +2583,14 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
         g_realBackgroundRenderHookContext = nullptr;
     };
 
+    CaptureColorScope captureColor(monitor);
     const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
     CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
 
     g_pHyprOpenGL->makeEGLCurrent();
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    setCaptureImageDescription(framebuffer, monitor);
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
         g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
         clearHookContext();
@@ -2513,6 +2622,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
                                                const Time::steady_tp& frozenTime,
                                                const RealBackgroundCaptureTarget& target,
                                                CFramebuffer& targetFramebuffer) {
+    LinearMonitorScope linearMonitor(monitor);
     ScopedTiming timing("realbg.framebuffer_total");
 
     if (!monitor || !monitor->m_activeWorkspace || !target.window || !targetFramebuffer.isAllocated() || !g_pHyprRenderer || !g_pHyprOpenGL)
@@ -2554,12 +2664,14 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
         g_realBackgroundRenderHookContext = nullptr;
     };
 
+    CaptureColorScope captureColor(monitor);
     const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
     const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
     CRegion    fakeDamage{0, 0, framebufferWidth, framebufferHeight};
 
     g_pHyprOpenGL->makeEGLCurrent();
     g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    setCaptureImageDescription(framebuffer, monitor);
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
         g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
         clearHookContext();
@@ -2601,7 +2713,7 @@ void renderRealBackgroundArtifactsForMonitor(const PHLMONITOR& monitor,
         if (!request || request->windowIndex >= session.windows.size() || readbacks[i].pixels.empty())
             continue;
 
-        if (!writeRgbaFile(request->path, readbacks[i].pixels, &budget))
+        if (!writeArtifact(request->path, readbacks[i], &budget))
             continue;
 
         auto& info = session.windows[request->windowIndex];
@@ -3046,6 +3158,13 @@ void expandReadbackToShadowBounds(RgbaReadback& readback, CBox& artifactBox, con
         std::copy(src, src + oldRowBytes, dst);
     }
 
+    if (!readback.linear.empty()) {
+        std::vector<std::uint16_t> linear(bytes, 0);
+        for (int y = 0; y < readback.height; ++y)
+            std::copy_n(readback.linear.data() + std::size_t(y) * oldRowBytes, oldRowBytes,
+                        linear.data() + std::size_t(y + padTop) * newRowBytes + std::size_t(padLeft) * 4);
+        readback.linear = std::move(linear);
+    }
     readback.cropX -= padLeft;
     readback.cropTopY -= padTop;
     readback.width = newWidth;
@@ -3124,11 +3243,16 @@ void repairTransparentShadow(RgbaReadback& readback, const CBox& artifactBox, co
             px[0] = 0;
             px[1] = 0;
             px[2] = 0;
+            if (!readback.linear.empty()) std::fill_n(readback.linear.data() + i, 4, 0);
             return;
         }
         px[0] = static_cast<unsigned char>(color.r);
         px[1] = static_cast<unsigned char>(color.g);
         px[2] = static_cast<unsigned char>(color.b);
+        if (!readback.linear.empty()) {
+            for (int c = 0; c < 3; ++c) readback.linear[i + c] = color::floatToHalf(color::srgbToLinear(px[c] / 255.0F) * readback.referenceNits / color::scRgbNits);
+            readback.linear[i + 3] = color::floatToHalf(px[3] / 255.0F);
+        }
     };
 
     const auto repairRegion = [&](int left, int top, int right, int bottom, bool testCutout) {
@@ -3480,6 +3604,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
 } // namespace
 
 CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool quick) {
+    LinearCaptureScope linearCapture;
     CaptureSession session;
     session.regionCaptureAvailable = true;
     session.scrollSessionVersion = 1;
@@ -3511,6 +3636,8 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         if (!monitor)
             continue;
         MonitorInfo info;
+        info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
+        info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
         info.name = monitor->m_name;
         info.logicalGeometry = monitorRect(monitor);
         info.scale = monitor->m_scale;
@@ -3591,6 +3718,8 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
             info.selectionClipGeometry = candidate.stage->clip;
         } else if (isScrollingTiledWindow(window))
             info.selectionClipGeometry = monitorRect(monitor);
+        info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
+        info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
         info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
         info.focused = window == Desktop::focusState()->window();
@@ -3702,6 +3831,7 @@ LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
 }
 
 LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
+    LinearCaptureScope linearCapture;
     const auto requestJson = readPrivateRequestFile(path);
     if (!requestJson)
         return {.success = false, .error = "invalid window capture request file"};
@@ -3732,6 +3862,8 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
         return {.success = false, .error = "window capture runtime path failed"};
 
     WindowInfo info;
+    info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
+    info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
     info.address = "0x" + pointerId(window.get());
     info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
     info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);

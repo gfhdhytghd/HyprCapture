@@ -67,6 +67,10 @@ bool TimestampedRgbaWriter::open(int fd, int width, int height, int fps) {
     s.stream->avg_frame_rate = s.stream->r_frame_rate = AVRational{fps, 1};
     auto* par = s.stream->codecpar;
     par->codec_type = AVMEDIA_TYPE_VIDEO; par->codec_id = AV_CODEC_ID_RAWVIDEO;
+    par->color_range = AVCOL_RANGE_JPEG;
+    par->color_primaries = AVCOL_PRI_BT709;
+    par->color_trc = AVCOL_TRC_IEC61966_2_1;
+    par->color_space = AVCOL_SPC_RGB;
     par->format = AV_PIX_FMT_RGBA; par->codec_tag = MKTAG('R', 'G', 'B', 'A');
     par->width = width; par->height = height; par->sample_aspect_ratio = {1, 1};
     if (!s.check(avformat_write_header(s.mux, nullptr))) return false;

@@ -82,3 +82,22 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-recording-pts-') as folder:
         assert rms(sound[24000:30000]) < .01
         assert rms(sound[38000:44000]) > .1
         assert rms(sound[55000:65000]) < .01
+
+# Verify the production SDR filter's actual encoded metadata and pixel conversion.
+with tempfile.TemporaryDirectory(prefix="hyprcapture-sdr-color-") as directory:
+    output = str(Path(directory) / "color.mp4")
+    raw = bytes([128, 64, 32, 255]) * 64 * 64
+    color_filter = run(fixture, '--sdr-filter').decode()
+    subprocess.run(['ffmpeg', '-v', 'error', '-f', 'rawvideo', '-pixel_format', 'rgba',
+                    '-video_size', '64x64', '-framerate', '1', '-i', 'pipe:0', '-frames:v', '1',
+                    '-vf', color_filter, '-c:v', 'libx264', '-crf', '0', '-pix_fmt', 'yuv444p', output],
+                   input=raw, check=True)
+    metadata = json.loads(run('ffprobe', '-v', 'error', '-show_entries',
+                             'stream=color_space,color_transfer,color_primaries,color_range',
+                             '-of', 'json', output))['streams'][0]
+    assert metadata == dict(color_range='tv', color_space='bt709',
+                            color_transfer='iec61966-2-1', color_primaries='bt709'), metadata
+    decoded = run('ffmpeg', '-v', 'error', '-i', output, '-f', 'rawvideo', '-pix_fmt', 'rgba', 'pipe:1')
+    assert len(decoded) == len(raw)
+    assert max(abs(a - b) for a, b in zip(raw, decoded)) <= 2
+    print('SDR encoding color tags and RGB roundtrip verified')

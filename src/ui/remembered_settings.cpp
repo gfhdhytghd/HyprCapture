@@ -39,6 +39,7 @@ void transfer(QSettings& settings, CaptureDefaults& defaults, bool reading) {
     enumeration("recordAudio", defaults.recordAudio, parseRecordAudio);
     const QStringList formats{"mp4", "mov", "webm", "mkv", "gif", "apng", "webp"};
     const QStringList codecs{"auto", "h264", "h265", "av1", "vp9", "ffv1"};
+    choice("screenshotFormat", defaults.screenshotFormat, {"png", "heic"});
     choice("recordFormat", defaults.recordFormat, formats);
     choice("recordTransparentFormat", defaults.recordTransparentFormat, formats);
     choice("recordCodec", defaults.recordCodec, codecs);

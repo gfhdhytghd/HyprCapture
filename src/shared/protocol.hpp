@@ -27,6 +27,8 @@ struct MonitorInfo {
     double      scale = 1.0;
     int         transform = 0;
     bool        focused = false;
+    std::string artifactFormat = "rgba8"; // rgba16f-linear-srgb: 1.0 = 80 nits, straight alpha
+    double      artifactReferenceNits = 80.0;
     std::string artifactPath;
     int         artifactWidth = 0;
     int         artifactHeight = 0;
@@ -55,6 +57,8 @@ struct WindowInfo {
     double      rounding = 0.0;
     double      roundingPower = 2.0;
     double      borderSize = 0.0;
+    std::string artifactFormat = "rgba8"; // rgba16f-linear-srgb: 1.0 = 80 nits, straight alpha
+    double      artifactReferenceNits = 80.0;
     std::string artifactPath;
     int         artifactWidth = 0;
     int         artifactHeight = 0;
