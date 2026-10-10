@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.gfhdhytghd.hyprcapture",
+  "name": "HyprCapture",
+  "version": "0.3.0",
+  "author": "wilf",
+  "license": "GPL-3.0-only",
+  "description": "Native Hyprland screenshots and screen recording: region, window and scrolling capture, annotation, pinning, and recording with sound.",
+  "preview": "preview.png",
+  "kinds": ["service"],
+  "keepLoaded": true,
+  "entryPoints": { "service": "omarchy/Service.qml" }
+}
