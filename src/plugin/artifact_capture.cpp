@@ -13,6 +13,7 @@
 #include "plugin/window_gpu_sender.hpp"
 #include "shared/rgba_transform.hpp"
 #include "shared/hdr_color.hpp"
+#include "shared/sdr_resolve_shader.hpp"
 #include "shared/audio_timeline.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
@@ -101,6 +102,7 @@ using Render::eRenderPassMode;
 using Json = nlohmann::ordered_json;
 
 bool g_captureLinear = false;
+PHLMONITOR g_captureMonitor;
 struct LinearCaptureScope {
     bool previous = g_captureLinear;
     LinearCaptureScope() {
@@ -118,8 +120,9 @@ bool linearCaptureFor(const PHLMONITOR& monitor) {
 }
 struct LinearMonitorScope {
     bool previous = g_captureLinear;
-    LinearMonitorScope(const PHLMONITOR& monitor) { g_captureLinear = linearCaptureFor(monitor); }
-    ~LinearMonitorScope() { g_captureLinear = previous; }
+    PHLMONITOR previousMonitor = g_captureMonitor;
+    LinearMonitorScope(const PHLMONITOR& monitor) { g_captureLinear = linearCaptureFor(monitor); g_captureMonitor = monitor; }
+    ~LinearMonitorScope() { g_captureLinear = previous; g_captureMonitor = previousMonitor; }
 };
 
 // Hardware CTM is an output optimization. Offscreen captures need shader CM
@@ -1322,6 +1325,8 @@ GLuint framebufferId(CFramebuffer& framebuffer) {
     return glFramebuffer ? glFramebuffer->getFBID() : 0;
 }
 
+SP<CFramebuffer> resolveSdrFramebuffer(CFramebuffer& source, const PHLMONITOR& monitor);
+
 RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int cropTopY, int cropWidth, int cropHeight, bool directGlY = false, bool asyncPbo = false, std::int64_t captureUs = 0) {
     const int framebufferWidth = positiveRoundedIntFromDouble(framebuffer.m_size.x);
     const int framebufferHeight = positiveRoundedIntFromDouble(framebuffer.m_size.y);
@@ -1347,7 +1352,10 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
         unsigned char* target = canReadDirectly ? readback.pixels.data() : rows.data();
         GLint previousReadFramebuffer = 0;
         glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &previousReadFramebuffer);
-        const GLuint readFramebuffer = framebufferId(framebuffer);
+        const bool needsResolve = !g_captureLinear && g_captureMonitor && framebuffer.imageDescription() && framebuffer.imageDescription()->needsCM(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
+        auto resolved = needsResolve ? resolveSdrFramebuffer(framebuffer, g_captureMonitor) : SP<CFramebuffer>{};
+        if (needsResolve && !resolved) return {};
+        const GLuint readFramebuffer = framebufferId(resolved ? *resolved : framebuffer);
         if (readFramebuffer == 0)
             return {};
         glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
@@ -1358,7 +1366,7 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFramebuffer);
                 return {};
             }
-            readback.referenceNits = framebuffer.imageDescription() ? framebuffer.imageDescription()->value().luminances.reference : 80.0F;
+            readback.referenceNits = g_captureMonitor ? std::clamp(g_captureMonitor->m_sdrMaxLuminance, 1, 10000) : 80.0F;
             readback.linear.assign(region.outputBytes, 0);
             std::vector<std::uint16_t> source;
             if (!canReadDirectly) source.resize(region.sourceBytes);
@@ -1739,6 +1747,11 @@ void unpremultiplyAlpha(RgbaReadback& readback) {
     }
 }
 
+DRMFormat captureFramebufferFormat() {
+    return g_captureLinear || (g_captureMonitor && g_captureMonitor->workBufferImageDescription()->value().transferFunction == NColorManagement::CM_TRANSFER_FUNCTION_EXT_LINEAR) ?
+        DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888;
+}
+
 SP<CFramebuffer> createFramebuffer(const std::string& name, int width, int height, DRMFormat preferredFormat = DRM_FORMAT_ABGR8888) {
     if (!g_pHyprRenderer || width <= 0 || height <= 0)
         return {};
@@ -1747,7 +1760,7 @@ SP<CFramebuffer> createFramebuffer(const std::string& name, int width, int heigh
     if (!framebuffer)
         return {};
 
-    if (!framebuffer->alloc(width, height, g_captureLinear ? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888))
+    if (!framebuffer->alloc(width, height, captureFramebufferFormat()))
         return {};
 
     framebuffer->setImageDescription(g_captureLinear ? NColorManagement::LINEAR_IMAGE_DESCRIPTION : NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
@@ -1755,23 +1768,107 @@ SP<CFramebuffer> createFramebuffer(const std::string& name, int width, int heigh
 }
 
 void setCaptureImageDescription(const SP<CFramebuffer>& framebuffer, const PHLMONITOR& monitor) {
-    if (!framebuffer) return;
-    if (g_captureLinear) {
-        auto luminances = NColorManagement::LINEAR_IMAGE_DESCRIPTION->value().luminances;
-        luminances.reference = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
-        framebuffer->setImageDescription(NColorManagement::LINEAR_IMAGE_DESCRIPTION->with(luminances));
-    } else
-        framebuffer->setImageDescription(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION);
+    if (framebuffer) framebuffer->setImageDescription(monitor->workBufferImageDescription());
 }
 
 bool ensureFramebuffer(SP<CFramebuffer>& framebuffer, const std::string& name, int width, int height, DRMFormat preferredFormat = DRM_FORMAT_ABGR8888) {
-    if (framebuffer && framebuffer->isAllocated() && framebuffer->m_drmFormat == (g_captureLinear ? DRM_FORMAT_ABGR16161616F : DRM_FORMAT_ABGR8888) && positiveRoundedIntFromDouble(framebuffer->m_size.x) == width && positiveRoundedIntFromDouble(framebuffer->m_size.y) == height)
+    if (framebuffer && framebuffer->isAllocated() && framebuffer->m_drmFormat == (captureFramebufferFormat()) && positiveRoundedIntFromDouble(framebuffer->m_size.x) == width && positiveRoundedIntFromDouble(framebuffer->m_size.y) == height)
         return true;
 
     if (framebuffer)
         framebuffer->release();
     framebuffer = createFramebuffer(name, width, height, preferredFormat);
     return framebuffer && framebuffer->isAllocated();
+}
+
+struct SdrResolveTarget {
+    WP<Render::ITexture> source;
+    SP<CFramebuffer> output;
+};
+std::vector<SdrResolveTarget> g_sdrResolveTargets;
+GLuint g_sdrResolveProgram = 0;
+GLuint g_sdrResolveVao = 0;
+
+SP<CFramebuffer> resolveSdrFramebuffer(CFramebuffer& source, const PHLMONITOR& monitor) {
+    ScopedTiming timing("capture.sdr_gpu_resolve");
+    const auto description = source.imageDescription();
+    const auto texture = source.getTexture();
+    if (!description || !texture || !texture->m_texID || !monitor) return {};
+    const auto tf = description->value().transferFunction;
+    using namespace NColorManagement;
+    if (tf != CM_TRANSFER_FUNCTION_EXT_LINEAR && tf != CM_TRANSFER_FUNCTION_LINEAR && tf != CM_TRANSFER_FUNCTION_SRGB &&
+        tf != CM_TRANSFER_FUNCTION_EXT_SRGB && tf != CM_TRANSFER_FUNCTION_GAMMA22 && tf != CM_TRANSFER_FUNCTION_GAMMA28 && tf != CM_TRANSFER_FUNCTION_ST2084_PQ)
+        return {};
+
+    // Full-fake rendering uses the monitor's work space, independently of the
+    // framebuffer's description. Resolve that space on the GPU before any
+    // 8-bit readback or DMA-BUF export; never truncate linear HDR into RGBA8.
+    GLint program = 0, vao = 0, drawFB = 0, readFB = 0, activeTexture = 0, boundTexture = 0;
+    GLint viewport[4]; GLboolean mask[4];
+    glGetIntegerv(GL_CURRENT_PROGRAM, &program); glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vao);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &drawFB); glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &readFB);
+    glGetIntegerv(GL_VIEWPORT, viewport); glGetBooleanv(GL_COLOR_WRITEMASK, mask);
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &activeTexture); glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &boundTexture);
+    constexpr GLenum capabilities[]{GL_BLEND, GL_SCISSOR_TEST, GL_STENCIL_TEST, GL_DEPTH_TEST};
+    GLboolean enabled[4];
+    for (int i = 0; i < 4; ++i) enabled[i] = glIsEnabled(capabilities[i]);
+    const auto restore = [&] {
+        glUseProgram(program); glBindVertexArray(vao);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, drawFB); glBindFramebuffer(GL_READ_FRAMEBUFFER, readFB);
+        glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+        glColorMask(mask[0], mask[1], mask[2], mask[3]);
+        for (int i = 0; i < 4; ++i) { if (enabled[i]) glEnable(capabilities[i]); else glDisable(capabilities[i]); }
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, boundTexture); glActiveTexture(activeTexture);
+    };
+    if (!g_sdrResolveProgram) {
+        const auto compile = [](GLenum type, const char* code) {
+            const GLuint shader = glCreateShader(type); glShaderSource(shader, 1, &code, nullptr); glCompileShader(shader);
+            GLint ok = 0; glGetShaderiv(shader, GL_COMPILE_STATUS, &ok);
+            if (!ok) { glDeleteShader(shader); return GLuint{0}; }
+            return shader;
+        };
+        const GLuint vs = compile(GL_VERTEX_SHADER, color::sdrResolveVertex), fs = compile(GL_FRAGMENT_SHADER, color::sdrResolveFragment);
+        if (vs && fs) {
+            g_sdrResolveProgram = glCreateProgram(); glAttachShader(g_sdrResolveProgram, vs); glAttachShader(g_sdrResolveProgram, fs); glLinkProgram(g_sdrResolveProgram);
+            GLint ok = 0; glGetProgramiv(g_sdrResolveProgram, GL_LINK_STATUS, &ok);
+            if (!ok) { glDeleteProgram(g_sdrResolveProgram); g_sdrResolveProgram = 0; }
+        }
+        if (vs) glDeleteShader(vs);
+        if (fs) glDeleteShader(fs);
+        if (g_sdrResolveProgram) glGenVertexArrays(1, &g_sdrResolveVao);
+    }
+    if (!g_sdrResolveProgram) { restore(); return {}; }
+    std::erase_if(g_sdrResolveTargets, [](const auto& target) { return target.source.expired(); });
+    auto found = std::ranges::find_if(g_sdrResolveTargets, [&](const auto& target) { return target.source.lock() == texture; });
+    if (found == g_sdrResolveTargets.end()) {
+        if (g_sdrResolveTargets.size() >= 64) { restore(); return {}; }
+        g_sdrResolveTargets.push_back({texture, g_pHyprRenderer->createFB("hyprcapture-sdr-resolve")});
+        found = std::prev(g_sdrResolveTargets.end());
+    }
+    auto output = found->output;
+    if (!output || !output->alloc(source.m_size.x, source.m_size.y, DRM_FORMAT_ABGR8888)) { restore(); return {}; }
+    output->setImageDescription(DEFAULT_SRGB_IMAGE_DESCRIPTION);
+    auto conversion = description->getPrimaries()->convertMatrix(DEFAULT_SRGB_IMAGE_DESCRIPTION->getPrimaries());
+    const auto mat = conversion.mat();
+    const GLfloat matrix[]{mat[0][0], mat[1][0], mat[2][0], mat[0][1], mat[1][1], mat[2][1], mat[0][2], mat[1][2], mat[2][2]};
+    const bool linearHdr = tf == CM_TRANSFER_FUNCTION_EXT_LINEAR;
+    const bool pq = tf == CM_TRANSFER_FUNCTION_ST2084_PQ;
+    const float white = std::max(1, monitor->m_sdrMaxLuminance);
+    const float black = linearHdr ? std::max(0.0F, monitor->m_sdrMinLuminance) / color::scRgbNits : 0.0F;
+    glUseProgram(g_sdrResolveProgram); glBindVertexArray(g_sdrResolveVao);
+    glUniform1i(glGetUniformLocation(g_sdrResolveProgram, "sourceImage"), 0);
+    glUniform1i(glGetUniformLocation(g_sdrResolveProgram, "sourceTF"), tf);
+    glUniform1f(glGetUniformLocation(g_sdrResolveProgram, "whiteScale"), linearHdr ? color::scRgbNits / std::max(white - black * color::scRgbNits, 1.0F) : pq ? 10000.0F / white : 1.0F);
+    glUniform1f(glGetUniformLocation(g_sdrResolveProgram, "blackLevel"), black);
+    glUniform1f(glGetUniformLocation(g_sdrResolveProgram, "shoulderKnee"), color::sdrShoulderKnee);
+    glUniformMatrix3fv(glGetUniformLocation(g_sdrResolveProgram, "primaries"), 1, false, matrix);
+    glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, texture->m_texID);
+    output->bind(); glViewport(0, 0, source.m_size.x, source.m_size.y); glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    for (const auto cap : capabilities) glDisable(cap);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    restore();
+    return output;
 }
 
 SP<CFramebuffer>& reusableWindowRecordingFramebuffer() {
@@ -4116,7 +4213,10 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     session.gpuFramebufferWidth = framebufferWidth;
     session.gpuFramebufferHeight = framebufferHeight;
 
-    const auto framebuffer = framebufferId(*session.gpuFramebuffer);
+    auto resolved = session.gpuFramebuffer->imageDescription()->needsCM(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION) ?
+        resolveSdrFramebuffer(*session.gpuFramebuffer, monitor) : session.gpuFramebuffer;
+    if (!resolved) return false;
+    const auto framebuffer = framebufferId(*resolved);
     const int imageWidth = positiveRoundedIntFromDouble(session.gpuFramebuffer->m_size.x);
     const int imageHeight = positiveRoundedIntFromDouble(session.gpuFramebuffer->m_size.y);
     if (framebuffer == 0 || imageWidth != framebufferWidth || imageHeight != framebufferHeight || renderInfo.cropTopY > imageHeight - height)
@@ -4673,6 +4773,10 @@ void shutdownArtifactCapture() {
     stopWindowStreamSession();
     if (g_pHyprOpenGL)
         g_pHyprOpenGL->makeEGLCurrent();
+    g_sdrResolveTargets.clear();
+    if (g_sdrResolveProgram) glDeleteProgram(std::exchange(g_sdrResolveProgram, 0));
+    if (g_sdrResolveVao) glDeleteVertexArrays(1, &g_sdrResolveVao);
+    g_sdrResolveVao = 0;
     resetAsyncPboReadback(g_windowRecordingPboReadback);
     resetWindowStreamPboReadback();
     g_realBackgroundRecordingCache.reset();

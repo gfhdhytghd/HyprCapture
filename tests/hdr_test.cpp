@@ -8,6 +8,7 @@
 #include <QtCore/qfloat16.h>
 #include <cassert>
 #include <cstdio>
+#include <chrono>
 #ifdef HYPRCAPTURE_HAVE_HEIF
 #include <libheif/heif.h>
 #endif
@@ -27,6 +28,41 @@ int main(int argc, char** argv) {
     const auto preview = ui::hdrToSdr(linear);
     assert(preview.pixelColor(0, 0) == sdr.pixelColor(0, 0));
     assert(preview.colorSpace() == QColorSpace(QColorSpace::SRgb));
+    // Diffuse whites and saturated SDR primaries must not be darkened just
+    // because their display runs HDR. Exercise the current 173-nit output.
+    for (const auto c : {QColor(64, 64, 64), QColor(128, 128, 128), QColor(192, 192, 192),
+                         QColor(255, 255, 255), QColor(255, 0, 0)}) {
+        sdr.fill(c);
+        const auto converted = ui::hdrToSdr(ui::sdrToHdr(sdr, 173), 173).pixelColor(0, 0);
+        assert(std::abs(converted.red() - c.red()) <= 2);
+        assert(std::abs(converted.green() - c.green()) <= 2);
+        assert(std::abs(converted.blue() - c.blue()) <= 2);
+    }
+    QImage channels(256, 256, QImage::Format_RGBA16FPx4);
+    for (unsigned i = 0; i < 65536; ++i) {
+        auto* pixel = reinterpret_cast<uint16_t*>(channels.scanLine(i / 256)) + (i % 256) * 4;
+        pixel[0] = i; pixel[1] = color::floatToHalf(0.2F); pixel[2] = color::floatToHalf(0.5F); pixel[3] = color::floatToHalf(1.0F);
+    }
+    const auto optimized = ui::hdrToSdr(channels, 173);
+    for (unsigned i = 0; i < 65536; ++i) {
+        const auto expected = color::sdrLinear({color::halfToFloat(i), 0.2F, 0.5F}, 173);
+        const auto actual = optimized.pixelColor(i % 256, i / 256);
+        for (int c = 0; c < 3; ++c) assert(std::abs(optimized.constScanLine(i / 256)[(i % 256) * 4 + c] - color::byte(color::linearToSrgb(expected[c]))) <= 1);
+        assert(actual.alpha() == 255);
+    }
+    if (argc > 1 && std::string(argv[1]) == "--benchmark") {
+        QImage big(6144, 3456, QImage::Format_RGBA16FPx4);
+        auto* pixels = reinterpret_cast<qfloat16*>(big.bits());
+        for (int i = 0; i < big.width() * big.height(); ++i) {
+            const auto value = qfloat16((i % 2 ? 0.216F : 1.0F) * 173.0F / 80.0F);
+            pixels[i * 4] = pixels[i * 4 + 1] = pixels[i * 4 + 2] = value;
+            pixels[i * 4 + 3] = qfloat16(1.0F);
+        }
+        const auto started = std::chrono::steady_clock::now();
+        const auto converted = ui::hdrToSdr(big, 173);
+        assert(!converted.isNull());
+        printf("6K HDR preview conversion: %lld ms\n", static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started).count()));
+    }
     // HDR highlights retain ordering in SDR and never modify the float source.
     QImage hdr(64, 64, QImage::Format_RGBA16FPx4);
     const float nits[]{100, 203, 1000, 4000};

@@ -3062,7 +3062,11 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     painter.setOpacity(m_overlayOpacity);
 
     paintDesktop(painter, rect());
+    painter.save();
+    if (m_mode == hyprcapture::CaptureMode::Fullscreen)
+        painter.setClipRegion(QRegion(rect()).subtracted(QRegion(fullscreenCaptureRect())));
     painter.fillRect(rect(), QColor(0, 0, 0, 80));
+    painter.restore();
     if (m_editing)
         return;
 
@@ -3112,6 +3116,13 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     } else if (m_mode == hyprcapture::CaptureMode::Window || fusionGesture) {
         const auto* window = hoveredWindow();
         const auto* selected = selectedWindow();
+        if (window) {
+            const QRect target = globalToLocalRect(windowFrameGeometry(*window));
+            painter.save();
+            painter.setClipPath(roundedWindowFramePath(target, windowFrameRadius(*window), window->roundingPower), Qt::IntersectClip);
+            paintDesktop(painter, target);
+            painter.restore();
+        }
         for (const auto& candidate : m_windowArtifacts) {
             const QRect outline =
                 hyprcapture::ui::selectionOutlineGeometry(candidate.selectionGeometry.isValid() ? candidate.selectionGeometry : windowFrameGeometry(candidate),

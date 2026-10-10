@@ -10,6 +10,7 @@ namespace hyprcapture::color {
 // Transport: linear sRGB/scRGB primaries, 1.0 = 80 cd/m2; straight alpha.
 inline constexpr float scRgbNits = 80.0F;
 inline constexpr float hdrWhiteNits = 203.0F;
+inline constexpr float sdrShoulderKnee = 0.98F;
 
 inline float halfToFloat(std::uint16_t h) {
     const auto sign = std::uint32_t(h & 0x8000U) << 16;
@@ -58,7 +59,7 @@ inline unsigned char byte(float v) {
 inline std::array<float, 3> sdrLinear(std::array<float, 3> rgb, float whiteNits = hdrWhiteNits) {
     for (auto& v : rgb) v = std::isfinite(v) ? v * scRgbNits / whiteNits : 0.0F;
     const float peak = std::max({rgb[0], rgb[1], rgb[2], 0.0F});
-    constexpr float knee = 0.75F;
+    constexpr float knee = sdrShoulderKnee;
     if (whiteNits > scRgbNits && peak > knee) {
         const float mapped = knee + (1.0F - knee) * (peak - knee) / (peak - knee + (1.0F - knee));
         for (auto& v : rgb) v *= mapped / peak;

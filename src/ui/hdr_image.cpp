@@ -5,6 +5,7 @@
 #include <QPainter>
 #include <QtCore/qfloat16.h>
 #include <memory>
+#include <thread>
 #ifdef HYPRCAPTURE_HAVE_HEIF
 #include <libheif/heif.h>
 #endif
@@ -22,15 +23,50 @@ QImage hdrToSdr(const QImage& image, float referenceNits) {
     const auto linear = image.convertToFormat(QImage::Format_RGBA16FPx4);
     QImage output(image.size(), QImage::Format_RGBA8888);
     if (linear.isNull() || output.isNull()) return {};
-    for (int y = 0; y < image.height(); ++y) {
-        const auto* src = reinterpret_cast<const qfloat16*>(linear.constScanLine(y));
-        auto* dst = output.scanLine(y);
-        for (int x = 0; x < image.width(); ++x, src += 4, dst += 4) {
-            const auto rgb = color::sdrLinear({float(src[0]), float(src[1]), float(src[2])}, referenceNits);
-            for (int c = 0; c < 3; ++c) dst[c] = color::byte(color::linearToSrgb(rgb[c]));
-            dst[3] = color::byte(float(src[3]));
-        }
+    // Half-float transport has only 65536 possible channel values. Evaluate
+    // transfer functions once per value rather than three pow() calls per pixel.
+    std::array<float, 65536> values;
+    std::array<unsigned char, 65536> direct, gamma, alpha;
+    const float scale = color::scRgbNits / referenceNits;
+    for (unsigned i = 0; i < values.size(); ++i) {
+        const float raw = color::halfToFloat(i);
+        values[i] = std::isfinite(raw) ? raw * scale : 0.0F;
+        direct[i] = color::byte(color::linearToSrgb(values[i]));
+        gamma[i] = color::byte(color::linearToSrgb(raw));
+        alpha[i] = color::byte(raw);
     }
+    const auto* sourceBits = linear.constBits();
+    auto* destinationBits = output.bits();
+    const auto sourceStride = linear.bytesPerLine(), destinationStride = output.bytesPerLine();
+    const auto convertRows = [&](int begin, int end) {
+      for (int y = begin; y < end; ++y) {
+        const auto* src = reinterpret_cast<const uint16_t*>(sourceBits + y * sourceStride);
+        auto* dst = destinationBits + y * destinationStride;
+        for (int x = 0; x < image.width(); ++x, src += 4, dst += 4) {
+            const float r = values[src[0]], g = values[src[1]], b = values[src[2]];
+            const float peak = std::max({r, g, b});
+            if (r >= 0 && g >= 0 && b >= 0) {
+                if (referenceNits <= color::scRgbNits || peak <= color::sdrShoulderKnee) {
+                    dst[0] = direct[src[0]]; dst[1] = direct[src[1]]; dst[2] = direct[src[2]];
+                } else {
+                    const float headroom = 1.0F - color::sdrShoulderKnee;
+                    const float above = peak - color::sdrShoulderKnee;
+                    const float factor = (color::sdrShoulderKnee + headroom * above / (above + headroom)) / peak;
+                    for (int c = 0; c < 3; ++c) dst[c] = gamma[color::floatToHalf(values[src[c]] * factor)];
+                }
+            } else {
+                const auto rgb = color::sdrLinear({color::halfToFloat(src[0]), color::halfToFloat(src[1]), color::halfToFloat(src[2])}, referenceNits);
+                for (int c = 0; c < 3; ++c) dst[c] = gamma[color::floatToHalf(rgb[c])];
+            }
+            dst[3] = alpha[src[3]];
+        }
+      }
+    };
+    const unsigned workers = image.width() * qint64(image.height()) >= 1024 * 1024 ? std::clamp(std::thread::hardware_concurrency(), 1U, 4U) : 1U;
+    std::array<std::thread, 3> threads;
+    for (unsigned i = 1; i < workers; ++i) threads[i - 1] = std::thread(convertRows, image.height() * i / workers, image.height() * (i + 1) / workers);
+    convertRows(0, image.height() / workers);
+    for (unsigned i = 1; i < workers; ++i) threads[i - 1].join();
     output.setColorSpace(QColorSpace::SRgb);
     return output;
 }
