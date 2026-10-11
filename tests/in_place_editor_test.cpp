@@ -197,6 +197,7 @@ class InPlaceEditorTest final : public QObject {
                     defaults.screenshotFormat = defaultHdr ? "heic" : "png";
                     auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, false).toStdString());
                     QVERIFY(session);
+                    session->monitors.front().hdrCapable = true; // Capability alone must not enable HDR.
                     // The focused/captured screen is SDR. An unfocused HDR
                     // screen with no artifact must still enable the control.
                     if (hasHdrScreen) {
@@ -204,6 +205,7 @@ class InPlaceEditorTest final : public QObject {
                         other.name = "unfocused-HDR";
                         other.logicalGeometry = {800,0,800,600};
                         other.hdrCapable = true;
+                        other.hdrActive = true;
                         session->monitors.push_back(other);
                     }
                     CaptureOverlay overlay(defaults,false,false,false,QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
@@ -279,7 +281,7 @@ class InPlaceEditorTest final : public QObject {
         hyprcapture::CaptureSession session;
         session.id = "hdr-ui-test"; session.defaults = defaults;
         hyprcapture::MonitorInfo monitor;
-        monitor.name = "HDR"; monitor.focused = true; monitor.hdrCapable = true;
+        monitor.name = "HDR"; monitor.focused = true; monitor.hdrCapable = true; monitor.hdrActive = true;
         monitor.logicalGeometry = {0, 0, kLogicalWidth, kLogicalHeight}; monitor.scale = 2;
         monitor.artifactFormat = "rgba16f-linear-srgb"; monitor.artifactReferenceNits = 203;
         monitor.artifactPath = path.toStdString(); monitor.artifactWidth = linear.width(); monitor.artifactHeight = linear.height();
@@ -1322,7 +1324,7 @@ int hdrEditorLive(int argc,char** argv) {
     hyprcapture::CaptureSession session;
     session.id="hdr-editor-live";session.defaults=defaults;
     hyprcapture::MonitorInfo monitor;
-    monitor.name=screen->name().toStdString();monitor.focused=true;monitor.hdrCapable=true;
+    monitor.name=screen->name().toStdString();monitor.focused=true;monitor.hdrCapable=true;monitor.hdrActive=true;
     monitor.logicalGeometry={double(geometry.x()),double(geometry.y()),double(geometry.width()),double(geometry.height())};
     monitor.artifactPath=path.toStdString();monitor.artifactWidth=512;monitor.artifactHeight=256;
     monitor.artifactFormat="rgba16f-linear-srgb";monitor.artifactReferenceNits=173;

@@ -295,6 +295,7 @@ int main(int argc, char **argv) {
     monitor.focused = true;
     monitor.artifactReferenceNits = 153;
     monitor.hdrCapable = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR");
+    monitor.hdrActive = monitor.hdrCapable;
     monitor.scale = scale;
     monitor.artifactPath = artifact.toStdString();
     monitor.artifactWidth = frozen.width();

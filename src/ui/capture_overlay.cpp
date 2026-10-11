@@ -1685,7 +1685,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         return;
 
     m_sessionDecoded = true;
-    m_hasHdrScreen = std::ranges::any_of(decoded->monitors, [](const auto& monitor) { return monitor.hdrCapable; });
+    m_hasHdrScreen = std::ranges::any_of(decoded->monitors, [](const auto& monitor) { return monitor.hdrActive; });
     m_regionCaptureAvailable = decoded->regionCaptureAvailable;
     m_scrollSessionVersion = decoded->scrollSessionVersion;
     m_defaults = decoded->defaults;
@@ -1966,7 +1966,15 @@ void CaptureOverlay::buildToolbar() {
     m_dynamicRangeControl = new QWidget(m_toolbar);
     m_dynamicRangeControl->setObjectName("dynamicRangeControl");
     m_dynamicRangeControl->setAttribute(Qt::WA_StyledBackground);
-    m_dynamicRangeControl->setStyleSheet("#dynamicRangeControl { border: 1px solid palette(mid); border-radius: 7px; background: palette(window); } #dynamicRangeControl QPushButton:disabled { color: palette(mid); }");
+    const auto rangePalette = QApplication::palette();
+    const auto rangeWindow = rangePalette.color(QPalette::Window);
+    const auto rangeText = rangeWindow.lightness() < 128 ? QColor(Qt::white) : rangePalette.color(QPalette::WindowText);
+    m_dynamicRangeControl->setStyleSheet(QStringLiteral(
+        "#dynamicRangeControl { border: 1px solid palette(mid); border-radius: 7px; background: palette(window); }"
+        "#dynamicRangeControl QPushButton { color: %1; }"
+        "#dynamicRangeControl QPushButton:checked, #dynamicRangeControl QPushButton:pressed { color: %1; background: %2; }"
+        "#dynamicRangeControl QPushButton:disabled { color: %1; }")
+        .arg(cssRgba(rangeText), cssRgba(mixedColor(rangePalette.color(QPalette::WindowText), rangeWindow, 0.72))));
     auto* dynamicRangeLayout = new QHBoxLayout(m_dynamicRangeControl);
     dynamicRangeLayout->setContentsMargins(3, 3, 3, 3);
     dynamicRangeLayout->setSpacing(2);
@@ -1996,7 +2004,7 @@ void CaptureOverlay::buildToolbar() {
     m_sdrButton = addDynamicRange("SDR", "screenshotSdr", "png");
     m_hdrButton = addDynamicRange("HDR", "screenshotHdr", "heic");
     m_hdrButton->setEnabled(hdrAvailable);
-    m_hdrButton->setToolTip(!m_hasHdrScreen ? tr("Connect an HDR display to enable HDR capture.") :
+    m_hdrButton->setToolTip(!m_hasHdrScreen ? tr("Enable HDR output on a display to enable HDR capture.") :
         hdrAvailable ? tr("Preserve HDR highlights and wide-gamut colors.") : tr("HDR encoding is unavailable."));
     layout->addWidget(m_dynamicRangeControl);
 

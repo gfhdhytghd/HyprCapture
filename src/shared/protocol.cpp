@@ -341,6 +341,7 @@ bool monitorValue(const Json& obj, MonitorInfo& out) {
         !doubleValue(obj, "scale", monitor.scale, 0.01, 100.0) || !intValue(obj, "transform", monitor.transform, 0, 7) ||
         !boolValue(obj, "focused", monitor.focused, false) ||
         !boolValue(obj, "hdrCapable", monitor.hdrCapable, false) ||
+        !boolValue(obj, "hdrActive", monitor.hdrActive, false) ||
         !stringValue(obj, "artifactFormat", monitor.artifactFormat, 32, false) ||
         !doubleValue(obj, "artifactReferenceNits", monitor.artifactReferenceNits, 1.0, 10000.0, false) ||
         !stringValue(obj, "artifactPath", monitor.artifactPath, MAX_PATH_BYTES, false) ||
@@ -455,6 +456,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"transform", std::clamp(mon.transform, 0, 7)},
             {"focused", mon.focused},
             {"hdrCapable", mon.hdrCapable},
+            {"hdrActive", mon.hdrActive},
             {"artifactFormat", mon.artifactFormat},
             {"artifactReferenceNits", boundedDouble(mon.artifactReferenceNits, 1.0, 10000.0, 80.0)},
             {"artifactPath", boundedString(mon.artifactPath, MAX_PATH_BYTES)},
