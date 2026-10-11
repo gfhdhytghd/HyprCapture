@@ -59,7 +59,7 @@ https://github.com/user-attachments/assets/03a642d3-569d-4b77-8ccf-17934620bc20
 - FFmpeg (including `ffprobe`, AAC and Opus encoders) for recording output
 - FFmpeg development libraries `libavformat`, `libavcodec`, and `libavutil` for timestamped RGBA transport (`ffmpeg` on Arch; `libavformat-dev libavcodec-dev libavutil-dev` on Debian/Ubuntu)
 - PulseAudio or PipeWire with its PulseAudio compatibility service for sound recording
-- Optional libheif >= 1.16 and a 10-bit HEVC encoder (x265) for HDR HEIC screenshots (`libheif` and `x265` on Arch; `libheif-dev` with HEVC encoding support on Debian/Ubuntu)
+- HEIC gain-map encoding needs an HEVC encoder and decoder (`x265` and `libde265` development packages), Git and patch. CMake builds pinned private libultrahdr 2.0.2 / libheif dependencies on the first build; system libraries are not replaced. Set `-DHYPRCAPTURE_GAINMAP_HEIC=OFF` for an offline PNG-only build. Nix fetches and patches these dependencies separately.
 - `wl-clipboard` for persistent Wayland clipboard ownership
 
 ### Install with `hyprpm`
@@ -210,19 +210,19 @@ hl.config({
 
 ### HDR screenshots and SDR recording
 
-On a color-managed HDR output, screenshots retain the compositor's half-float linear sRGB/scRGB pixels (1.0 = 80 cd/m²) until export. The overlay, editor, thumbnails, clipboard and PNG output use an sRGB rendition normalized to the output's SDR reference white, with a smooth highlight shoulder and gamut compression. SDR monitor captures stay on the sRGB path.
+On a color-managed HDR output, screenshots retain the compositor's half-float linear sRGB/scRGB pixels (1.0 = 80 cd/m²) until export. The overlay and in-place editor present the frozen HDR image through a separate Wayland color-managed 10-bit BT.2020/PQ surface beneath the transparent Qt controls. Its actual captured peak is advertised so the compositor does not tone-map the display-referred pixels a second time. Thumbnails and SDR PNG output use an sRGB rendition normalized to the output's SDR reference white, with a smooth highlight shoulder and gamut compression. SDR monitor captures stay on the sRGB path.
 
-Choose **Format → HEIC · HDR** to preserve HDR highlights, or set:
+Choose **HDR** in the **SDR / HDR** segmented control to preserve HDR highlights, or set:
 
 ```lua
 hl.config({
-    plugin = { hyprcapture = { screenshot_format = "heic" } },
+    plugin = { hyprcapture = { screenshot_mode = "hdr", show_hdr_control = true } },
 })
 ```
 
-The helper also accepts `--screenshot-format heic`. HEIC output carries 10-bit HEVC samples, BT.2020 primaries, ST 2084 PQ, NCLX and measured content-light metadata. Its suffix becomes `.heic`; the clipboard always receives an SDR PNG. Screenshots spanning HDR and SDR monitors combine the HDR pixels with the SDR monitor images promoted to a 203 cd/m² diffuse white. Window backgrounds, cursor layers, annotations and watermarks preserve the floating-point foreground through HDR export. HEIC encoding is optional: builds without libheif still capture and export SDR PNG, and unavailable HDR pixels/encoders produce an explicit error rather than an SDR file mislabeled as HDR. The compositor plugin and helper must both be updated for the float transport.
+The control is enabled whenever any connected display supports HDR, including when the current capture is on an SDR display. Without an HDR display or encoder, capture falls back to SDR. Set `screenshot_mode = "sdr"` or `"hdr"` for the default, and `show_hdr_control = false` to hide the control while retaining that default. The mode starts from configuration on each capture, independently of `remember_settings`. The helper also accepts `--screenshot-mode hdr --show-hdr-control 0`. HEIC output uses a normal sRGB SDR primary image with an ICC profile and matching NCLX, plus a full-resolution RGB ISO 21496-1 gain map (`tmap`). Viewers that ignore gain maps display the SDR image; gain-map-aware HDR viewers can reconstruct HDR brightness and BT.2020/P3 colors. Straight alpha is retained as a HEIF auxiliary image when needed. Its suffix becomes `.heic`; the clipboard defaults to HEIC (`image/heic`). Set `hdr_clipboard_format = "sdr"` to copy SDR PNG instead. `hdr_drag_format = "heic"` (default) or `"sdr"` selects the file dragged from the thumbnail, independently of the file opened by clicking it. `hdr_save_sdr = true` saves both the HEIC and a same-name SDR PNG; its default is `false`. SDR transport copies are private temporary PNGs when simultaneous saving is disabled. These options only affect HDR screenshots; SDR screenshots continue to use PNG. The SDR base uses exactly the screenshot's PNG conversion, including each monitor's reference white and annotations. Screenshots spanning HDR and SDR monitors combine the HDR pixels with the SDR monitor images promoted to a 203 cd/m² diffuse white. Builds without the gain-map encoder still capture and export SDR PNG; unavailable HDR pixels/encoders produce an error rather than an SDR file mislabeled as HDR. The compositor plugin and helper must both support the float transport.
 
-HDR export currently covers region, fullscreen and window screenshots on outputs with a linear HDR work buffer. Scrolling screenshots remain SDR. HDR preview is an SDR rendition; native HDR presentation by the Qt overlay is not enabled. HEIC rendering in external applications depends on their HDR/color-management support; these files use PQ rather than an Apple gain map.
+HDR export currently covers region, fullscreen and window screenshots on outputs with a linear HDR work buffer. Scrolling screenshots remain SDR. Native HDR preview requires Wayland color-management-v1 parametric PQ support, viewporter, 10-bit shared-memory buffers, and Qt GUI private development headers plus wayland-client, wayland-protocols and wayland-scanner at build time. Unsupported environments explicitly fall back to an SDR preview. HDR presentation in external applications requires ISO HEIF gain-map support as well as HDR display output. General HDR/PQ support alone is insufficient. Ordinary viewers still get the SDR base instead of uninterpreted PQ values.
 
 Video output stays SDR. Captures touching HDR, wide-gamut or ICC-managed outputs use the compositor backend, including when `record_window_backend` requests the external recorder. Capture first renders in Hyprland's actual monitor work space, retaining a floating-point buffer on HDR outputs. An explicit GPU resolve converts that buffer to SDR sRGB before RGBA readback or GPU export, normalizing to the output's SDR white and preserving its black level. Merely tagging the framebuffer as sRGB is insufficient on Hyprland 0.56. Encoders use an explicit BT.709 YCbCr matrix and limited range, tagged with sRGB transfer/BT.709 primaries; RGB-preserving and animation formats keep their appropriate RGB path. No HDR recording option is introduced.
 
@@ -547,7 +547,12 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `show_thumbnail` | bool | `true` | Show the result thumbnail after capture. |
 | `screenshot_notification` | bool | `true` | Show a notification after a screenshot is successfully saved. Disable this independently of recording status notifications. |
 | `save_dir` | string | `$XDG_PICTURES_DIR/Screenshots` | Output directory. `~` is expanded against `HOME`; `$XDG_PICTURES_DIR` is read from XDG user-dirs with `~/Pictures` as fallback. |
-| `screenshot_format` | string | `png` | `png` saves SDR sRGB; `heic` saves 10-bit BT.2020/PQ HDR. The toolbar offers HEIC when libheif and an HEVC encoder are available. |
+| `screenshot_mode` | string | `sdr` | Default screenshot dynamic range: `sdr` or `hdr`. When unset, the legacy `screenshot_format` is used. |
+| `show_hdr_control` | bool | `true` | Show the SDR / HDR segmented control; hiding it retains the configured default. Recording hides it automatically. |
+| `hdr_save_sdr` | bool | `false` | Also save a same-name SDR PNG for HDR screenshots. |
+| `hdr_drag_format` | string | `heic` | Drag HDR HEIC or SDR PNG (`sdr`) from the result thumbnail. |
+| `hdr_clipboard_format` | string | `heic` | Copy HDR HEIC (`image/heic`) or SDR PNG (`sdr`) to the clipboard. |
+| `screenshot_format` | string | `png` | Legacy alias; `screenshot_mode` takes precedence when set. `png` saves SDR sRGB; `heic` saves an SDR-compatible base plus an HDR ISO gain map. The toolbar offers HEIC when the gain-map encoder is available. |
 | `filename_template` | string | `Screenshot-%Y-%m-%d-%H%M%S.png` | `strftime` template for saved screenshot filenames. `{window_class}` and `{window_title}` follow `dynamic_window_metadata`; values are filename-sanitized and missing metadata expands to `unknown`. Existing `strftime` directives, including `%w`, keep their original meaning. |
 | `notification_title_template` | string | `Screenshot captured` | Screenshot notification title. Supports `strftime` directives and `{mode}`, `{window_class}`, `{window_title}`, `{filename}`, and `{path}`. Window metadata is not filename-sanitized. |
 | `notification_body_template` | string | `Saved {filename} ({window_title})` | Screenshot notification body. Supports the same placeholders and `strftime` directives as `notification_title_template`. |

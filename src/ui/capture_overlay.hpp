@@ -11,6 +11,7 @@
 #include <QRect>
 #include <QString>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -35,6 +36,7 @@ class AnnotationEditor;
 namespace hyprcapture::ui {
 struct ClipboardSnapshotData;
 class ScrollCaptureController;
+class HdrBackdrop;
 }
 
 class CaptureOverlay final : public QMainWindow {
@@ -78,6 +80,7 @@ class CaptureOverlay final : public QMainWindow {
         QRect   logicalGeometry;
         QImage  image;
         QImage  hdrImage;
+        float   referenceNits = 203;
         QImage  cursorImage;
         QImage  hdrCursorImage;
         QString name;
@@ -112,6 +115,14 @@ class CaptureOverlay final : public QMainWindow {
         bool    fullscreen = false;
     };
 
+    void prepareHdrBackdrops();
+    void updateHdrEditBackdrop();
+    bool hasHdrBackdrop(const MonitorArtifact& artifact) const;
+    struct HdrMonitorBackdrop { QRect geometry; std::unique_ptr<hyprcapture::ui::HdrBackdrop> surface; };
+    std::vector<HdrMonitorBackdrop> m_hdrBackdrops;
+    bool m_hdrBackdropsAttempted = false;
+    std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrEditBackdrop;
+    qint64 m_hdrEditCacheKey = 0;
     void buildToolbar();
     void ensureRecordControls();
     void initializeOverlay(const QRect& overlayGeometry);
@@ -314,7 +325,10 @@ class CaptureOverlay final : public QMainWindow {
     InlineSelect* m_recordDuration = nullptr;
     InlineSelect* m_recordBackend = nullptr;
     QLabel*       m_recordWarning = nullptr;
-    InlineSelect* m_screenshotFormat = nullptr;
+    QWidget* m_dynamicRangeControl = nullptr;
+    QPushButton* m_sdrButton = nullptr;
+    QPushButton* m_hdrButton = nullptr;
+    bool m_hasHdrScreen = false;
     QPushButton*  m_recordToggle = nullptr;
     QPushButton*  m_confirmButton = nullptr;
     QLabel*      m_status = nullptr;

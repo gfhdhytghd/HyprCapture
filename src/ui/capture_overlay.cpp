@@ -13,6 +13,7 @@
 #include <QCoreApplication>
 #include "ui/capture_overlay.hpp"
 #include "ui/hdr_image.hpp"
+#include "ui/hdr_backdrop.hpp"
 #include <QColorSpace>
 
 #include "ui/clipboard_utils.hpp"
@@ -149,6 +150,8 @@ constexpr int kThumbnailPreviewMaxHeight = 480;
 
 struct CaptureOutputResult {
     QString savedPath;
+    QString saveError;
+    QString sdrPath;
     QString restoreClipboardPath;
     bool    showThumbnail = false;
     bool    clipboardRequested = false;
@@ -646,7 +649,7 @@ QString uniqueOutputPath(const QDir& dir, const QString& rawFilename) {
     for (int i = 0; i < 1000; ++i) {
         const QString filename = i == 0 ? QStringLiteral("%1.%2").arg(base, suffix) : QStringLiteral("%1-%2.%3").arg(base).arg(i).arg(suffix);
         const QString path = dir.filePath(filename);
-        if (!QFileInfo::exists(path))
+        if (!QFileInfo::exists(path) && (suffix != "heic" || !QFileInfo::exists(dir.filePath(base + (i == 0 ? QString{} : QStringLiteral("-%1").arg(i)) + ".png"))))
             return path;
     }
 
@@ -672,6 +675,14 @@ void cleanupArtifactFiles(const QStringList& paths) {
     }
 }
 
+QString sdrCaptureOutputPath(const hyprcapture::CaptureDefaults& defaults, const QString& outputPath) {
+    if (defaults.save && defaults.hdrSaveSdr)
+        return QFileInfo(outputPath).absolutePath() + "/" + QFileInfo(outputPath).completeBaseName() + ".png";
+    const QString runtime = hyprcapture::ui::runtimeFile("sdr-drag", ".png");
+    if (runtime.isEmpty()) return {};
+    return QFileInfo(runtime).dir().filePath("sdr-drag-" + QString::number(qHash(outputPath)) + ".png");
+}
+
 CaptureOutputResult writeCaptureOutput(const QImage& image,
                                         const QImage& hdrImage,
                                         const hyprcapture::CaptureDefaults& defaults,
@@ -689,32 +700,41 @@ CaptureOutputResult writeCaptureOutput(const QImage& image,
         traceTiming(QStringLiteral("clipboard_snapshot_save"), timer.elapsed());
     }
 
-    if (!outputPath.isEmpty()) {
-        QElapsedTimer timer;
-        timer.start();
-        if (defaults.save && defaults.screenshotFormat == "heic" ? hyprcapture::ui::saveHdrHeic(hdrImage, outputPath) : savePng(image, outputPath))
-            result.savedPath = outputPath;
-        traceTiming(defaults.save ? QStringLiteral("image_save") : QStringLiteral("thumbnail_full_temp_save"), timer.elapsed());
+    const bool hdr = defaults.screenshotFormat == "heic";
+    const bool needSdrFile = hdr && ((defaults.save && defaults.hdrSaveSdr) ||
+                                   (defaults.showThumbnail && defaults.hdrDragFormat == "sdr"));
+    if (needSdrFile) {
+        result.sdrPath = sdrCaptureOutputPath(defaults, outputPath);
+        if (!savePng(image, result.sdrPath)) {
+            result.saveError = QStringLiteral("Could not save the SDR screenshot copy.");
+            return result;
+        }
     }
 
-    if (result.showThumbnail && result.savedPath.isEmpty()) {
-        QElapsedTimer timer;
-        timer.start();
-        const QString path = hyprcapture::ui::runtimeFile("thumbnail", ".png");
-        if (hyprcapture::ui::savePrivatePng(image, path))
-            result.savedPath = path;
-        traceTiming(QStringLiteral("thumbnail_temp_save"), timer.elapsed());
+    if (!outputPath.isEmpty()) {
+        const bool saved = hdr ? hyprcapture::ui::saveHdrHeic(hdrImage, outputPath, &result.saveError, image)
+                               : savePng(image, outputPath);
+        if (saved) result.savedPath = outputPath;
     }
 
     result.clipboardRequested = defaults.clipboard;
     if (defaults.clipboard) {
-        QElapsedTimer timer;
-        timer.start();
-        if (defaults.screenshotFormat == "heic" || result.savedPath.isEmpty() || !hyprcapture::ui::copyImageFileToClipboardDetached(result.savedPath))
-            result.clipboardCopied = hyprcapture::ui::copyImageToClipboardDetached(image);
-        else
-            result.clipboardCopied = true;
-        traceTiming(QStringLiteral("clipboard_copy_start"), timer.elapsed());
+        if (hdr && defaults.hdrClipboardFormat == "heic") {
+            QString path = result.savedPath;
+            const bool temporary = path.isEmpty();
+            if (temporary) {
+                path = hyprcapture::ui::runtimeFile("clipboard-hdr", ".heic");
+                if (!hyprcapture::ui::saveHdrHeic(hdrImage, path, &result.saveError, image)) return result;
+            }
+            result.clipboardCopied = hyprcapture::ui::copyImageFileToClipboardDetached(path, QStringLiteral("image/heic"), temporary);
+            if (temporary && !result.clipboardCopied) QFile::remove(path);
+        } else {
+            result.clipboardCopied = !hdr && !result.savedPath.isEmpty()
+                ? hyprcapture::ui::copyImageFileToClipboardDetached(result.savedPath)
+                : hyprcapture::ui::copyImageToClipboardDetached(image);
+        }
+        if (!result.clipboardCopied && hdr && defaults.hdrClipboardFormat == "heic")
+            result.saveError = QStringLiteral("Could not copy HDR HEIC to the clipboard. Check that wl-copy is installed.");
     }
 
     return result;
@@ -737,7 +757,7 @@ QString thumbnailTargetPath(const hyprcapture::CaptureDefaults& defaults, const 
         return plannedOutputPath;
     if (!defaults.showThumbnail)
         return {};
-    return hyprcapture::ui::runtimeFile("thumbnail-full", ".png");
+    return hyprcapture::ui::runtimeFile("thumbnail-full", defaults.screenshotFormat == "heic" ? ".heic" : ".png");
 }
 
 QString thumbnailDeleteRoot(const hyprcapture::CaptureDefaults& defaults) {
@@ -818,6 +838,7 @@ QString toolbarStyleSheet(const QPalette& palette) {
                "QPushButton:hover { background: %4; }"
                "QPushButton:checked { color: %3; background: %5; }"
                "QPushButton:pressed { color: %6; background: %7; }"
+               "#dynamicRangeControl QPushButton:checked, #dynamicRangeControl QPushButton:pressed { color: %3; background: %8; }"
                "QPushButton#aecRetest { background: %12; }"
                "QPushButton#aecRetest:hover { background: %4; }"
                "QPushButton#aecRetest:pressed { background: %7; }"
@@ -1485,6 +1506,7 @@ CaptureOverlay::CaptureOverlay(const CaptureOverlay& source, const QRect& overla
       m_sessionWindowCount(source.m_sessionWindowCount),
       m_monitorArtifacts(source.m_monitorArtifacts),
       m_windowArtifacts(source.m_windowArtifacts) {
+    m_hasHdrScreen = source.m_hasHdrScreen;
     initializeOverlay(overlayGeometry);
 }
 
@@ -1598,7 +1620,8 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
         return;
 
     m_defaults.screenshotFormat = source.m_defaults.screenshotFormat;
-    if (m_screenshotFormat) m_screenshotFormat->setCurrentText(qString(m_defaults.screenshotFormat));
+    if (m_sdrButton) m_sdrButton->setChecked(m_defaults.screenshotFormat == "png");
+    if (m_hdrButton) m_hdrButton->setChecked(m_defaults.screenshotFormat == "heic");
     m_mode = source.m_mode;
     m_record = source.m_record;
     m_recordError = source.m_recordError;
@@ -1658,6 +1681,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         return;
 
     m_sessionDecoded = true;
+    m_hasHdrScreen = std::ranges::any_of(decoded->monitors, [](const auto& monitor) { return monitor.hdrCapable; });
     m_regionCaptureAvailable = decoded->regionCaptureAvailable;
     m_scrollSessionVersion = decoded->scrollSessionVersion;
     m_defaults = decoded->defaults;
@@ -1689,6 +1713,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         const QString cursorArtifactPath = qString(info.cursorArtifactPath);
         artifact.image = loadRawRgba(artifactPath, info.artifactWidth, info.artifactHeight, info.artifactTopDown, remainingArtifactBytes, info.artifactFormat, info.artifactReferenceNits, &artifact.hdrImage);
         artifact.image = normalizeMonitorArtifactImage(artifact.image, artifact.transform, artifact.logicalGeometry);
+        artifact.referenceNits = info.artifactReferenceNits;
         artifact.hdrImage = normalizeMonitorArtifactImage(artifact.hdrImage, artifact.transform, artifact.logicalGeometry);
         artifact.previewCornerRadii =
             hyprcapture::ui::detectScreenCornerRadii(artifact.image, artifact.logicalGeometry.size());
@@ -1934,15 +1959,36 @@ void CaptureOverlay::buildToolbar() {
     addMode("Region", hyprcapture::CaptureMode::Region, toolbarIcon("select_all"));
     addMode("Window", hyprcapture::CaptureMode::Window, toolbarIcon("select_window"));
 
-    m_screenshotFormat = new InlineSelect(this, m_toolbar);
-    m_screenshotFormat->setObjectName("screenshotFormat");
-    m_screenshotFormat->setPrefix("Format");
-    m_screenshotFormat->setLabels({{"png", "PNG · SDR"}, {"heic", "HEIC · HDR"}});
-    m_screenshotFormat->addItems(hyprcapture::ui::hdrHeicAvailable() ? QStringList{"png", "heic"} : QStringList{"png"});
-    m_screenshotFormat->setCurrentText(qString(m_defaults.screenshotFormat));
-    m_screenshotFormat->setToolTip(tr("PNG and clipboard use sRGB. HEIC preserves HDR highlights."));
-    m_screenshotFormat->setOnChanged([this] { m_defaults.screenshotFormat = m_screenshotFormat->currentText().toStdString(); });
-    layout->addWidget(m_screenshotFormat);
+    m_dynamicRangeControl = new QWidget(m_toolbar);
+    m_dynamicRangeControl->setObjectName("dynamicRangeControl");
+    m_dynamicRangeControl->setAttribute(Qt::WA_StyledBackground);
+    m_dynamicRangeControl->setStyleSheet("#dynamicRangeControl { border: 1px solid palette(mid); border-radius: 7px; background: palette(window); } #dynamicRangeControl QPushButton:disabled { color: palette(mid); }");
+    auto* dynamicRangeLayout = new QHBoxLayout(m_dynamicRangeControl);
+    dynamicRangeLayout->setContentsMargins(3, 3, 3, 3);
+    dynamicRangeLayout->setSpacing(2);
+    auto* dynamicRangeGroup = new QButtonGroup(m_dynamicRangeControl);
+    const bool hdrAvailable = m_hasHdrScreen && hyprcapture::ui::hdrHeicAvailable();
+    m_dynamicRangeControl->setEnabled(hdrAvailable);
+    if (!hdrAvailable) m_defaults.screenshotFormat = "png";
+    const auto addDynamicRange = [&](const char* text, const char* name, const char* format) {
+        auto* button = new QPushButton(QString::fromLatin1(text), m_dynamicRangeControl);
+        button->setObjectName(QString::fromLatin1(name));
+        button->setCheckable(true);
+        button->setChecked(m_defaults.screenshotFormat == format);
+        button->setAccessibleName(button->text());
+        button->setFocusPolicy(Qt::StrongFocus);
+        button->setFixedSize(48, 26);
+        dynamicRangeGroup->addButton(button);
+        dynamicRangeLayout->addWidget(button);
+        connect(button, &QPushButton::clicked, this, [this, format] { m_defaults.screenshotFormat = format; });
+        return button;
+    };
+    m_sdrButton = addDynamicRange("SDR", "screenshotSdr", "png");
+    m_hdrButton = addDynamicRange("HDR", "screenshotHdr", "heic");
+    m_hdrButton->setEnabled(hdrAvailable);
+    m_hdrButton->setToolTip(!m_hasHdrScreen ? tr("Connect an HDR display to enable HDR capture.") :
+        hdrAvailable ? tr("Preserve HDR highlights and wide-gamut colors.") : tr("HDR encoding is unavailable."));
+    layout->addWidget(m_dynamicRangeControl);
 
     m_fullscreenScope = new InlineSelect(this, m_toolbar);
     m_fullscreenScope->setPrefix("Full");
@@ -2309,6 +2355,8 @@ bool CaptureOverlay::event(QEvent* event) {
 void CaptureOverlay::showEvent(QShowEvent* event) {
     traceTiming(QStringLiteral("overlay.show.%1.%2").arg(x()).arg(y()));
     QMainWindow::showEvent(event);
+    // The Wayland surface may not exist until the layer configure arrives.
+    QTimer::singleShot(0,this,[this]{ prepareHdrBackdrops(); update(); });
     // A compositor session already initialized hit testing/status from its
     // frozen cursor position. Do not schedule another full-screen repaint
     // immediately after the first frame just to apply the same position.
@@ -2547,7 +2595,7 @@ void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
 }
 
 void CaptureOverlay::updateToolbarControlsForMode() {
-    if (m_screenshotFormat) m_screenshotFormat->setVisible(!m_record && !m_recordActive);
+    if (m_dynamicRangeControl) m_dynamicRangeControl->setVisible(m_defaults.showHdrControl && !m_record && !m_recordActive);
     if (auto* cancel = m_toolbar->findChild<QPushButton*>("captureCancel"))
         cancel->setVisible(!m_editing);
     for (auto* button : m_toolbar->findChildren<QPushButton*>("captureModeButton")) {
@@ -2991,18 +3039,58 @@ hyprcapture::DecorationPolicy CaptureOverlay::currentWindowShadow() const {
     return m_defaults.windowShadow;
 }
 
+bool CaptureOverlay::hasHdrBackdrop(const MonitorArtifact& artifact) const {
+    return std::ranges::any_of(m_hdrBackdrops,[&](const auto& b){return b.geometry==artifact.logicalGeometry && b.surface->ready();});
+}
+void CaptureOverlay::prepareHdrBackdrops() {
+    if (m_hdrBackdropsAttempted || m_quick || !windowHandle() || !windowHandle()->isExposed()) return;
+    m_hdrBackdropsAttempted=true;
+    for (const auto& artifact:m_monitorArtifacts) {
+        if (artifact.hdrImage.isNull() || !artifact.logicalGeometry.intersects(m_overlayLogicalGeometry)) continue;
+        auto surface=std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle());
+        if (surface->setImage(artifact.hdrImage,globalToLocalRect(artifact.logicalGeometry),artifact.referenceNits)) {
+            surface->setVisible(m_overlayActive && !m_scrolling);
+            m_hdrBackdrops.push_back({artifact.logicalGeometry,std::move(surface)});
+        } else qWarning("HyprCapture: native HDR preview unavailable; using SDR preview");
+    }
+}
+void CaptureOverlay::updateHdrEditBackdrop() {
+    if (!m_editing || m_scrolling || m_scrollResult || !m_editor || m_editHdrBase.isNull() || m_hdrBackdrops.empty()) {
+        if(m_hdrEditBackdrop) m_hdrEditBackdrop->setVisible(false);
+        if(m_editor) m_editor->setExternalImagePresentation(false);
+        return;
+    }
+    if(!m_hdrEditBackdrop) m_hdrEditBackdrop=std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle());
+    if(m_hdrEditCacheKey!=m_editHdrBase.cacheKey()) {
+        float reference=203;
+        for(const auto& artifact:m_monitorArtifacts) if(!artifact.hdrImage.isNull()) {reference=artifact.referenceNits;break;}
+        if(!m_hdrEditBackdrop->setImage(m_editHdrBase,m_editor->canvasGeometry(),reference)) {
+            m_hdrEditBackdrop->setVisible(false);
+            m_editor->setExternalImagePresentation(false);
+            return;
+        }
+        m_hdrEditCacheKey=m_editHdrBase.cacheKey();
+    }
+    m_hdrEditBackdrop->setGeometry(m_editor->canvasGeometry());
+    m_hdrEditBackdrop->setVisible(m_overlayActive);
+    m_editor->setExternalImagePresentation(m_hdrEditBackdrop->ready());
+}
+
 void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const {
     if (!target.isValid())
         return;
 
     if (!m_monitorArtifacts.empty()) {
         painter.save();
-        painter.setClipRect(target);
+        QRegion rasterRegion(target);
+        for(const auto& artifact:m_monitorArtifacts)
+            if(hasHdrBackdrop(artifact)) rasterRegion-=QRegion(globalToLocalRect(artifact.logicalGeometry));
+        painter.setClipRegion(rasterRegion);
         painter.fillRect(target, QColor(30, 34, 38));
 
         const QRect globalTarget = localToDesktopLogicalRect(target);
         for (const auto& artifact : m_monitorArtifacts) {
-            if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
+            if (artifact.image.isNull() || !artifact.logicalGeometry.isValid() || hasHdrBackdrop(artifact))
                 continue;
 
             if (!globalTarget.intersects(artifact.logicalGeometry))
@@ -3052,6 +3140,9 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     std::optional<ScopedUiTiming> visiblePaintTiming;
     if (m_overlayActive && m_overlayOpacity > 0.0 && std::exchange(m_firstVisiblePaintPending, false) && hyprcapture::ui::timingEnabled())
         visiblePaintTiming.emplace(QStringLiteral("overlay.first_visible_paint.%1.%2").arg(x()).arg(y()));
+    prepareHdrBackdrops();
+    for(auto& b:m_hdrBackdrops) b.surface->setVisible(m_overlayActive && !m_scrolling);
+    updateHdrEditBackdrop();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
@@ -3063,8 +3154,24 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
 
     paintDesktop(painter, rect());
     painter.save();
-    if (m_mode == hyprcapture::CaptureMode::Fullscreen)
-        painter.setClipRegion(QRegion(rect()).subtracted(QRegion(fullscreenCaptureRect())));
+    QPainterPath dim;
+    dim.addRect(rect());
+    QPainterPath undimmed;
+    if (m_editing && m_hdrEditBackdrop && m_hdrEditBackdrop->ready() && m_editor)
+        undimmed.addRect(m_editor->canvasGeometry());
+    else if (m_mode == hyprcapture::CaptureMode::Fullscreen)
+        undimmed.addRect(fullscreenCaptureRect());
+    else if ((m_mode==hyprcapture::CaptureMode::Region || m_defaults.fushionMode) && normalizedSelection().width()>4 && normalizedSelection().height()>4)
+        undimmed.addRect(normalizedSelection().intersected(regionCaptureBounds()));
+    else if (m_mode==hyprcapture::CaptureMode::Window || m_defaults.fushionMode) {
+        if (const auto* window=hoveredWindow())
+            undimmed=roundedWindowFramePath(globalToLocalRect(windowFrameGeometry(*window)),windowFrameRadius(*window),window->roundingPower);
+        else if (m_defaults.fushionMode && !pendingConfirmActive()) {
+            const QPoint localCursor = globalToLocalRect(QRect(cursorLogicalPosition(), QSize(1, 1))).topLeft();
+            undimmed.addRect(localScreenRectAt(localCursor));
+        }
+    }
+    painter.setClipPath(dim.subtracted(undimmed));
     painter.fillRect(rect(), QColor(0, 0, 0, 80));
     painter.restore();
     if (m_editing)
@@ -4240,7 +4347,7 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
         outputBounds = outputBounds.isValid() ? outputBounds.united(target) : target;
         drawParts.push_back({.artifact = &artifact, .logical = logicalPart, .source = source, .target = target});
     }
-    if (hdr && std::ranges::none_of(drawParts, [](const auto& part) { return !part.artifact->hdrImage.isNull(); })) return {};
+    if (hdr && !m_hasHdrScreen && std::ranges::none_of(drawParts, [](const auto& part) { return !part.artifact->hdrImage.isNull(); })) return {};
     if (!outputBounds.isValid() || drawParts.empty())
         return {};
 
@@ -4295,8 +4402,8 @@ QImage CaptureOverlay::renderResultImage(bool hdr) {
         }
 
         ensureDesktopImage();
-        if (hdr && windowArtifact->hdrImage.isNull()) return {};
-        QImage repairedArtifact = hdr ? windowArtifact->hdrImage : windowArtifact->image;
+        if (hdr && windowArtifact->hdrImage.isNull() && !m_hasHdrScreen) return {};
+        QImage repairedArtifact = hdr ? (windowArtifact->hdrImage.isNull() ? hyprcapture::ui::sdrToHdr(windowArtifact->image) : windowArtifact->hdrImage) : windowArtifact->image;
         if (!hdr) repairMissingWindowTail(repairedArtifact, windowArtifact->fullGeometry, windowArtifact->visibleGeometry, m_desktopImage, m_desktopGeometry);
 
         QImage image = boundedImage(artifactSource.size().expandedTo(QSize(1, 1)), hdr ? QImage::Format_RGBA16FPx4_Premultiplied : QImage::Format_ARGB32_Premultiplied);
@@ -4323,7 +4430,7 @@ QImage CaptureOverlay::renderResultImage(bool hdr) {
         if (!paintedBackground && paintWindowBackground(background, bg)) {
             paintedBackground = true;
         }
-        if (hdr && bg == hyprcapture::WindowBackground::Real && windowArtifact->hdrRealBackground.isNull()) return {};
+        if (hdr && bg == hyprcapture::WindowBackground::Real && windowArtifact->hdrRealBackground.isNull() && !m_hasHdrScreen) return {};
         if (paintedBackground) {
             clipWindowBackgroundToFrame(background,
                                         logicalSource,
@@ -4332,7 +4439,7 @@ QImage CaptureOverlay::renderResultImage(bool hdr) {
                                         windowArtifact->roundingPower);
             if (hdr) {
                 auto linearBackground = hyprcapture::ui::sdrToHdr(background);
-                if (bg == hyprcapture::WindowBackground::Real) {
+                if (bg == hyprcapture::WindowBackground::Real && !windowArtifact->hdrRealBackground.isNull()) {
                     linearBackground.fill(Qt::transparent);
                     QPainter lp(&linearBackground);
                     const QRect src = projectedImageRect(logicalSource, windowArtifact->fullGeometry, windowArtifact->hdrRealBackground.size());
@@ -4667,6 +4774,7 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
     if (!m_editor) {
         m_editor = new AnnotationEditor(this);
         m_editor->setObjectName("inPlaceEditor");
+        connect(m_editor,&AnnotationEditor::imageDisplayGeometryChanged,this,&CaptureOverlay::updateHdrEditBackdrop);
         connect(m_editor, &AnnotationEditor::captureRectChangeRequested, this, [this](const QRect& requested) {
             if (!m_editing || m_finishing || m_scrollResult || m_mode != hyprcapture::CaptureMode::Region) return;
             const QRect target = requested.intersected(regionCaptureBounds());
@@ -4948,11 +5056,11 @@ void CaptureOverlay::renderAndSaveCapture() {
     }
 
     QImage hdrImage;
-    if (m_defaults.save && m_defaults.screenshotFormat == "heic") {
+    if (m_defaults.screenshotFormat == "heic" && (m_defaults.save || m_defaults.clipboard || m_defaults.showThumbnail)) {
         hdrImage = edited ? m_editedHdrOutput : renderResultImage(true);
         if (hdrImage.isNull() || !hyprcapture::ui::hdrHeicAvailable()) {
             m_finishing = false;
-            m_recordError = tr("HDR capture data or a HEIC encoder is unavailable. Choose PNG for SDR output.");
+            m_recordError = tr("HDR capture data or an encoder is unavailable. Choose SDR output.");
             if (m_editor) m_editor->setEnabled(true);
             if (m_toolbar) m_toolbar->setEnabled(true);
             show(); updateStatus();
@@ -5041,17 +5149,18 @@ void CaptureOverlay::saveImage(const QImage& image,
             this,
             [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata, edited, outputPath] {
                 traceTiming(QStringLiteral("output_ready"));
-                if (defaults.save && result.savedPath != outputPath) {
+                if ((defaults.save && result.savedPath != outputPath) || !result.saveError.isEmpty()) {
                     m_finishing = false;
                     if (m_editor) m_editor->setEnabled(true);
                     if (m_toolbar) m_toolbar->setEnabled(true);
-                    m_recordError = tr("Could not save the image. Check the output directory and try again.");
+                    m_recordError = result.saveError.isEmpty() ? tr("Could not save the image. Check the output directory and try again.") : result.saveError;
                     show(); updateStatus();
                     return;
                 }
                 const auto complete = [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata] {
                     endHymissionCaptureInputSuppression();
-                    if (result.clipboardRequested && !result.clipboardCopied)
+                    if (result.clipboardRequested && !result.clipboardCopied &&
+                        !(defaults.screenshotFormat == "heic" && defaults.hdrClipboardFormat == "heic"))
                         hyprcapture::ui::copyImageToClipboard(image);
                     if (defaults.save)
                         hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
@@ -5080,8 +5189,13 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
     QStringList args{"--thumbnail-window", previewPath, "--thumbnail-timeout-ms", QString::number(m_defaults.thumbnailTimeoutMs)};
     args << "--thumbnail-monitor" << qString(m_defaults.thumbnailMonitor);
     args << "--language" << qString(m_defaults.language);
-    if (!targetPath.isEmpty())
+    if (!targetPath.isEmpty()) {
         args << "--thumbnail-target" << targetPath;
+        if (m_defaults.screenshotFormat == "heic" && m_defaults.hdrDragFormat == "sdr") {
+            const QString dragPath = sdrCaptureOutputPath(m_defaults, targetPath);
+            args << "--thumbnail-drag-target" << dragPath;
+        }
+    }
     const QString deleteRoot = thumbnailDeleteRoot(m_defaults);
     if (!deleteRoot.isEmpty())
         args << "--thumbnail-delete-root" << deleteRoot;

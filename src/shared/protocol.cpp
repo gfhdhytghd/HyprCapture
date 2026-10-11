@@ -85,6 +85,10 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"fullscreenPreviewRounding", boundedString(defaults.fullscreenPreviewRounding, MAX_METADATA_STRING_BYTES)},
         {"saveDir", boundedString(defaults.saveDir, MAX_PATH_BYTES)},
         {"screenshotFormat", defaults.screenshotFormat},
+        {"showHdrControl", defaults.showHdrControl},
+        {"hdrSaveSdr", defaults.hdrSaveSdr},
+        {"hdrDragFormat", defaults.hdrDragFormat},
+        {"hdrClipboardFormat", defaults.hdrClipboardFormat},
         {"filenameTemplate", boundedString(defaults.filenameTemplate, MAX_METADATA_STRING_BYTES)},
         {"notificationTitleTemplate", boundedString(defaults.notificationTitleTemplate, MAX_METADATA_STRING_BYTES)},
         {"notificationBodyTemplate", boundedString(defaults.notificationBodyTemplate, MAX_METADATA_STRING_BYTES)},
@@ -242,6 +246,11 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         return false;
     if (!stringValue(obj, "screenshotFormat", defaults.screenshotFormat, 16, false) ||
         (defaults.screenshotFormat != "png" && defaults.screenshotFormat != "heic")) return false;
+    if (!boolValue(obj, "hdrSaveSdr", defaults.hdrSaveSdr, false) ||
+        !stringValue(obj, "hdrDragFormat", defaults.hdrDragFormat, 16, false) ||
+        !stringValue(obj, "hdrClipboardFormat", defaults.hdrClipboardFormat, 16, false) ||
+        (defaults.hdrDragFormat != "heic" && defaults.hdrDragFormat != "sdr") ||
+        (defaults.hdrClipboardFormat != "heic" && defaults.hdrClipboardFormat != "sdr")) return false;
     if (obj.contains("notificationBackend")) {
         if (!stringValue(obj, "notificationBackend", value, MAX_METADATA_STRING_BYTES))
             return false;
@@ -286,7 +295,7 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         return false;
 
     return boolValue(obj, "save", defaults.save, false) && boolValue(obj, "clipboard", defaults.clipboard, false) &&
-        boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
+        boolValue(obj, "showHdrControl", defaults.showHdrControl, false) && boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
         boolValue(obj, "inPlaceEditToolbar", defaults.inPlaceEditToolbar, false) &&
         stringValue(obj, "language", defaults.language, MAX_METADATA_STRING_BYTES, false) &&
         boolValue(obj, "allowQuick", defaults.allowQuick, false) && boolValue(obj, "confirmBeforeCapture", defaults.confirmBeforeCapture, false) &&
@@ -331,6 +340,7 @@ bool monitorValue(const Json& obj, MonitorInfo& out) {
     if (!stringValue(obj, "name", monitor.name, MAX_METADATA_STRING_BYTES) || !rectValue(obj, "geometry", monitor.logicalGeometry) ||
         !doubleValue(obj, "scale", monitor.scale, 0.01, 100.0) || !intValue(obj, "transform", monitor.transform, 0, 7) ||
         !boolValue(obj, "focused", monitor.focused, false) ||
+        !boolValue(obj, "hdrCapable", monitor.hdrCapable, false) ||
         !stringValue(obj, "artifactFormat", monitor.artifactFormat, 32, false) ||
         !doubleValue(obj, "artifactReferenceNits", monitor.artifactReferenceNits, 1.0, 10000.0, false) ||
         !stringValue(obj, "artifactPath", monitor.artifactPath, MAX_PATH_BYTES, false) ||
@@ -444,6 +454,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"scale", boundedDouble(mon.scale, 0.01, 100.0, 1.0)},
             {"transform", std::clamp(mon.transform, 0, 7)},
             {"focused", mon.focused},
+            {"hdrCapable", mon.hdrCapable},
             {"artifactFormat", mon.artifactFormat},
             {"artifactReferenceNits", boundedDouble(mon.artifactReferenceNits, 1.0, 10000.0, 80.0)},
             {"artifactPath", boundedString(mon.artifactPath, MAX_PATH_BYTES)},

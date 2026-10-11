@@ -369,6 +369,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back("--save-dir");
     args.push_back(request.defaults.saveDir);
     args.insert(args.end(), {"--screenshot-format", request.defaults.screenshotFormat});
+    args.insert(args.end(), {"--show-hdr-control", request.defaults.showHdrControl ? "1" : "0"});
+    args.insert(args.end(), {"--hdr-save-sdr", request.defaults.hdrSaveSdr ? "1" : "0", "--hdr-drag-format", request.defaults.hdrDragFormat, "--hdr-clipboard-format", request.defaults.hdrClipboardFormat});
     args.push_back("--filename-template");
     args.push_back(request.defaults.filenameTemplate);
     args.push_back("--notification-title-template");

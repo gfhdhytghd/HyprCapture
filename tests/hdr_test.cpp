@@ -9,8 +9,10 @@
 #include <cassert>
 #include <cstdio>
 #include <chrono>
-#ifdef HYPRCAPTURE_HAVE_HEIF
-#include <libheif/heif.h>
+#ifdef HYPRCAPTURE_HAVE_ULTRAHDR
+#include <ultrahdr_api.h>
+#include <QFile>
+#include <QImageReader>
 #endif
 using namespace hyprcapture;
 int main(int argc, char** argv) {
@@ -106,37 +108,83 @@ int main(int argc, char** argv) {
     QString error;
     const auto path = directory.filePath("test.heic");
     assert(!ui::saveHdrHeic(sdr, path, &error)); // never promote an 8-bit input to HDR
-#ifdef HYPRCAPTURE_HAVE_HEIF
+#ifdef HYPRCAPTURE_HAVE_ULTRAHDR
     if (ui::hdrHeicAvailable()) {
-        if (!ui::saveHdrHeic(hdr, path, &error)) { fprintf(stderr, "HEIC encode: %s\n", qPrintable(error)); return 1; }
-        assert(!ui::saveHdrHeic(hdr, path, &error)); // never overwrite
-        auto* context = heif_context_alloc();
-        assert(heif_context_read_from_file(context, path.toLocal8Bit().constData(), nullptr).code == heif_error_Ok);
-        heif_image_handle* handle = nullptr;
-        assert(heif_context_get_primary_image_handle(context, &handle).code == heif_error_Ok);
-        assert(heif_image_handle_get_luma_bits_per_pixel(handle) == 10);
-        assert(heif_image_handle_has_alpha_channel(handle));
-        heif_color_profile_nclx* profile = nullptr;
-        assert(heif_image_handle_get_nclx_color_profile(handle, &profile).code == heif_error_Ok);
-        assert(profile->color_primaries == 9 && profile->transfer_characteristics == 16 && profile->matrix_coefficients == 9);
-        heif_nclx_color_profile_free(profile);
-        heif_image* image = nullptr;
-        assert(heif_decode_image(handle, &image, heif_colorspace_YCbCr, heif_chroma_444, nullptr).code == heif_error_Ok);
-        heif_content_light_level light{};
-        assert(heif_image_has_content_light_level(image));
-        heif_image_get_content_light_level(image, &light);
-        assert(light.max_content_light_level >= 3999 && light.max_content_light_level <= 4001);
-        int stride = 0;
-        const auto* y = reinterpret_cast<const uint16_t*>(heif_image_get_plane_readonly(image, heif_channel_Y, &stride));
-        for (int block = 0; block < 4; ++block) {
-            const int value = y[8 * (stride / 2) + block * 16 + 8];
-            const int expected = int(std::lround(color::nitsToPq(nits[block]) * 1023));
-            if (std::abs(value - expected) > 6) {
-                fprintf(stderr, "HEIC PQ roundtrip block %d: %d expected %d\n", block, value, expected); return 1;
+        // Include HDR saturated primaries, P3 green and gray highlights. A
+        // gray-only test cannot detect matrix or gain-map color-space errors.
+        const std::array<float, 3> colors[]{
+            {100,100,100}, {203,203,203}, {630,630,630}, {4000,4000,4000},
+            {400,0,0}, {0,400,0}, {0,0,400},
+            {-38.91F,180.28F,-13.61F}, {400,0,400}};
+        QImage colored(576, 128, QImage::Format_RGBA16FPx4);
+        colored.setColorSpace(QColorSpace::SRgbLinear);
+        for (int y = 0; y < colored.height(); ++y) {
+            auto* row = reinterpret_cast<qfloat16*>(colored.scanLine(y));
+            for (int x = 0; x < colored.width(); ++x) {
+                for (int c = 0; c < 3; ++c) row[x*4+c] = qfloat16(colors[x/64][c]/80);
+                row[x*4+3] = qfloat16(y < 16 ? 0.5F : 1.0F);
             }
         }
-        heif_image_release(image); heif_image_handle_release(handle); heif_context_free(context);
-        puts("HEIC: real 10-bit encode/decode, PQ/BT.2020 NCLX, alpha and MaxCLL verified");
+        const auto base = ui::hdrToSdr(colored, 173);
+        const auto original = colored.copy();
+        if (!ui::saveHdrHeic(colored, path, &error, base)) {
+            fprintf(stderr,"HEIC encode: %s\n",qPrintable(error)); return 1;
+        }
+        assert(colored == original);
+        assert(!ui::saveHdrHeic(colored, path, &error, base));
+        // Independent system decoder / Qt image plugin must see a normal SDR
+        // primary, without knowing anything about the gain-map extension.
+        QImageReader reader(path);
+        auto fallback = reader.read();
+        assert(!fallback.isNull() && fallback.size() == base.size());
+        assert(std::abs(fallback.pixelColor(8,8).alpha()-128)<=2);
+        if (fallback.colorSpace().isValid()) fallback = fallback.convertedToColorSpace(QColorSpace::SRgb);
+        for (int block = 0; block < 9; ++block) {
+            const auto expected = base.pixelColor(block*64+32,64);
+            const auto actual = fallback.pixelColor(block*64+32,64);
+            for (int c = 0; c < 3; ++c) {
+                const int e[]{expected.red(),expected.green(),expected.blue()};
+                const int v[]{actual.red(),actual.green(),actual.blue()};
+                if (std::abs(e[c]-v[c]) > 5) {
+                    fprintf(stderr,"SDR fallback block %d channel %d: %d expected %d\n",block,c,v[c],e[c]); return 1;
+                }
+            }
+        }
+        QFile file(path); assert(file.open(QIODevice::ReadOnly)); auto bytes=file.readAll();
+        uhdr_compressed_image_t input{}; input.data=bytes.data(); input.data_sz=input.capacity=bytes.size();
+        input.cg=UHDR_CG_UNSPECIFIED; input.ct=UHDR_CT_UNSPECIFIED; input.range=UHDR_CR_UNSPECIFIED;
+        auto* decoder=uhdr_create_decoder(); assert(decoder);
+        const auto check=[](uhdr_error_info_t status){if(status.error_code!=UHDR_CODEC_OK){fprintf(stderr,"HDR decode: %s\n",status.detail); return false;}return true;};
+        assert(check(uhdr_dec_set_image(decoder,&input)));
+        assert(check(uhdr_dec_set_out_img_format(decoder,UHDR_IMG_FMT_64bppRGBAHalfFloat)));
+        assert(check(uhdr_dec_set_out_color_transfer(decoder,UHDR_CT_LINEAR)));
+        assert(check(uhdr_dec_set_out_max_display_boost(decoder,10000.0F/203)));
+        assert(check(uhdr_dec_probe(decoder)));
+        const auto* metadata=uhdr_dec_get_gainmap_metadata(decoder);
+        assert(metadata && metadata->hdr_capacity_max > 3);
+        assert(uhdr_dec_get_gainmap_width(decoder)==colored.width());
+        assert(uhdr_dec_get_gainmap_height(decoder)==colored.height());
+        assert(check(uhdr_decode(decoder)));
+        const auto* decodedImage=uhdr_get_decoded_image(decoder);
+        assert(decodedImage && decodedImage->cg==UHDR_CG_BT_2100);
+        assert(std::abs(float(static_cast<const qfloat16*>(decodedImage->planes[0])[3])-0.5F)<0.01F);
+        for (int block=0;block<9;++block) {
+            const auto* row=static_cast<const qfloat16*>(decodedImage->planes[0])+64*decodedImage->stride[0]*4+(block*64+32)*4;
+            const auto expected=color::scRgbToBt2020({colors[block][0]/80,colors[block][1]/80,colors[block][2]/80});
+            for(int c=0;c<3;++c){
+                const float nits=float(row[c])*203, expectedNits=expected[c]*80;
+                if(std::abs(nits-expectedNits)>std::max(3.0F,expectedNits*0.04F)) {
+                    fprintf(stderr,"HDR gain-map block %d channel %d: %.2f nit expected %.2f\n",block,c,nits,expectedNits);return 1;
+                }
+            }
+        }
+        uhdr_release_decoder(decoder);
+        if (argc == 3 && std::string(argv[1]) == "--export-fixture") assert(QFile::copy(path, QString::fromLocal8Bit(argv[2])));
+        const auto odd = colored.copy(0,0,17,19);
+        const auto oddPath = directory.filePath("odd.heic");
+        assert(ui::saveHdrHeic(odd, oddPath, &error, base.copy(0,0,17,19)));
+        assert(QImageReader(oddPath).read().size()==QSize(17,19));
+        puts("HEIC: independent SDR fallback and colored HDR/P3 gain-map reconstruction verified");
     } else puts("HEIC encoder unavailable: capability rejection verified");
 #endif
     puts("HDR half-float, SDR mapping, highlight-preserving annotation and protocol tests passed");

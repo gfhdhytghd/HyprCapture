@@ -113,6 +113,26 @@ void defaults() {
 class AnnotationEditorTest final : public QObject {
     Q_OBJECT
   private slots:
+    void externalHdrBaseOnlyChangesPresentation() {
+        AnnotationEditor editor;
+        const QImage source=image(QSize(240,160),Qt::white);
+        initialize(editor,source);
+        auto* canvas=editor.findChild<QWidget*>("annotationCanvas");
+        QVERIFY(canvas);
+        QCOMPARE(canvas->grab().toImage().pixelColor(displayed(QPoint(60,60))),QColor(Qt::white));
+        editor.setExternalImagePresentation(true);
+        QVERIFY(editor.externalImagePresentation());
+        QApplication::processEvents();
+        QVERIFY(canvas->grab().toImage().pixelColor(displayed(QPoint(60,60)))!=QColor(Qt::white));
+        QCOMPARE(editor.resultImage(),source);
+        selectTool(editor,5);
+        drag(editor,QPoint(30,30),QPoint(90,70));
+        QVERIFY(editor.resultImage()!=source);
+        editor.setExternalImagePresentation(false);
+        QVERIFY(!editor.externalImagePresentation());
+        QCOMPARE(canvas->grab().toImage().pixelColor(displayed(QPoint(130,100))),QColor(Qt::white));
+    }
+
     void touchGestureCancelsDraftAndRequiresAllFingersUp() {
         using G=hyprcapture::ui::TouchGesture;
         G g;

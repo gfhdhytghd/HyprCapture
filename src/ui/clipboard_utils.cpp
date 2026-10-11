@@ -579,8 +579,8 @@ bool copyImageToClipboardDetached(const QImage& image) {
     return false;
 }
 
-bool copyImageFileToClipboardDetached(const QString& path) {
-    return copyFileWithWlCopyDetached(path, QStringLiteral("image/png"), false);
+bool copyImageFileToClipboardDetached(const QString& path, const QString& mimeType, bool removeAfterCopy) {
+    return copyFileWithWlCopyDetached(path, mimeType, removeAfterCopy);
 }
 
 bool copyFileUrlToClipboard(const QString& path) {

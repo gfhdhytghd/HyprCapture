@@ -3735,6 +3735,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         MonitorInfo info;
         info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
         info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
+        info.hdrCapable = monitor->supportsHDR() || monitor->inHDR();
         info.name = monitor->m_name;
         info.logicalGeometry = monitorRect(monitor);
         info.scale = monitor->m_scale;

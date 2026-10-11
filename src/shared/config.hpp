@@ -44,6 +44,10 @@ struct CaptureDefaults {
     std::string      fullscreenPreviewRounding = "auto";
     std::string      language = "auto";
     std::string      saveDir = "$XDG_PICTURES_DIR/Screenshots";
+    bool             hdrSaveSdr = false;
+    std::string      hdrDragFormat = "heic";
+    std::string      hdrClipboardFormat = "heic";
+    bool             showHdrControl = true;
     std::string      screenshotFormat = "png"; // png (SDR) or heic (HDR)
     std::string      filenameTemplate = "Screenshot-%Y-%m-%d-%H%M%S.png";
     std::string      notificationTitleTemplate = "Screenshot captured";

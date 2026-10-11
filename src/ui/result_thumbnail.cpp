@@ -720,7 +720,8 @@ void ResultThumbnail::restoreClipboard() const {
 void ResultThumbnail::startFileDrag() {
     if (m_transcodeProgressActive)
         return;
-    if (m_path.isEmpty())
+    const QString dragPath = m_dragPath.isEmpty() ? m_path : m_dragPath;
+    if (!QFileInfo(dragPath).isFile())
         return;
 
     m_draggingFile = true;
@@ -728,11 +729,10 @@ void ResultThumbnail::startFileDrag() {
 
     auto* drag = new QDrag(this);
     auto* mimeData = new QMimeData;
-    mimeData->setUrls({QUrl::fromLocalFile(m_path)});
+    mimeData->setUrls({QUrl::fromLocalFile(dragPath)});
 
     const auto currentPixmap = m_imageLabel->pixmap();
     if (!currentPixmap.isNull()) {
-        mimeData->setImageData(currentPixmap.toImage());
         drag->setPixmap(currentPixmap.scaled(180, 120, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         drag->setHotSpot(QPoint(drag->pixmap().width() / 2, drag->pixmap().height() / 2));
     }

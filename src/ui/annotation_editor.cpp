@@ -499,6 +499,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     QImage base;
+    bool externalImagePresentation = false;
     Tool tool = Tool::Rectangle;
     Variant variant = Variant::Outline;
     QColor color = QColor("#ff5252");
@@ -781,12 +782,12 @@ class AnnotationCanvas final : public QWidget {
         const QRect visible = rect.toAlignedRect().intersected(this->rect());
         const int startX = visible.left() - (visible.left() % check);
         const int startY = visible.top() - (visible.top() % check);
-        if(!liveScroll) for (int y = startY; y <= visible.bottom(); y += check)
+        if(!liveScroll && !externalImagePresentation) for (int y = startY; y <= visible.bottom(); y += check)
             for (int x = startX; x <= visible.right(); x += check)
                 painter.fillRect(QRect(x, y, check, check), ((x / check + y / check) & 1) ? QColor(72, 77, 86) : QColor(94, 100, 111));
         painter.setTransform(transform);
         painter.setRenderHint(QPainter::SmoothPixmapTransform);
-        if(!liveScroll) painter.drawImage(QPoint(0, 0), base);
+        if(!liveScroll && !externalImagePresentation) painter.drawImage(QPoint(0, 0), base);
         painter.setOpacity(annotationOpacity);
         painter.translate(0,annotationOffset / transform.m22());
         // Registration keeps advancing while the ink fades. Keep its last
@@ -1860,7 +1861,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         emit annotationsChanged();
     };
     ui.canvas->scrollRequested = [this](QPointF p,double d,int discrete,bool finger,bool inverted) { emit scrollRequested(p,d,discrete,finger,inverted); };
-    ui.canvas->viewChanged = [this] { m_impl->positionToolbar(); };
+    ui.canvas->viewChanged = [this] { m_impl->positionToolbar(); emit imageDisplayGeometryChanged(); };
     ui.canvas->captureRectChanged = [this](const QRect& rect) { emit captureRectChangeRequested(rect); };
     ui.canvas->pressed = [this] { m_impl->closePanels(); };
     ui.canvas->requestText = [this](const Annotation& existing, const QTransform& transform, std::function<void(std::optional<Annotation>)> completed) {
@@ -2223,5 +2224,7 @@ std::shared_ptr<const AnnotationSnapshot> AnnotationEditor::snapshot() const { r
 void AnnotationEditor::restore(const std::shared_ptr<const AnnotationSnapshot>& state) { m_impl->canvas->restore(state); }
 void AnnotationEditor::setScrollImage(const QImage& image,const hyprcapture::ui::ScrollLayout& layout,bool live) { m_impl->canvas->scrollImage(image,layout,live); }
 void AnnotationEditor::setScrollEnabled(bool enabled) { m_impl->canvas->scrollEnabled=enabled; }
+void AnnotationEditor::setExternalImagePresentation(bool enabled) { if(m_impl->canvas->externalImagePresentation==enabled) return; m_impl->canvas->externalImagePresentation=enabled; m_impl->canvas->update(); }
+bool AnnotationEditor::externalImagePresentation() const { return m_impl->canvas->externalImagePresentation; }
 void AnnotationEditor::setAnnotationPresentation(bool ready,qreal opacity,qreal offset) { m_impl->canvas->presentation(ready,opacity,offset); }
 QImage AnnotationEditor::annotatedPreview(const QImage& image,const hyprcapture::ui::ScrollLayout& layout) const { return m_impl->canvas->annotatedPreview(image,layout); }
