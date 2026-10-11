@@ -1,4 +1,8 @@
 #include "ui/scroll_capture.hpp"
+#include "ui/hdr_thumbnail.hpp"
+#include <QtCore/qfloat16.h>
+#include <QTemporaryDir>
+#include <QFile>
 #include <QApplication>
 #include <QPushButton>
 #include <QLabel>
@@ -13,6 +17,17 @@ void require(bool ok, const char* message) {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     using namespace hyprcapture::ui;
+    QImage hdr(16,8,QImage::Format_RGBA16FPx4_Premultiplied);
+    hdr.fill(Qt::transparent);
+    auto* values=reinterpret_cast<qfloat16*>(hdr.bits());
+    values[0]=qfloat16(6.f); values[1]=qfloat16(-.125f); values[2]=qfloat16(2.f); values[3]=qfloat16(.5f);
+    const auto hdrPath=saveHdrThumbnail(hdr);
+    require(!hdrPath.isEmpty(),"private HDR thumbnail transport saved");
+    const auto transported=takeHdrThumbnail(hdrPath);
+    require(transported==hdr && !QFile::exists(hdrPath),"HDR transport preserves highlights, gamut and alpha and consumes its file");
+    QTemporaryDir temp;
+    QFile malformed(temp.filePath("invalid")); malformed.open(QIODevice::WriteOnly); malformed.write(QByteArray(32,'x')); malformed.close(); malformed.setPermissions(QFile::ReadOwner|QFile::WriteOwner);
+    require(takeHdrThumbnail(malformed.fileName()).isNull(),"malformed HDR thumbnail rejected");
     const QSize bar(540, 48);
     const QList<QRect> screens{QRect(0, 0, 1920, 1080)};
     const QRect selected(80, 100, 1000, 800);

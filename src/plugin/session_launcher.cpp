@@ -20,6 +20,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <optional>
+#include <memory>
 #include <poll.h>
 #include <spawn.h>
 #include <sstream>
@@ -33,6 +34,7 @@ extern char** environ;
 
 namespace hyprcapture {
 namespace {
+std::vector<std::unique_ptr<SessionStartupChannel>> captureControlChannels;
 
 constexpr int EXEC_FAILURE_PIPE_TIMEOUT_MS = 2000;
 
@@ -316,8 +318,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     captureDefaults.mode = request.requestedMode;
     captureDefaults.thumbnailMonitor = resolvedThumbnailMonitor(captureDefaults.thumbnailMonitor);
     ScopedTiming launchTiming("startup.launch");
-    SessionStartupChannel startup;
-    if (!startup.valid())
+    auto startup = std::make_unique<SessionStartupChannel>();
+    if (!startup->valid())
         return {.success = false, .error = std::string("startup channel failed: ") + std::strerror(errno)};
 
     std::vector<std::string> args;
@@ -462,7 +464,7 @@ LaunchResult launchHelper(const LaunchRequest& request) {
 
     // Keep only the startup socket on stdin. Apply the normal close-from policy
     // after dup2, so unrelated compositor descriptors are never inherited.
-    const int startupFdError = posix_spawn_file_actions_adddup2(&fileActions.value, startup.childFd(), STDIN_FILENO);
+    const int startupFdError = posix_spawn_file_actions_adddup2(&fileActions.value, startup->childFd(), STDIN_FILENO);
     if (startupFdError != 0) {
         return {.success = false, .error = std::string("startup fd setup failed: ") + std::strerror(startupFdError)};
     }
@@ -472,7 +474,7 @@ LaunchResult launchHelper(const LaunchRequest& request) {
 
     pid_t     pid = -1;
     const int spawnError = posix_spawn(&pid, argv[0], &fileActions.value, &attrs.value, argv.data(), envp.data());
-    startup.closeChild();
+    startup->closeChild();
     if (spawnError != 0) {
         return {.success = false, .error = std::string("exec failed: ") + std::strerror(spawnError)};
     }
@@ -485,12 +487,21 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     }
     session.defaults.mode = request.requestedMode;
     const auto sessionJsonFile = writeCompositorSessionJsonFile(session, encodeSessionJson(session));
-    if (sessionJsonFile.empty() || !startup.publish(sessionJsonFile)) {
+    if (sessionJsonFile.empty() || !startup->publish(sessionJsonFile)) {
         cleanupCompositorArtifacts(session);
         return {.success = false, .error = "failed to deliver bounded session metadata"};
     }
     traceTiming("startup.session_published");
+    std::erase_if(captureControlChannels, [](const auto& channel) { return channel->peerClosed(); });
+    captureControlChannels.push_back(std::move(startup));
     return {.success = true};
+}
+
+LaunchResult cancelCaptureHelpers() {
+    std::erase_if(captureControlChannels, [](const auto& channel) { return channel->peerClosed(); });
+    bool delivered = true;
+    for (const auto& channel : captureControlChannels) delivered = channel->cancel() && delivered;
+    return {.success = delivered, .error = delivered ? "" : "could not cancel capture helper"};
 }
 
 LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const std::string& outputPath, const std::string& pendingSocket) {

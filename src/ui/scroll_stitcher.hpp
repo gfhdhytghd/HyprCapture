@@ -49,7 +49,7 @@ public:
   QImage image() const;
   QImage originalImage() const;
   QImage hdrImage() const;
-  QImage preview(const QSize &bounds) const;
+  QImage preview(const QSize &bounds, bool hdr = false) const;
   QSize size() const {
     return empty() ? QSize{}
                    : QSize(m_initial.width(), m_layout.outputHeight());
@@ -63,6 +63,7 @@ private:
   struct Strip {
     int y;
     QImage image;
+    int sourceTop = 0; // source viewport row, for native corner recovery
   };
   QImage bodyImage() const;
   void paint(QPainter &painter, int plane = 0) const;

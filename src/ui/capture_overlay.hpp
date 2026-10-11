@@ -239,7 +239,7 @@ class CaptureOverlay final : public QMainWindow {
     bool windowCaptureAvailable() const;
     void updateStatus();
     void relayoutToolbar();
-    void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath);
+    void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath, const QImage& hdrPreview = {});
     double overlayOpacity() const;
     void setOverlayOpacity(double opacity);
     void fadeOutThen(std::function<void()> finished);

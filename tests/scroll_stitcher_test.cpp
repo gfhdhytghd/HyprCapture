@@ -47,6 +47,23 @@ int main(int argc, char** argv) {
                     "tiny scaled scroll retains document edges in both directions");
         }
     }
+    // Sparse colored markers in an otherwise blank gutter are moving content,
+    // even when a native touchpad starts with a single pixel of displacement.
+    ScrollStitcher gutter;
+    for (int offset : {800,801,920,680,800,960,1040,680}) {
+        gutter.append(textPage.copy(0,offset,1600,1000));
+    }
+    require(gutter.image()==textPage.copy(0,680,1600,1360), "tiny first scroll preserves sparse moving gutters");
+    ScrollStitcher decoratedGutter;
+    for (int offset : {800,801,920,680,800,960,1040,680}) {
+        QImage decorated(1644,1044,QImage::Format_ARGB32);
+        for(int y=0;y<decorated.height();++y) {
+            QPainter p(&decorated); p.fillRect(0,y,1644,1,QColor(y%220,y%220,y%220));
+        }
+        { QPainter p(&decorated); p.drawImage(22,22,textPage.copy(0,offset,1600,1000)); }
+        decoratedGutter.append(decorated);
+    }
+    require(decoratedGutter.image().copy(22,54,1600,1296)==textPage.copy(0,712,1600,1296),"fixed native border cannot conceal moving sparse gutter markers");
     const auto document = texture(360, 2400);
     const auto frame = [&](int offset) { return document.copy(0, offset, 360, 600); };
     ScrollStitcher stitcher;
@@ -142,6 +159,24 @@ int main(int argc, char** argv) {
         }
         return hdr;
     };
+    ScrollStitcher clippedWindow;
+    for(int offset : {200,350,100}) {
+        auto raw=frame(offset); auto displayed=raw;
+        auto linear=floatPlane(raw);
+        for(int y=0;y<24;++y) for(int x=0;x<24;++x) {
+            raw.setPixel(x,y,qRgba(0,0,0,0)); displayed.setPixel(x,y,qRgb(255,255,255));
+            auto* pixel=reinterpret_cast<qfloat16*>(linear.scanLine(y))+x*4;
+            for(int c=0;c<4;++c) pixel[c]=qfloat16(0.f);
+        }
+        // An almost opaque corner can still contain strongly colored border
+        // pixels; alpha rounding must not strand it at an interior seam.
+        raw.setPixel(0,0,qRgba(255,255,255,254));
+        clippedWindow.append(displayed,raw,linear);
+    }
+    require(clippedWindow.image().copy(0,100,24,24)==document.copy(0,200,24,24),"overlap recovers native corner pixels at interior seams");
+    require(clippedWindow.originalImage().copy(0,100,24,24)==document.copy(0,200,24,24),"corner repair restores original alpha");
+    const auto repairedHdr=clippedWindow.hdrImage().copy(0,100,24,24), expectedHdr=floatPlane(document.copy(0,200,24,24));
+    require(repairedHdr==expectedHdr,"corner repair preserves paired HDR values");
     ScrollStitcher hdrChrome;
     hdrChrome.append(chromeFrame(500), {}, floatPlane(chromeFrame(500)));
     for(int y : {350,200,450,700,800}) hdrChrome.append(chromeFrame(y), {}, floatPlane(chromeFrame(y)));
@@ -281,6 +316,10 @@ int main(int argc, char** argv) {
     require(hdrResult.size()==hdrStitcher.image().size() && hdrResult.format()==hdrExpected.format(), "paired HDR dimensions/format");
     for (int y=0; y<hdrResult.height(); ++y)
         require(std::memcmp(hdrResult.constScanLine(y),hdrExpected.constScanLine(y),360*8)==0, "float HDR channels and alpha preserved exactly");
+    const auto hdrPreview=hdrStitcher.preview({180,425},true);
+    require(hdrPreview.format()==QImage::Format_RGBA16FPx4_Premultiplied && hdrPreview.size()==QSize(180,425),"HDR thumbnail retains float format at bounded size");
+    const auto* sample=reinterpret_cast<const qfloat16*>(hdrPreview.constScanLine(200));
+    require(float(sample[0])>2 && float(sample[1])<0 && float(sample[3])==.5f,"HDR thumbnail retains highlights, wide gamut and alpha");
     require(hdrStitcher.append(frame(400)).status==Status::InvalidFrame, "missing HDR plane rejected");
     require(hdrStitcher.append(frame(400), {}, frame(400)).status==Status::InvalidFrame, "byte HDR plane rejected");
 

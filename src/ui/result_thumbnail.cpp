@@ -464,6 +464,31 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     });
 }
 
+ResultThumbnail::~ResultThumbnail() = default;
+
+void ResultThumbnail::setHdrImage(const QImage& image) {
+    if (image.isNull()) return;
+    m_hdrBackdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), true);
+    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()), 203)) {
+        m_hdrBackdrop.reset(); return;
+    }
+    m_imageLabel->clear();
+    m_imageLabel->installEventFilter(this);
+    m_card->installEventFilter(this);
+    QTimer::singleShot(0, this, [this] { updateHdrGeometry(); });
+}
+void ResultThumbnail::updateHdrGeometry() {
+    if (m_hdrBackdrop) {
+        m_hdrBackdrop->setGeometry(QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()));
+        m_hdrBackdrop->setVisible(isVisible());
+    }
+}
+bool ResultThumbnail::eventFilter(QObject* object, QEvent* event) {
+    if (event->type() == QEvent::Move || event->type() == QEvent::Resize || event->type() == QEvent::Show || event->type() == QEvent::Hide)
+        QTimer::singleShot(0, this, [this] { updateHdrGeometry(); });
+    return QWidget::eventFilter(object, event);
+}
+
 void ResultThumbnail::closeEvent(QCloseEvent* event) {
     QWidget::closeEvent(event);
     hyprcapture::ui::discardClipboardSnapshot(m_restoreClipboardPath);
@@ -630,6 +655,7 @@ void ResultThumbnail::setMenuVisible(bool visible) {
 
 void ResultThumbnail::applyLayerSize() {
     adjustSize();
+    updateHdrGeometry();
     if (auto* layerWindow = LayerShellQt::Window::get(windowHandle()))
         layerWindow->setDesiredSize(size());
 }

@@ -656,6 +656,17 @@ class AnnotationCanvas final : public QWidget {
     }
     QImage annotatedPreview(const QImage& preview,const ScrollLayout& layout) const {
         if(preview.isNull()) return {};
+        if (hyprcapture::ui::isHdrImage(preview)) {
+            QImage result=preview.convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
+            QPainter composite(&result);
+            for (auto a:m_annotations) {
+                QImage layer(preview.size(),QImage::Format_ARGB32_Premultiplied); layer.fill(Qt::transparent);
+                QPainter p(&layer); p.scale(qreal(layer.width())/layout.frameSize.width(),qreal(layer.height())/layout.outputHeight());
+                a.scrollAnchored=true; drawMappedAnnotation(p,base,a,layout,false); p.end();
+                composite.drawImage(QPoint{},hyprcapture::ui::sdrToHdr(layer,203.0F * (hdrEnabled && a.tool!=Tool::Mosaic ? a.hdrGain : 1.0)));
+            }
+            return result;
+        }
         QImage result=preview.convertToFormat(QImage::Format_ARGB32_Premultiplied);
         QPainter p(&result); p.scale(qreal(result.width())/layout.frameSize.width(),qreal(result.height())/layout.outputHeight());
         for(auto a:m_annotations) {
@@ -2417,6 +2428,7 @@ std::shared_ptr<const AnnotationSnapshot> AnnotationEditor::snapshot() const { r
 void AnnotationEditor::restore(const std::shared_ptr<const AnnotationSnapshot>& state) { m_impl->canvas->restore(state); }
 void AnnotationEditor::setScrollImage(const QImage& image,const hyprcapture::ui::ScrollLayout& layout,bool live) { m_impl->canvas->scrollImage(image,layout,live); }
 void AnnotationEditor::setScrollEnabled(bool enabled) { m_impl->canvas->scrollEnabled=enabled; }
+void AnnotationEditor::setLiveScrollPresentation(bool live) { m_impl->canvas->liveScroll=live; m_impl->canvas->update(); }
 void AnnotationEditor::setExternalImagePresentation(bool enabled, bool includesAnnotations) {
     auto* canvas = m_impl->canvas;
     const bool annotations = enabled && includesAnnotations;

@@ -55,6 +55,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <deque>
 #include <array>
 #include <atomic>
 #include <cerrno>

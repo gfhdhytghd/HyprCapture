@@ -13,6 +13,7 @@
 #include <QCoreApplication>
 #include "ui/capture_overlay.hpp"
 #include "ui/hdr_image.hpp"
+#include "ui/hdr_thumbnail.hpp"
 #include "ui/hdr_backdrop.hpp"
 #include <QColorSpace>
 
@@ -4744,6 +4745,7 @@ void CaptureOverlay::beginScrollCapture() {
     if(!controller->prepare(localToDesktopLogicalRect(capture),error,address)) { delete controller; m_recordError=error; return; }
     m_scrollController=controller; controller->setEditor(m_editor);
     controller->setHdrCapture(m_hasHdrScreen && m_scrollSessionVersion >= 2);
+    controller->setHdrPreview(m_defaults.screenshotFormat == "heic");
     for (const auto& artifact : m_monitorArtifacts)
         if (artifact.logicalGeometry.intersects(localToDesktopLogicalRect(capture))) {
             m_scrollReferenceNits = artifact.referenceNits; break;
@@ -5164,7 +5166,7 @@ void CaptureOverlay::renderAndSaveCapture() {
     if (m_defaults.showThumbnail && !edited) {
         const QString previewPath = saveThumbnailPreview(image);
         if (!previewPath.isEmpty()) {
-            showThumbnail(previewPath, targetPath, restoreClipboardPath);
+            showThumbnail(previewPath, targetPath, restoreClipboardPath, hdrImage);
             thumbnailStarted = true;
         }
     }
@@ -5219,7 +5221,7 @@ void CaptureOverlay::saveImage(const QImage& image,
         traceTiming(QStringLiteral("output_worker_total"), totalTimer.elapsed());
         QMetaObject::invokeMethod(
             this,
-            [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata, edited, outputPath] {
+            [this, image, hdrImage, result, thumbnailStarted, defaults, mode, filenameMetadata, edited, outputPath] {
                 traceTiming(QStringLiteral("output_ready"));
                 if ((defaults.save && result.savedPath != outputPath) || !result.saveError.isEmpty()) {
                     m_finishing = false;
@@ -5229,7 +5231,7 @@ void CaptureOverlay::saveImage(const QImage& image,
                     show(); updateStatus();
                     return;
                 }
-                const auto complete = [this, image, result, thumbnailStarted, defaults, mode, filenameMetadata] {
+                const auto complete = [this, image, hdrImage, result, thumbnailStarted, defaults, mode, filenameMetadata] {
                     endHymissionCaptureInputSuppression();
                     if (result.clipboardRequested && !result.clipboardCopied &&
                         !(defaults.screenshotFormat == "heic" && defaults.hdrClipboardFormat == "heic"))
@@ -5238,7 +5240,7 @@ void CaptureOverlay::saveImage(const QImage& image,
                         hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
                     if (result.showThumbnail && !thumbnailStarted)
                         showThumbnail(defaults.screenshotFormat == "heic" ? saveThumbnailPreview(image) : result.savedPath,
-                                      result.savedPath, result.restoreClipboardPath);
+                                      result.savedPath, result.restoreClipboardPath, hdrImage);
                     qApp->quit();
                 };
                 if (edited) {
@@ -5254,11 +5256,13 @@ void CaptureOverlay::saveImage(const QImage& image,
     worker->start();
 }
 
-void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath) {
+void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath, const QImage& hdrPreview) {
     if (previewPath.isEmpty())
         return;
 
     QStringList args{"--thumbnail-window", previewPath, "--thumbnail-timeout-ms", QString::number(m_defaults.thumbnailTimeoutMs)};
+    const QString hdrPath = hyprcapture::ui::saveHdrThumbnail(hdrPreview);
+    if (!hdrPath.isEmpty()) args << "--thumbnail-hdr-preview" << hdrPath;
     args << "--thumbnail-monitor" << qString(m_defaults.thumbnailMonitor);
     args << "--language" << qString(m_defaults.language);
     if (!targetPath.isEmpty()) {
@@ -5273,7 +5277,8 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
         args << "--thumbnail-delete-root" << deleteRoot;
     if (!restoreClipboardPath.isEmpty())
         args << "--restore-clipboard" << restoreClipboardPath;
-    QProcess::startDetached(QCoreApplication::applicationFilePath(), args);
+    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args) && !hdrPath.isEmpty())
+        QFile::remove(hdrPath);
     traceTiming(QStringLiteral("thumbnail_started"));
     endHymissionCaptureInputSuppression();
 }

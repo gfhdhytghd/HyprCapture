@@ -4,6 +4,7 @@
 #include "ui/clipboard_utils.hpp"
 #include "ui/i18n.hpp"
 #include "ui/hdr_image.hpp"
+#include "ui/hdr_thumbnail.hpp"
 #include <QtCore/qfloat16.h>
 #include <QColorSpace>
 
@@ -325,8 +326,13 @@ class InPlaceEditorTest final : public QObject {
         const QByteArray header = clip.read(12);
         if (clipboardFormat == "heic") QCOMPARE(header.mid(4,4), QByteArray("ftyp"));
         else QVERIFY(header.startsWith(QByteArray::fromHex("89504e47")));
+        QFile hdrAck(thumbnail + ".hdr");
+        QTRY_VERIFY_WITH_TIMEOUT(hdrAck.size() > 0, 5000);
+        QVERIFY(hdrAck.open(QIODevice::ReadOnly));
+        QVERIFY(hdrAck.readAll().toFloat() >= 12.4F); // no clipping to an SDR preview
         QFile dragArgs(thumbnail + ".drag");
-        QTRY_VERIFY_WITH_TIMEOUT(dragArgs.exists(), 5000);
+        // The mock creates the file before writing the SDR drag path.
+        QTRY_VERIFY_WITH_TIMEOUT(dragArgs.exists() && (dragFormat != "sdr" || dragArgs.size() > 0), 5000);
         QVERIFY(dragArgs.open(QIODevice::ReadOnly));
         const QString dragPath = QString::fromUtf8(dragArgs.readAll());
         if (dragFormat == "sdr") {
@@ -1416,6 +1422,20 @@ int main(int argc, char** argv) {
     if (argc > 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--thumbnail-window")) {
         QCoreApplication child(argc, argv);
         const QString target = qEnvironmentVariable("HYPRCAPTURE_TEST_THUMBNAIL");
+        const auto arguments=child.arguments();
+        const int hdrIndex=arguments.indexOf("--thumbnail-hdr-preview");
+        if(hdrIndex>=0 && hdrIndex+1<arguments.size()) {
+            const auto native=hyprcapture::ui::takeHdrThumbnail(arguments.at(hdrIndex+1));
+            if(native.isNull()) return 2;
+            float peak=0;
+            for(int y=0;y<native.height();++y) {
+                const auto* pixels=reinterpret_cast<const qfloat16*>(native.constScanLine(y));
+                for(int x=0;x<native.width();++x) for(int c=0;c<3;++c) peak=std::max(peak,float(pixels[x*4+c]));
+            }
+            QFile ack(target+".hdr");
+            if(!ack.open(QIODevice::WriteOnly)) return 3;
+            ack.write(QByteArray::number(peak)); ack.close();
+        }
         QFile argsFile(target + ".drag");
         if (argsFile.open(QIODevice::WriteOnly)) {
             const auto args = child.arguments();

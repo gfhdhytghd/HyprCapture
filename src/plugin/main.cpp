@@ -385,7 +385,7 @@ SDispatchResult dispatchWindowStreamStop(const std::string& args) {
 }
 
 SDispatchResult dispatchCancel(const std::string&) {
-    return {.success = true};
+    return dispatchResult(hyprcapture::cancelCaptureHelpers());
 }
 
 int luaDispatchResult(lua_State* L, const SDispatchResult& result) {

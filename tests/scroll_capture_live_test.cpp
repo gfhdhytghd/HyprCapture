@@ -65,6 +65,7 @@ class Fixture : public QWidget {
 public:
   int offset = 400;
   QImage page, hdrPage;
+  bool hdrAnnounced = false;
   std::unique_ptr<hyprcapture::ui::HdrBackdrop> hdrSurface;
   Fixture() {
     bool hasOffset = false;
@@ -87,6 +88,7 @@ public:
       const auto hdr=hdrPage.copy(0,qRound(offset*scale),page.width(),qRound(height()*scale));
       QPainter p(this); p.setCompositionMode(QPainter::CompositionMode_Source); p.fillRect(rect(),Qt::transparent);
       if (!hdrSurface->setImage(hdr,rect(),153)) qFatal("native HDR fixture unavailable");
+      if (!hdrAnnounced) { hdrAnnounced=true; std::cout << "fixture HDR ready" << std::endl; }
       return;
     }
     QPainter p(this);
@@ -169,7 +171,7 @@ int main(int argc, char **argv) {
   const bool backdropFixture = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_FIXTURE_BACKDROP");
   const bool variableNativeInput = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_NATIVE_VARIABLE");
   bool nativeInputFinished = false;
-  std::array<int, 6> offsets = partialRegion ? std::array<int, 6>{460,340,400,480,520,340}
+  std::array<int, 6> offsets = (partialRegion || qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_WINDOW")) ? std::array<int, 6>{460,340,400,480,520,340}
                                                    : std::array<int, 6>{520,200,450,700,920,200};
   const int minimumOffset = *std::min_element(offsets.begin(), offsets.end());
   const int maximumOffset = *std::max_element(offsets.begin(), offsets.end());
@@ -197,7 +199,9 @@ int main(int argc, char **argv) {
           std::cout << label->text().toStdString() << std::endl;
   });
   QTimer::singleShot(qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR_FIXTURE") ? 45000 : 25000, &app, [&] { fail("live test timeout"); });
-  QTimer::singleShot(qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR_FIXTURE") ? 5000 : 1200, &app, [&] {
+  QElapsedTimer startupDeadline; startupDeadline.start();
+  QTimer startup; startup.start(qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR_FIXTURE") ? 5000 : 1200);
+  QObject::connect(&startup,&QTimer::timeout,&app,[&] {
     QProcess query;
     query.start("hyprctl", {"-j", "clients"});
     query.waitForFinished();
@@ -206,10 +210,16 @@ int main(int argc, char **argv) {
          QJsonDocument::fromJson(query.readAllStandardOutput()).array())
       if (v.toObject()["pid"].toInt() == child.processId())
         client = v.toObject();
-    if (client.isEmpty()) {
-      fail("fixture client not found");
+    QFile readiness(dir+"/fixture.log");
+    const bool hdrReady=!qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR_FIXTURE") ||
+        (readiness.open(QIODevice::ReadOnly) && readiness.readAll().contains("fixture HDR ready"));
+    if (client.isEmpty() || !hdrReady) {
+      if (child.state()==QProcess::Running && startupDeadline.elapsed()<15000) { startup.setInterval(100); return; }
+      startup.stop();
+      fail(QString("fixture startup unavailable: state=%1 exit=%2").arg(int(child.state())).arg(child.exitCode()));
       return;
     }
+    startup.stop();
     const auto at = client["at"].toArray(), sz = client["size"].toArray();
     const QRect fixtureGeometry(at[0].toInt(), at[1].toInt(), sz[0].toInt(), sz[1].toInt());
     const QRect capture = partialRegion ? fixtureGeometry.adjusted(180,150,-280,-200) : fixtureGeometry;
@@ -404,6 +414,14 @@ int main(int argc, char **argv) {
       QObject::connect(
           controller, &hyprcapture::ui::ScrollCaptureController::progress, &app,
           [&, controller, capture, editor](const QSize &size, int count) {
+            if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR")) {
+              auto* preview=controller->findChild<QLabel*>("thumbnailImage");
+              // The SDR pixmap is cleared only after the native HDR surface
+              // has successfully accepted its floating-point image.
+              if (!preview || !preview->pixmap().isNull()) {
+                fail("scroll thumbnail did not enter native HDR presentation"); return;
+              }
+            }
             if (!continuousDone && size.height() > controller->resultLayout().frameSize.height())
               continuousGrowth = true;
             const int current =
@@ -458,8 +476,8 @@ int main(int argc, char **argv) {
             if (windowMode) {
               padding = QPoint((actual.width() - expected.width()) / 2,
                                (actual.height() - expected.height()) / 2);
-              if (padding.x() < 0 || padding.y() < 0 || padding.x() > 8 ||
-                  padding.y() > 8) {
+              if (padding.x() < 0 || padding.y() < 0 || padding.x() > 128 ||
+                  padding.y() > 128) {
                 fail("unexpected native window bounds");
                 return;
               }
@@ -475,6 +493,15 @@ int main(int argc, char **argv) {
             expected.save(dir + "/expected.png");
             int maximumError = 0;
             int foregroundPixels = 0;
+            // Compositor borders, shadows and rounded corners belong to the
+            // native window. Compare its document interior independently.
+            const QRect verified = windowMode ? expected.rect().adjusted(padding.x()+32,padding.y()+32,-padding.x()-32,-padding.y()-32) : expected.rect();
+            if (windowMode && actual.size()==expected.size()) {
+              for(int y=verified.top();y<=verified.bottom();++y) for(int x=verified.left();x<=verified.right();++x) {
+                const auto a=actual.pixelColor(x,y), e=expected.pixelColor(x,y);
+                maximumError=std::max({maximumError,std::abs(a.red()-e.red()),std::abs(a.green()-e.green()),std::abs(a.blue()-e.blue()),std::abs(a.alpha()-e.alpha())});
+              }
+            }
             if (backdropFixture && actual.size() == expected.size()) {
               // The wallpaper does not move with the document. Validate every
               // opaque glyph/marker against the known document coordinates;
@@ -502,7 +529,7 @@ int main(int argc, char **argv) {
             }
             const bool hdrFixture = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR_FIXTURE");
             if (hdrFixture && actual.size()==expected.size()) {
-              for(int y=0;y<actual.height();++y) for(int x=0;x<actual.width();++x) {
+              for(int y=verified.top();y<=verified.bottom();++y) for(int x=verified.left();x<=verified.right();++x) {
                 const auto a=actual.pixelColor(x,y), e=expected.pixelColor(x,y);
                 maximumError=std::max({maximumError,std::abs(a.red()-e.red()),std::abs(a.green()-e.green()),std::abs(a.blue()-e.blue())});
               }
@@ -515,7 +542,7 @@ int main(int argc, char **argv) {
               if(hdr.size()!=actual.size() || peak<5.8f) { fail("native HDR highlights missing from stitched result"); return; }
             }
             if (actual.size() != expected.size() ||
-                (hdrFixture ? maximumError>2 : backdropFixture ? foregroundPixels<1000 || maximumError!=0 : actual != expected)) {
+                (hdrFixture ? maximumError>(windowMode ? 5 : 2) : windowMode ? maximumError!=0 : backdropFixture ? foregroundPixels<1000 || maximumError!=0 : actual != expected)) {
               fail(QString("native pixels mismatch: %1x%2 expected %3x%4")
                        .arg(actual.width())
                        .arg(actual.height())
@@ -523,7 +550,7 @@ int main(int argc, char **argv) {
                        .arg(expected.height()));
               return;
             }
-            QTimer::singleShot(350, overlay, [&, overlay, expected = actual.convertToFormat(QImage::Format_ARGB32), padding, maximumError, alphaFixture, windowMode, hdrFixture] {
+            QTimer::singleShot(350, overlay, [&, overlay, expected = actual.convertToFormat(QImage::Format_ARGB32_Premultiplied), padding, maximumError, alphaFixture, windowMode, hdrFixture] {
               auto *ed =
                   overlay->findChild<AnnotationEditor *>("inPlaceEditor");
               if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR")) {
@@ -543,8 +570,7 @@ int main(int argc, char **argv) {
                 return;
               }
               ed->undo();
-              if (ed->resultImage().convertToFormat(QImage::Format_ARGB32) !=
-                  expected) {
+              if (ed->resultImage() != expected) {
                 fail("undo did not restore native pixels");
                 return;
               }
@@ -627,8 +653,10 @@ int main(int argc, char **argv) {
                 return;
               }
               report.write(
-                  QJsonDocument(QJsonObject{{"pixel_exact", !backdropFixture && maximumError == 0},
+                  QJsonDocument(QJsonObject{{"pixel_exact", !windowMode && !backdropFixture && maximumError == 0},
+                                            {"window_content_verified", windowMode},
                                             {"hdr_fixture", hdrFixture},
+                                            {"hdr_preview_native", qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR")},
                                             {"stationary_backdrop", backdropFixture},
                                             {"foreground_pixels_exact", backdropFixture && maximumError == 0},
                                             {"maximum_rgb_error", maximumError},

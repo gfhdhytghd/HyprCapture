@@ -50,6 +50,11 @@ int main(int argc, char** argv) {
         SessionStartupChannel channel;
         require(channel.publish(path), "queue metadata");
         require(receiveStartupPath(channel.childFd(), 100) == path, "read complete metadata packet");
+        require(!channel.peerClosed(), "live helper control channel remains connected");
+        require(channel.cancel(), "deliver cancel after startup metadata");
+        char command[8]{};
+        require(recv(channel.childFd(), command, sizeof(command), MSG_DONTWAIT) == 6 &&
+                    std::string_view(command, 6) == "cancel", "cancel is a separate bounded control packet");
         require(!channel.publish("relative/session.json"), "reject relative path");
         require(!channel.publish(std::string_view("/tmp/a\0b", 8)), "reject embedded nul");
         require(!channel.publish(std::string(MAX_STARTUP_PATH_BYTES + 1, '/')), "reject oversized path");
@@ -62,6 +67,7 @@ int main(int argc, char** argv) {
         require(!receiveStartupPath(channel.childFd(), 20), "missing publisher times out");
         require(std::chrono::steady_clock::now() - start < std::chrono::seconds(1), "bounded timeout");
         channel.closeChild();
+        require(channel.peerClosed() && !channel.cancel(), "closed helper is pruned and cancel cannot SIGPIPE");
         require(!channel.publish(path), "dead helper cannot SIGPIPE the compositor");
     }
     // Peer closes, sends invalid data, or exceeds the packet bound: fail closed.

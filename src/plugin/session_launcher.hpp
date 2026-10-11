@@ -23,6 +23,7 @@ struct LaunchResult {
 std::optional<std::string> recordingHelperPath(const CaptureDefaults& defaults);
 
 LaunchResult launchHelper(const LaunchRequest& request);
+LaunchResult cancelCaptureHelpers();
 LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const std::string& outputPath, const std::string& pendingSocket = {});
 LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
                                             const std::string&     inputPath,

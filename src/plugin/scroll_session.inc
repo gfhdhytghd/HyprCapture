@@ -25,7 +25,10 @@ struct ScrollSession {
   wl_event_source *controlSource = nullptr;
   std::string input;
   std::vector<Rect> excluded;
-  std::vector<ScrollInput> pending;
+  std::deque<ScrollInput> pending;
+  Time::steady_tp replayStarted;
+  uint32_t replayOriginMs = 0, replayClockOffsetMs = 0;
+  bool draining = false;
   std::unique_ptr<WindowStreamSender> sender;
   WindowStreamPboReadbackState pbo;
   SP<CEventLoopTimer> timer;
@@ -131,12 +134,14 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
   }
   s.inputRoot = window->wlSurface()->resource();
   s.inputSurface = surface;
-  g_pSeatManager->setPointerFocus(surface, local);
-  g_pSeatManager->sendPointerMotion(input.event.timeMs, local);
-  // GTK 3 flushes either pointer motion or scroll data for a wl_pointer.frame.
-  // Finish the synthetic positioning event first, otherwise a FINGER axis in
-  // the same frame is swallowed (while Gecko's separate wheel path still works).
-  g_pSeatManager->sendPointerFrame();
+  const bool positionPointer = !input.native || g_pSeatManager->m_state.pointerFocus != surface;
+  if (positionPointer) {
+    g_pSeatManager->setPointerFocus(surface, local);
+    g_pSeatManager->sendPointerMotion(input.event.timeMs, local);
+    // GTK 3 flushes either pointer motion or scroll data for a wl_pointer.frame.
+    // Finish positioning first so a FINGER axis in the same frame is not lost.
+    g_pSeatManager->sendPointerFrame();
+  }
   if (input.native) {
     // Re-enter the native path exactly once, preserving per-device factors,
     // wheel v120 accumulation, application overrides and natural scrolling.
@@ -144,7 +149,8 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     const bool layer = g_pInputManager->m_lastFocusOnLS;
     g_pInputManager->m_lastFocusOnLS = false;
     g_pInputManager->onMouseWheel(input.event, input.pointer);
-    g_pInputManager->onPointerFrame();
+    // Live events already have a device frame boundary. Flushing here splits
+    // the two axis-stop events of a touchpad gesture and breaks Chrome's fling.
     g_pInputManager->m_lastFocusOnLS = layer;
     s.replaying = false;
   } else {
@@ -167,7 +173,7 @@ void scrollInput(ScrollSession &s, ScrollInput input) {
     s.timer->updateTimeout(std::chrono::milliseconds(1));
   }
   scrollNotify(s, {{"event", "motion"}, {"delta", input.event.delta}});
-  if (!s.released) {
+  if (!s.released || s.draining) {
     if (s.pending.size() >= 256) {
       s.failed = true;
       return;
@@ -218,9 +224,13 @@ int scrollControlReadable(int fd, uint32_t mask, void *data) {
         if (!s.baseline || s.released)
           continue;
         s.released = true;
-        for (const auto &input : s.pending)
-          scrollDeliver(s, input);
-        s.pending.clear();
+        if (!s.pending.empty()) {
+          s.draining = true;
+          s.replayStarted = Time::steadyNow();
+          s.replayOriginMs = s.pending.front().event.timeMs;
+          s.replayClockOffsetMs = Time::millis(s.replayStarted) - s.replayOriginMs;
+          s.timer->updateTimeout(std::chrono::milliseconds(1));
+        }
         continue;
       }
       if (type == "target" && !s.active && s.windowAddress.empty()) {
@@ -300,7 +310,10 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     return;
   }
   timer->updateTimeout(std::chrono::milliseconds(33));
-  if (!s->active || s->paused)
+  // Warm the fixed window baseline while its editor is idle. Waiting for the
+  // first touchpad event queues an entire gesture behind the HDR readback and
+  // then replays it in a burst. Regions remain lazy because they can resize.
+  if (s->paused || (!s->active && (!s->window || s->released)))
     return;
   if (!scrollTargetAlive(*s) ||
       Time::steadyNow() - s->started > std::chrono::minutes(5)) {
@@ -309,6 +322,20 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                   {"reason", "Target or display changed; finish or cancel"}});
     s->paused = true;
     return;
+  }
+  if (s->draining) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Time::steadyNow() - s->replayStarted).count();
+    bool nativeFrame = false;
+    while (!s->pending.empty() && uint32_t(s->pending.front().event.timeMs - s->replayOriginMs) <= elapsed) {
+      auto input = s->pending.front();
+      s->pending.pop_front();
+      if (input.native) input.event.timeMs += s->replayClockOffsetMs;
+      scrollDeliver(*s, input);
+      nativeFrame = nativeFrame || input.native;
+      scrollNotify(*s, {{"event", "motion"}, {"delta", input.event.delta}});
+    }
+    if (nativeFrame) g_pInputManager->onPointerFrame();
+    s->draining = !s->pending.empty();
   }
   // Offscreen reads intentionally suppress presentation feedback. A client
   // obscured by the editor may otherwise wait forever for its next frame
@@ -595,7 +622,8 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
           for (const auto &r : ptr->excluded)
             if (scrollContains(r, {point.x, point.y, .01, .01}))
               return;
-          if (e.axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
+          if (e.axis != WL_POINTER_AXIS_VERTICAL_SCROLL &&
+              (e.source != WL_POINTER_AXIS_SOURCE_FINGER || !ptr->active))
             return;
           info.cancelled = true;
           scrollInput(*ptr, {.event = e,

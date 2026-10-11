@@ -34,6 +34,7 @@ class AnnotationEditor final : public QWidget {
     // Original object coordinates and history remain immutable as the canvas grows.
     void setScrollImage(const QImage& image, const hyprcapture::ui::ScrollLayout& layout, bool live);
     void setScrollEnabled(bool enabled);
+    void setLiveScrollPresentation(bool live);
     void setExternalImagePresentation(bool enabled, bool includesAnnotations = false);
     bool externalImagePresentation() const;
     void setAnnotationPresentation(bool ready, qreal opacity = 1, qreal offset = 0);

@@ -456,7 +456,7 @@ Protocol v1 example:
 
 ### Thumbnail
 
-The thumbnail appears after a completed capture when `show_thumbnail = true`. With in-place editing enabled, target selection opens the editor first.
+The thumbnail appears after a completed capture when `show_thumbnail = true`. HDR screenshot thumbnails and HDR scrolling previews retain the linear HDR pixels and display them through a native PQ/BT.2020 child surface; they do not use the SDR PNG as the HDR display source. A bounded half-float preview is passed privately to the thumbnail helper and consumed on startup. Unsupported color-management environments retain the SDR preview. With in-place editing enabled, target selection opens the editor first.
 
 - Left click opens the saved image.
 - Drag starts a file drag for targets that accept image files.
