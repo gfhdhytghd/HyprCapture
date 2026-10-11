@@ -2,9 +2,10 @@
 
 ## 2026-10-11 feature synchronization
 
-Merged stable `master` through `c7b68bb`, including native HDR previews,
+Merged stable `master` through `a75d97a`, including native HDR previews,
 gain-map HEIC output, HDR annotation controls, editor fixes, HDRView packaging,
-and the Omarchy shell installer. The Hyprland development target remains
+the Omarchy shell installer, and native HDR annotation gain-color previews.
+The Hyprland development target remains
 `5a78b5e927345860a27e2893bf894f97ee620c48`; no lock-file update is included.
 
 Resolved capture-path conflicts by retaining the mainline render context,
@@ -15,8 +16,8 @@ prefix in its pkg-config file.
 
 The synchronized plugin, Qt helper, audio helper, install and fixup phases
 passed a full Nix sandbox build. The output was
-`/nix/store/vc441aj6s75r0m0xxwywapznjqns07ps-hyprcapture-0.3.0`.
-Build log: `/tmp/hyprcapture-mainline-sync-20261011.log` on the validation host.
+`/nix/store/zf1xfdahs55zp9djh1xrzcsnvszybc0w-hyprcapture-0.3.0`.
+Build log: `/tmp/hyprcapture-mainline-sync-20261011-final.log` on the validation host.
 Tests remain disabled by default and did not run. No running compositor plugin
 was updated or reloaded; runtime acceptance remains pending.
 

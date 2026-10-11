@@ -1,5 +1,11 @@
 #include "ui/annotation_editor.hpp"
 #include "ui/hdr_image.hpp"
+#include "ui/hdr_backdrop.hpp"
+#include <QColorSpace>
+#include <QWindow>
+#include <QStyleOptionSlider>
+#include <QStyle>
+#include <QtCore/qfloat16.h>
 #include "ui/material_icon.hpp"
 #include "ui/touch_gesture.hpp"
 #include <QTouchEvent>
@@ -334,8 +340,94 @@ void drawAnnotation(QPainter& painter, const QImage& source, const Annotation& a
 
 // Embedded in the layer-shell surface: never creates a separate modal window
 // or a nested event loop that can end up behind the capture overlay on Wayland.
-QSlider* addHdrGainSlider(QHBoxLayout* row, QWidget* parent, qreal gain, const char* name) {
-    auto* slider = new QSlider(Qt::Vertical, parent);
+class HdrGainSlider final : public QSlider {
+public:
+    explicit HdrGainSlider(QWidget* parent) : QSlider(Qt::Vertical, parent) {
+        for (QWidget* ancestor = parent; ancestor; ancestor = ancestor->parentWidget())
+            ancestor->installEventFilter(this);
+        connect(this, &QSlider::valueChanged, this, [this] { dirty = true; update(); });
+    }
+    void setTargetColor(const QColor& color) {
+        if (target == color) return;
+        target = color; dirty = true; update();
+    }
+protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if (event->type() == QEvent::Hide && backdrop) backdrop->setVisible(false);
+        if (event->type() == QEvent::Move || event->type() == QEvent::Resize ||
+            event->type() == QEvent::Show || event->type() == QEvent::Hide) update();
+        return false;
+    }
+    void hideEvent(QHideEvent* event) override {
+        if (backdrop) backdrop->setVisible(false);
+        QSlider::hideEvent(event);
+    }
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton) { pick(event->position()); event->accept(); }
+        else event->ignore();
+    }
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (event->buttons() & Qt::LeftButton) { pick(event->position()); event->accept(); }
+        else event->ignore();
+    }
+    void paintEvent(QPaintEvent* event) override {
+        Q_UNUSED(event);
+        const QRect track = rect();
+        if (dirty || ramp.size() != track.size()) {
+            ramp = QImage(track.size(), QImage::Format_RGBA16FPx4);
+            ramp.setColorSpace(QColorSpace::SRgbLinear);
+            const QColor opaque(target.red(), target.green(), target.blue());
+            QImage swatch(1, 1, QImage::Format_ARGB32);
+            swatch.fill(opaque);
+            const auto linear = hyprcapture::ui::sdrToHdr(swatch).convertToFormat(QImage::Format_RGBA16FPx4);
+            const auto* rgb = reinterpret_cast<const qfloat16*>(linear.constBits());
+            for (int y = 0; y < ramp.height(); ++y) {
+                const float gain = 8.0F - 7.0F*y/std::max(1, ramp.height()-1);
+                auto* row = reinterpret_cast<qfloat16*>(ramp.scanLine(y));
+                for (int x = 0; x < ramp.width(); ++x) {
+                    for (int c = 0; c < 3; ++c) row[x*4+c] = qfloat16(float(rgb[c])*gain);
+                    row[x*4+3] = qfloat16(1.0F);
+                }
+            }
+            // Keep the position marker visible above the native HDR color ramp.
+            QPainter marker(&ramp);
+            const qreal y = std::clamp((maximum()-value()) * qreal(height()-1) / (maximum()-minimum()), 3.5, height()-4.5);
+            marker.setBrush(Qt::NoBrush);
+            marker.setPen(QPen(Qt::black, 3));
+            marker.drawRect(QRectF(1.5, y-2, width()-3, 4));
+            marker.setPen(QPen(Qt::white, 1));
+            marker.drawRect(QRectF(1.5, y-2, width()-3, 4));
+            marker.end();
+            dirty = false;
+            upload = true;
+        }
+        const QRect destination(mapTo(window(), track.topLeft()), track.size());
+        if (!backdrop && window()->windowHandle() && window()->windowHandle()->isExposed())
+            backdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(window()->windowHandle(), true);
+        if (backdrop) {
+            if (upload) { nativeReady = backdrop->setImage(ramp, destination, 203); upload = false; }
+            backdrop->setGeometry(destination);
+            backdrop->setVisible(isVisible() && nativeReady);
+        }
+        setProperty("hdrPreviewAvailable", nativeReady);
+        if (!nativeReady) {
+            QPainter painter(this);
+            painter.drawImage(track, hyprcapture::ui::hdrToSdr(ramp));
+        }
+    }
+private:
+    void pick(const QPointF& point) {
+        const qreal fraction = std::clamp(point.y()/std::max(1, height()-1), 0.0, 1.0);
+        setValue(qRound(maximum()-fraction*(maximum()-minimum())));
+    }
+    QColor target = Qt::white;
+    QImage ramp;
+    bool dirty = true, upload = true, nativeReady = false;
+    std::unique_ptr<hyprcapture::ui::HdrBackdrop> backdrop;
+};
+
+HdrGainSlider* addHdrGainSlider(QHBoxLayout* row, QWidget* parent, qreal gain, const char* name) {
+    auto* slider = new HdrGainSlider(parent);
     slider->setObjectName(name);
     slider->setFixedSize(20, 160);
     slider->setRange(100, 800);
@@ -1423,6 +1515,7 @@ struct AnnotationEditor::Impl {
     ToolbarFrame* toolbar = nullptr;
     ToolbarFrame* variantPanel = nullptr;
     ToolbarFrame* colorPanel = nullptr;
+    HdrGainSlider* hdrGainSlider = nullptr;
     ToolbarFrame* morePanel = nullptr;
     std::vector<StripToolButton*> toolButtons = std::vector<StripToolButton*>(11, nullptr);
     std::vector<Choice> choices;
@@ -1582,6 +1675,7 @@ struct AnnotationEditor::Impl {
         canvas->setFocus(Qt::ShortcutFocusReason);
     }
     void updateColor() {
+        if (hdrGainSlider) hdrGainSlider->setTargetColor(canvas->color);
         color->dark = dark;
         color->setProperty("annotationAccent", canvas->color);
         color->setIcon(actionIcon("color", dark, canvas->color));
@@ -1862,8 +1956,13 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     ui.hue = new ColorField(true, ui.colorPanel);
     ui.hue->setObjectName("annotationHue");
     hsv->addWidget(ui.saturationValue);
-    hsv->addWidget(ui.hue);
-    auto* hdrGain = addHdrGainSlider(hsv, ui.colorPanel, ui.canvas->hdrGain, "annotationHdrGain");
+    auto* sliders = new QHBoxLayout;
+    sliders->setSpacing(0);
+    sliders->addWidget(ui.hue);
+    hsv->addLayout(sliders);
+    auto* hdrGain = addHdrGainSlider(sliders, ui.colorPanel, ui.canvas->hdrGain, "annotationHdrGain");
+    ui.hdrGainSlider = hdrGain;
+    hdrGain->setTargetColor(ui.canvas->color);
     connect(hdrGain, &QSlider::valueChanged, this, [this](int value) { m_impl->canvas->hdrGain = value / 100.0; });
     colorRows->addLayout(hsv);
     auto* swatches = new QHBoxLayout;
@@ -1995,8 +2094,16 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         textSaturation->setObjectName("annotationTextSaturationValue");
         auto* textHue = new ColorField(true, textPalette);
         textHue->setObjectName("annotationTextHue");
-        paletteLayout->addWidget(textSaturation); paletteLayout->addWidget(textHue);
-        auto* textGain = addHdrGainSlider(paletteLayout, textPalette, existing.hdrGain, "annotationTextHdrGain");
+        paletteLayout->addWidget(textSaturation);
+        auto* textSliders = new QHBoxLayout;
+        textSliders->setSpacing(0);
+        textSliders->addWidget(textHue);
+        paletteLayout->addLayout(textSliders);
+        auto* textGain = addHdrGainSlider(textSliders, textPalette, existing.hdrGain, "annotationTextHdrGain");
+        textGain->setTargetColor(existing.color);
+        connect(color, &QLineEdit::textChanged, textGain, [textGain](const QString& value) {
+            const QColor selected(value); if (selected.isValid()) textGain->setTargetColor(selected);
+        });
         textSaturation->setColor(existing.color); textHue->setColor(existing.color);
         textSaturation->colorPicked = textHue->colorPicked = [color](const QColor& selected) { color->setText(selected.name()); };
         connect(color, &QLineEdit::textChanged, textPalette, [textSaturation, textHue, paletteButton, dark](const QString& value) {
