@@ -21,6 +21,9 @@
 #include <QSignalSpy>
 #include <QStandardPaths>
 #include <QScopeGuard>
+#include <QSemaphore>
+#include <QThreadPool>
+#include <QWindow>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
@@ -188,6 +191,69 @@ class InPlaceEditorTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void hdrStartupSurvivesCloseDuringConversion() {
+        const QString timingPath = hyprcapture::ui::runtimeFile("hdr-startup-timing", ".log");
+        QFile timing(timingPath);
+        QVERIFY(timing.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        QVERIFY(timing.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        timing.close();
+        const auto previousTiming = qgetenv("HYPRCAPTURE_TIMING_FILE");
+        qputenv("HYPRCAPTURE_TIMING_FILE", timingPath.toUtf8());
+        const auto resetTiming = qScopeGuard([&] {
+            if (previousTiming.isNull()) qunsetenv("HYPRCAPTURE_TIMING_FILE");
+            else qputenv("HYPRCAPTURE_TIMING_FILE", previousTiming);
+            QFile::remove(timingPath);
+        });
+
+        // Hold the worker so first paint and destruction must finish before
+        // conversion can even start. The conversion then uses unlinked mapped
+        // pixels after the overlay is gone, and its queued result is discarded.
+        auto* pool = QThreadPool::globalInstance();
+        pool->waitForDone();
+        const int previousThreads = pool->maxThreadCount();
+        pool->setMaxThreadCount(1);
+        QSemaphore entered, release;
+        pool->start(QRunnable::create([&] { entered.release(); release.acquire(); }));
+        const auto resetPool = qScopeGuard([&] {
+            release.release();
+            pool->waitForDone();
+            pool->setMaxThreadCount(previousThreads);
+        });
+        QVERIFY(entered.tryAcquire(1, 5000));
+        hyprcapture::CaptureDefaults defaults;
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, false).toStdString());
+        QVERIFY(session);
+        auto& monitor = session->monitors.front();
+        const QString path = hyprcapture::ui::runtimeFile("hdr-startup", ".rgba");
+        QImage linear(64, 64, QImage::Format_RGBA16FPx4);
+        linear.fill(Qt::white);
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        QVERIFY(file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        QCOMPARE(file.write(reinterpret_cast<const char*>(linear.constBits()), linear.sizeInBytes()), linear.sizeInBytes());
+        file.close();
+        monitor.artifactPath = path.toStdString();
+        monitor.artifactWidth = linear.width(); monitor.artifactHeight = linear.height();
+        monitor.artifactFormat = "rgba16f-linear-srgb";
+        {
+            CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+            QVERIFY(!QFile::exists(path));
+            overlay.show();
+            QTRY_VERIFY(overlay.windowHandle() && overlay.windowHandle()->isExposed());
+            overlay.repaint();
+            QVERIFY(timing.open(QIODevice::ReadOnly));
+            const auto before = timing.readAll();
+            timing.close();
+            QVERIFY(before.contains("overlay.first_paint"));
+            QVERIFY(!before.contains("overlay.hdr_backdrop_convert"));
+        }
+        release.release();
+        QVERIFY(pool->waitForDone(5000));
+        QCoreApplication::processEvents();
+        QVERIFY(timing.open(QIODevice::ReadOnly));
+        QVERIFY(timing.readAll().contains("overlay.hdr_backdrop_convert"));
+    }
+
     void dynamicRangeControl() {
         for (bool hasHdrScreen : {false, true}) {
             for (bool visible : {false, true}) {

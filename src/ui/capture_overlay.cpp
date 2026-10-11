@@ -3067,13 +3067,31 @@ bool CaptureOverlay::hasHdrBackdrop(const MonitorArtifact& artifact) const {
 void CaptureOverlay::prepareHdrBackdrops() {
     if (m_hdrBackdropsAttempted || m_quick || !windowHandle() || !windowHandle()->isExposed()) return;
     m_hdrBackdropsAttempted=true;
+    QPointer<CaptureOverlay> overlay(this);
     for (const auto& artifact:m_monitorArtifacts) {
         if (artifact.hdrImage.isNull() || !artifact.logicalGeometry.intersects(m_overlayLogicalGeometry)) continue;
-        auto surface=std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle());
-        if (surface->setImage(artifact.hdrImage,globalToLocalRect(artifact.logicalGeometry),artifact.referenceNits)) {
-            surface->setVisible(m_overlayActive && !m_scrolling);
-            m_hdrBackdrops.push_back({artifact.logicalGeometry,std::move(surface)});
-        } else qWarning("HyprCapture: native HDR preview unavailable; using SDR preview");
+        // Keep the frozen SDR preview interactive while converting the full
+        // monitor. Workers own shared image data, never widgets or Wayland
+        // objects; closing the overlay does not wait for their conversion.
+        QThreadPool::globalInstance()->start(QRunnable::create(
+            [overlay, image = artifact.hdrImage, geometry = artifact.logicalGeometry, reference = artifact.referenceNits] {
+                ScopedUiTiming timing(QStringLiteral("overlay.hdr_backdrop_convert"));
+                float peak = 0;
+                const QImage pq = hyprcapture::ui::hdrToPq10(image, &peak, reference);
+                QMetaObject::invokeMethod(QCoreApplication::instance(), [overlay, pq, geometry, peak, reference] {
+                    if (!overlay || pq.isNull()) return;
+                    auto* self = overlay.data();
+                    if (!self->windowHandle() || !self->windowHandle()->isExposed()) return;
+                    ScopedUiTiming timing(QStringLiteral("overlay.hdr_backdrop_upload"));
+                    auto surface = std::make_unique<hyprcapture::ui::HdrBackdrop>(self->windowHandle());
+                    if (surface->setPqImage(pq, self->globalToLocalRect(geometry), peak, reference)) {
+                        surface->setVisible(self->m_overlayActive && !self->m_scrolling);
+                        self->m_hdrBackdrops.push_back({geometry, std::move(surface)});
+                        self->updateHdrEditBackdrop();
+                        self->update();
+                    } else qWarning("HyprCapture: native HDR preview unavailable; using SDR preview");
+                }, Qt::QueuedConnection);
+            }));
     }
 }
 void CaptureOverlay::updateHdrEditBackdrop() {
