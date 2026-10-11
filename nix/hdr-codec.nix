@@ -31,6 +31,9 @@ in stdenv.mkDerivation {
   nativeBuildInputs = [ cmake pkg-config ];
   buildInputs = [ gainMapHeif libjpeg ];
   cmakeFlags = [
+    # Upstream libuhdr.pc prepends prefix to these GNUInstallDirs values.
+    "-DCMAKE_INSTALL_LIBDIR=lib"
+    "-DCMAKE_INSTALL_INCLUDEDIR=include"
     "-DBUILD_SHARED_LIBS=ON"
     "-DUHDR_BUILD_DEPS=OFF"
     "-DUHDR_BUILD_EXAMPLES=ON"
