@@ -1,0 +1,91 @@
+# Maintainer: wilf
+pkgname=hdrview
+pkgver=3.0.2
+pkgrel=1
+pkgdesc='HDR image viewer with Wayland HDR output and ISO HEIC gain-map decoding'
+arch=('x86_64' 'aarch64')
+url='https://github.com/wkjarosz/hdrview'
+license=('BSD-3-Clause')
+depends=('gcc-libs' 'libglvnd' 'wayland' 'libxkbcommon' 'dbus' 'hicolor-icon-theme'
+         'openexr' 'imath' 'lcms2' 'libheif' 'libde265' 'x265' 'libjpeg-turbo'
+         'libpng' 'libjxl' 'libtiff' 'libwebp' 'libraw' 'openjpeg2' 'aom' 'dav1d'
+         'openh264' 'zlib' 'brotli' 'freetype2' 'libx11' 'libxcursor' 'libxi'
+         'libxinerama' 'libxrandr' 'spdlog' 'fmt' 'libexif' 'tinyxml2')
+makedepends=('cmake' 'ninja' 'git' 'pkgconf' 'patch' 'python' 'wayland-protocols')
+checkdepends=('desktop-file-utils')
+conflicts=('hdrview-bin')
+options=('!debug')
+_uhdr_commit=e5f5a022fe96fc4dc2ee35c19f733a50df807abe
+source=("hdrview-$pkgver.tar.gz::https://codeload.github.com/wkjarosz/hdrview/tar.gz/refs/tags/v$pkgver"
+        "libultrahdr-2.0.2.tar.gz::https://codeload.github.com/google/libultrahdr/tar.gz/$_uhdr_commit"
+        'hdrview-iso-heic.patch' 'ultrahdr-heic.patch'
+        'glfw-hdr.tar.gz::https://codeload.github.com/Tom94/glfw/tar.gz/2cc924c234423f635aee654073e5bb5a216392dd'
+        'hdrview-portability.patch' 'glfw-hdr-target.patch' 'ultrahdr-exports.map' 'hdr-heic-check.cpp' 'hdr-heic-fixture.heic')
+sha256sums=('a8627a5d586d8e1b59083941bde2dc8277015ef1f5f8e3e6c2de5376e2e66db7'
+            '5a7b6347a4a32c6936b81392cd6394250649380202f86c8214042aa645cc385c'
+            'ccda3ab271c9072d27ef596a4afd01c7541382a681b42efe4965fa5e1a4f2433'
+            '88a92badb76e64398fa3e84dc9dbe78e5427633248d739475452b1d633a97bb0'
+            'e282bde5fcadbabc67ab91a5484b675a1080de1020abd69b32569332295a96ce'
+            '5e701ff27575fc785dcb3cdea4ef08f32e1a587d16e8951ca855cd975817f584'
+            '0089b45bf54e8450422191c4875f422cb592f567c6baafacd6a9e92c7fcda5f1'
+            'e88e0a5409fcc6813aa61354ff5e81d1dbd95e1d833c0284092bbcbd49dec5b2'
+            '086ad02baa8a1d0a96a5dde397278b828b6579d1ff9a0484baf95a3bd6dad732'
+            'f9e28eb84ee8a0743ad9f809f8d6fee88491f635f38292653278b02ed2e10925')
+
+prepare() {
+    patch -d "hdrview-$pkgver" -p1 -i "$srcdir/hdrview-iso-heic.patch"
+    patch -d "libultrahdr-$_uhdr_commit" -p1 -i "$srcdir/ultrahdr-heic.patch"
+    patch -d "hdrview-$pkgver" -p1 -i "$srcdir/hdrview-portability.patch"
+    patch -d glfw-2cc924c234423f635aee654073e5bb5a216392dd -p1 -i "$srcdir/glfw-hdr-target.patch"
+    # The private static libheif's codec dependencies are not exported upstream.
+    cat >> "libultrahdr-$_uhdr_commit/CMakeLists.txt" <<'CMAKE'
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(HDRCODECS REQUIRED IMPORTED_TARGET x265 libde265 aom openh264 zlib libbrotlidec)
+target_link_libraries(uhdr PRIVATE PkgConfig::HDRCODECS)
+CMAKE
+}
+
+build() {
+    # Keep the tmap-enabled libheif private and hide its symbols to avoid interposing
+    # on HDRView's normal, system libheif decoder.
+    cmake -S "libultrahdr-$_uhdr_commit" -B codec-build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DBUILD_SHARED_LIBS=ON \
+        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--version-script=$srcdir/ultrahdr-exports.map" \
+        -DUHDR_BUILD_DEPS=ON -DUHDR_ENABLE_HEIF=ON -DUHDR_WRITE_ISO=ON \
+        -DUHDR_BUILD_TESTS=OFF -DUHDR_BUILD_EXAMPLES=OFF -DUHDR_ENABLE_INSTALL=OFF
+    cmake --build codec-build --target uhdr --parallel 8
+    cmake -S "hdrview-$pkgver" -B build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 -DHDRVIEW_PORTABLE_INSTALL=OFF \
+        -DCMAKE_INSTALL_RPATH=/usr/lib/hdrview \
+        -DCPM_USE_LOCAL_PACKAGES=ON -DCPM_DOWNLOAD_glfw=ON \
+        -DCPM_glfw_SOURCE="$srcdir/glfw-2cc924c234423f635aee654073e5bb5a216392dd" \
+        -DHDRVIEW_ENABLE_HDR_DISPLAY=ON -DHDRVIEW_ENABLE_HEIC=ON \
+        -DHDRVIEW_ENABLE_HTJ2K=OFF -DHDRVIEW_ENABLE_AVCI=OFF \
+        -DHDRVIEW_ULTRAHDR_LIBRARY="$srcdir/codec-build/libuhdr.so" \
+        -DHDRVIEW_ULTRAHDR_INCLUDE_DIR="$srcdir/libultrahdr-$_uhdr_commit"
+    cmake --build build --target HDRView --parallel 8
+}
+
+check() {
+    build/HDRView --version
+    c++ -std=c++17 hdr-heic-check.cpp -I "libultrahdr-$_uhdr_commit" \
+        -L codec-build -Wl,-rpath,"$srcdir/codec-build" -luhdr -o hdr-heic-check
+    ./hdr-heic-check hdr-heic-fixture.heic
+    desktop-file-validate "hdrview-$pkgver/assets/app_settings/linux/io.github.wkjarosz.hdrview.desktop"
+}
+
+package() {
+    DESTDIR="$pkgdir" cmake --install build
+    install -d "$pkgdir/usr/lib/hdrview"
+    cp -a codec-build/libuhdr.so* "$pkgdir/usr/lib/hdrview/"
+    install -Dm644 "hdrview-$pkgver/assets/app_settings/icon-256.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/HDRView.png"
+    ln -s HDRView "$pkgdir/usr/bin/hdrview"
+    install -Dm644 "hdrview-$pkgver/LICENSE.txt" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "libultrahdr-$_uhdr_commit/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/libultrahdr-LICENSE"
+    install -Dm644 "libultrahdr-$_uhdr_commit/third_party/turbojpeg/LICENSE.md" "$pkgdir/usr/share/licenses/$pkgname/libjpeg-turbo-LICENSE.md"
+    install -Dm644 "libultrahdr-$_uhdr_commit/third_party/libheif/COPYING" "$pkgdir/usr/share/licenses/$pkgname/libheif-COPYING"
+    find "$pkgdir" -type d -exec chmod 755 {} +
+    find "$pkgdir" -type f -exec chmod u+rw,go+r,go-w {} +
+}

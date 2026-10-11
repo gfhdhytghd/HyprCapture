@@ -1,0 +1,40 @@
+--- a/src/image-gui.cpp
++++ b/src/image-gui.cpp
+@@ -210,7 +210,7 @@
+ 
+ void Image::draw_info()
+ {
+-    std::locale loc("en_US.UTF-8");
++    const auto loc = std::locale::classic();
+     auto        bold_font = hdrview()->font("sans bold");
+ 
+     static ImGuiTextFilter filter;
+@@ -484,7 +484,7 @@
+             filtered_property("File name", filename);
+             filtered_property(
+                 "File size",
+-                fmt::format(std::locale("en_US.UTF-8"), "{:.1h} ({:L} bytes)", human_readible{size_bytes}, size_bytes),
++                fmt::format(std::locale::classic(), "{:.1h} ({:L} bytes)", human_readible{size_bytes}, size_bytes),
+                 "This is the size of the image file on disk. If the image consists of multiple parts, "
+                 "this is the size of the entire file.");
+             filtered_property("Last modified", fmt::format("{:%b %d, %Y at %I:%M %p}", to_system_clock(last_modified)));
+--- a/cmake/generate_version.cmake
++++ b/cmake/generate_version.cmake
+@@ -26,7 +26,7 @@
+ )
+ if(NOT git_result EQUAL 0)
+   message(WARNING "[VersionFromGit] Failed to execute Git: ${git_error}")
+-  set(git_describe "")
++  set(git_describe "v3.0.2")
+ endif()
+ 
+ # Get Git tag
+@@ -40,7 +40,7 @@
+ )
+ if(NOT git_result EQUAL 0)
+   message(WARNING "[VersionFromGit] Failed to execute Git: ${git_error}")
+-  set(git_tag "")
++  set(git_tag "v3.0.2")
+ endif()
+ 
+ if(git_tag MATCHES "^v(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[.0-9A-Za-z-]+)?([+][.0-9A-Za-z-]+)?$")
