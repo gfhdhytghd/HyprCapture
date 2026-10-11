@@ -25,6 +25,7 @@ class ResultThumbnail final : public QWidget {
                     bool copyFile = false,
                     QScreen* targetScreen = nullptr,
                     QWidget* parent = nullptr);
+    void setDragPath(const QString& path) { m_dragPath = path; }
     void setImagePixmap(const QPixmap& pixmap);
     void setTranscodeProgress(double progress);
     void finishTranscodeProgress(bool success, int timeoutMs);
@@ -65,6 +66,7 @@ class ResultThumbnail final : public QWidget {
     void startCloseTimer(int timeoutMs);
 
     QString m_path;
+    QString m_dragPath;
     QString m_restoreClipboardPath;
     QString m_deleteRoot;
     bool    m_copyFile = false;

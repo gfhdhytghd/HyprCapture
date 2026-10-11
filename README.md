@@ -23,13 +23,14 @@ See the [changelog](https://gfhdhytghd.github.io/HyprCapture/) for release histo
 
 ## Open-source acknowledgements
 
-The screenshot annotation interface is inspired by [Omarchy Screenshot](https://github.com/manateelazycat/omarchy-screenshot) by [Andy Stewart (王勇 / 王老板)](https://github.com/manateelazycat), particularly its compact grouped toolbar, color palette, and light/dark appearance. Thank you for sharing the project with the open-source community. Omarchy Screenshot is licensed under [GPL-3.0-only](https://github.com/manateelazycat/omarchy-screenshot/blob/main/LICENSE).
+The screenshot annotation interface is inspired by [Omarchy Screenshot](https://github.com/manateelazycat/omarchy-screenshot) by [Andy Stewart](https://github.com/manateelazycat), particularly its compact grouped toolbar, color palette, and light/dark appearance. Thank you for sharing the project with the open-source community. Omarchy Screenshot is licensed under [GPL-3.0-only](https://github.com/manateelazycat/omarchy-screenshot/blob/main/LICENSE).
 
 ## Features
 
 - Fullscreen, region, and window capture modes
 - Fullscreen, region, and window recording as video or fixed-duration GIF/APNG/WebP animations
 - Immediate frozen desktop image behind the overlay
+- [HDR support](#hdr-support): native HDR overlay and editing, SDR-compatible gain-map HEIC screenshots, and HDR-to-SDR conversion for recording
 - Display-resolution output for fullscreen and region captures
 - Compositor-side window artifacts, including windows that are occluded or partly off-screen
 - Window output backgrounds: follow system, white, black, real background, or transparent
@@ -48,6 +49,33 @@ https://github.com/user-attachments/assets/03a642d3-569d-4b77-8ccf-17934620bc20
 
 
 ## Installation
+
+### Install on Omarchy
+
+HyprCapture ships as an [Omarchy](https://omarchy.org/) shell plugin. Add and enable it with:
+
+```sh
+omarchy plugin add https://github.com/gfhdhytghd/HyprCapture.git --enable
+```
+
+On first enable a terminal opens, installs any missing build dependencies with `pacman` (it asks for your password), and compiles the plugin and its helper against the Hyprland you are running. The build lives in `~/.cache/io.github.gfhdhytghd.hyprcapture/`; nothing is installed system-wide. The same terminal asks whether HyprCapture should handle the **Screenshot** and **Screenrecord** entries of the Omarchy menu. If you agree, a clearly marked block is added to `~/.config/omarchy/extensions/omarchy-menu.jsonc`; it is removed again when the plugin is disabled or removed. Change your answer later with `~/.config/omarchy/plugins/io.github.gfhdhytghd.hyprcapture/omarchy/plugin menu on` (or `off`).
+
+When the build finishes the plugin loads and these bindings are registered at runtime:
+
+| Input | Action | Replaces Omarchy default |
+| --- | --- | --- |
+| `Print` | Select a target, then annotate | Screenshot |
+| `Shift + Print` | Capture the full screen | — |
+| `Alt + Print` | Open the overlay in recording mode, or stop the active recording | Screenrecording |
+| Menu › Capture › Screenshot | Select a target, then annotate | omarchy-capture-screenshot |
+| Menu › Capture › Screenrecord | Open the overlay in recording mode, or stop the active recording | Screenrecord submenu |
+
+A key you bound yourself is never taken over; it is skipped and logged instead. If HyprCapture is not loaded, for example right after a Hyprland update, the menu entries fall back to Omarchy's own tools. To choose your own bindings and settings, copy [`omarchy/defaults.lua`](omarchy/defaults.lua) to `~/.config/hyprcapture/omarchy.lua` and edit it. When that file exists it replaces the defaults, and it is applied after every config reload. Configure `plugin.hyprcapture` there rather than in `hyprland.lua`: the plugin is not loaded yet when your main config first runs.
+
+After a Hyprland update, a notification offers to rebuild. `omarchy plugin update` pulls new versions and asks for a rebuild only when the native code changed. If you previously installed HyprCapture with `hyprpm`, run `hyprpm disable hyprcapture` first so only one copy is loaded. The optional DTLN echo canceller is not part of the Omarchy install.
+
+`omarchy plugin disable io.github.gfhdhytghd.hyprcapture` unloads the plugin and restores Omarchy's bindings and menu. `omarchy plugin remove io.github.gfhdhytghd.hyprcapture` does the same and deletes the checkout; remove `~/.cache/io.github.gfhdhytghd.hyprcapture` as well to reclaim the build space.
+
 ### Dependencies
 
 - Hyprland development headers for the exact Hyprland build you are running
@@ -65,6 +93,7 @@ https://github.com/user-attachments/assets/03a642d3-569d-4b77-8ccf-17934620bc20
 - FFmpeg (including `ffprobe`, AAC and Opus encoders) for recording output
 - FFmpeg development libraries `libavformat`, `libavcodec`, and `libavutil` for timestamped RGBA transport (`ffmpeg` on Arch; `libavformat-dev libavcodec-dev libavutil-dev` on Debian/Ubuntu)
 - PulseAudio or PipeWire with its PulseAudio compatibility service for sound recording
+- HEIC gain-map encoding needs an HEVC encoder and decoder (`x265` and `libde265` development packages), Git and patch. CMake builds pinned private libultrahdr 2.0.2 / libheif dependencies on the first build; system libraries are not replaced. Set `-DHYPRCAPTURE_GAINMAP_HEIC=OFF` for an offline PNG-only build. Nix fetches and patches these dependencies separately.
 - `wl-clipboard` for persistent Wayland clipboard ownership
 
 ### Install with `hyprpm`
@@ -210,6 +239,28 @@ hl.config({
     },
 })
 ```
+
+### HDR support
+
+HyprCapture supports HDR screenshots with native HDR preview and editing. Choose SDR PNG or HDR HEIC from the **SDR / HDR** segmented control. HDR HEIC includes an SDR base image and an ISO 21496-1 gain map, so compatible HDR viewers retain the highlights and wide-gamut colors while ordinary viewers display the SDR base. Recording converts HDR desktop content to SDR.
+
+On a color-managed HDR output, screenshots retain the compositor's half-float linear sRGB/scRGB pixels (1.0 = 80 cd/m²) until export. The overlay and in-place editor present the frozen HDR image through a separate Wayland color-managed 10-bit BT.2020/PQ surface beneath the transparent Qt controls. Its actual captured peak is advertised so the compositor does not tone-map the display-referred pixels a second time. Thumbnails and SDR PNG output use an sRGB rendition normalized to the output's SDR reference white, with a smooth highlight shoulder and gamut compression. SDR monitor captures stay on the sRGB path.
+
+Choose **HDR** in the **SDR / HDR** segmented control to preserve HDR highlights, or set:
+
+```lua
+hl.config({
+    plugin = { hyprcapture = { screenshot_mode = "hdr", show_hdr_control = true } },
+})
+```
+
+The control is enabled whenever any connected display supports HDR, including when the current capture is on an SDR display. Without an HDR display or encoder, capture falls back to SDR. Set `screenshot_mode = "sdr"` or `"hdr"` for the default, and `show_hdr_control = false` to hide the control while retaining that default. The mode starts from configuration on each capture, independently of `remember_settings`. The helper also accepts `--screenshot-mode hdr --show-hdr-control 0`. HEIC output uses a normal sRGB SDR primary image with an ICC profile and matching NCLX, plus a full-resolution RGB ISO 21496-1 gain map (`tmap`). Viewers that ignore gain maps display the SDR image; gain-map-aware HDR viewers can reconstruct HDR brightness and BT.2020/P3 colors. Straight alpha is retained as a HEIF auxiliary image when needed. Its suffix becomes `.heic`; the clipboard defaults to HEIC (`image/heic`). Set `hdr_clipboard_format = "sdr"` to copy SDR PNG instead. `hdr_drag_format = "heic"` (default) or `"sdr"` selects the file dragged from the thumbnail, independently of the file opened by clicking it. `hdr_save_sdr = true` saves both the HEIC and a same-name SDR PNG; its default is `false`. SDR transport copies are private temporary PNGs when simultaneous saving is disabled. These options only affect HDR screenshots; SDR screenshots continue to use PNG. The SDR base uses exactly the screenshot's PNG conversion, including each monitor's reference white and annotations. Screenshots spanning HDR and SDR monitors combine the HDR pixels with the SDR monitor images promoted to a 203 cd/m² diffuse white. Builds without the gain-map encoder still capture and export SDR PNG; unavailable HDR pixels/encoders produce an error rather than an SDR file mislabeled as HDR. The compositor plugin and helper must both support the float transport.
+
+HDR export currently covers region, fullscreen and window screenshots on outputs with a linear HDR work buffer. Scrolling screenshots remain SDR. Native HDR preview requires Wayland color-management-v1 parametric PQ support, viewporter, 10-bit shared-memory buffers, and Qt GUI private development headers plus wayland-client, wayland-protocols and wayland-scanner at build time. Unsupported environments explicitly fall back to an SDR preview. HDR presentation in external applications requires ISO HEIF gain-map support as well as HDR display output. General HDR/PQ support alone is insufficient. Ordinary viewers still get the SDR base instead of uninterpreted PQ values.
+
+For Arch Linux, the repository includes an [HDRView PKGBUILD](packaging/hdrview/README.md) with ISO HEIC gain-map decoding and Wayland HDR display fixes for viewing these screenshots.
+
+Video output stays SDR. Captures touching HDR, wide-gamut or ICC-managed outputs use the compositor backend, including when `record_window_backend` requests the external recorder. Capture first renders in Hyprland's actual monitor work space, retaining a floating-point buffer on HDR outputs. An explicit GPU resolve converts that buffer to SDR sRGB before RGBA readback or GPU export, normalizing to the output's SDR white and preserving its black level. Merely tagging the framebuffer as sRGB is insufficient on Hyprland 0.56. Encoders use an explicit BT.709 YCbCr matrix and limited range, tagged with sRGB transfer/BT.709 primaries; RGB-preserving and animation formats keep their appropriate RGB path. No HDR recording option is introduced.
 
 ### Manual helper install
 
@@ -532,6 +583,12 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `show_thumbnail` | bool | `true` | Show the result thumbnail after capture. |
 | `screenshot_notification` | bool | `true` | Show a notification after a screenshot is successfully saved. Disable this independently of recording status notifications. |
 | `save_dir` | string | `$XDG_PICTURES_DIR/Screenshots` | Output directory. `~` is expanded against `HOME`; `$XDG_PICTURES_DIR` is read from XDG user-dirs with `~/Pictures` as fallback. |
+| `screenshot_mode` | string | `sdr` | Default screenshot dynamic range: `sdr` or `hdr`. When unset, the legacy `screenshot_format` is used. |
+| `show_hdr_control` | bool | `true` | Show the SDR / HDR segmented control; hiding it retains the configured default. Recording hides it automatically. |
+| `hdr_save_sdr` | bool | `false` | Also save a same-name SDR PNG for HDR screenshots. |
+| `hdr_drag_format` | string | `heic` | Drag HDR HEIC or SDR PNG (`sdr`) from the result thumbnail. |
+| `hdr_clipboard_format` | string | `heic` | Copy HDR HEIC (`image/heic`) or SDR PNG (`sdr`) to the clipboard. |
+| `screenshot_format` | string | `png` | Legacy alias; `screenshot_mode` takes precedence when set. `png` saves SDR sRGB; `heic` saves an SDR-compatible base plus an HDR ISO gain map. The toolbar offers HEIC when the gain-map encoder is available. |
 | `filename_template` | string | `Screenshot-%Y-%m-%d-%H%M%S.png` | `strftime` template for saved screenshot filenames. `{window_class}` and `{window_title}` follow `dynamic_window_metadata`; values are filename-sanitized and missing metadata expands to `unknown`. Existing `strftime` directives, including `%w`, keep their original meaning. |
 | `notification_title_template` | string | `Screenshot captured` | Screenshot notification title. Supports `strftime` directives and `{mode}`, `{window_class}`, `{window_title}`, `{filename}`, and `{path}`. Window metadata is not filename-sanitized. |
 | `notification_body_template` | string | `Saved {filename} ({window_title})` | Screenshot notification body. Supports the same placeholders and `strftime` directives as `notification_title_template`. |

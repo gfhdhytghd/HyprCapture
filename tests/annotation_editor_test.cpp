@@ -19,6 +19,8 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QSlider>
+#include <QColorSpace>
 #include <QStandardPaths>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -113,6 +115,26 @@ void defaults() {
 class AnnotationEditorTest final : public QObject {
     Q_OBJECT
   private slots:
+    void externalHdrBaseOnlyChangesPresentation() {
+        AnnotationEditor editor;
+        const QImage source=image(QSize(240,160),Qt::white);
+        initialize(editor,source);
+        auto* canvas=editor.findChild<QWidget*>("annotationCanvas");
+        QVERIFY(canvas);
+        QCOMPARE(canvas->grab().toImage().pixelColor(displayed(QPoint(60,60))),QColor(Qt::white));
+        editor.setExternalImagePresentation(true);
+        QVERIFY(editor.externalImagePresentation());
+        QApplication::processEvents();
+        QVERIFY(canvas->grab().toImage().pixelColor(displayed(QPoint(60,60)))!=QColor(Qt::white));
+        QCOMPARE(editor.resultImage(),source);
+        selectTool(editor,5);
+        drag(editor,QPoint(30,30),QPoint(90,70));
+        QVERIFY(editor.resultImage()!=source);
+        editor.setExternalImagePresentation(false);
+        QVERIFY(!editor.externalImagePresentation());
+        QCOMPARE(canvas->grab().toImage().pixelColor(displayed(QPoint(130,100))),QColor(Qt::white));
+    }
+
     void touchGestureCancelsDraftAndRequiresAllFingersUp() {
         using G=hyprcapture::ui::TouchGesture;
         G g;
@@ -588,7 +610,51 @@ class AnnotationEditorTest final : public QObject {
         QTest::keyClick(reopened, Qt::Key_Escape);
     }
 
-    void textEscapeAndCancelRemainResponsive() {
+    void hdrTextGainPreservesSdrAndUndo() {
+        AnnotationEditor editor;
+        const QImage source = image();
+        initialize(editor, source);
+        selectTool(editor, 7);
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        auto* gain = editor.findChild<QSlider*>("annotationHdrGain");
+        QVERIFY(gain);
+        QCOMPARE(gain->value(), 100);
+        gain->setValue(200);
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(20, 30)));
+        auto* input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        auto* textGain = editor.findChild<QSlider*>("annotationTextHdrGain");
+        QVERIFY(input && textGain);
+        QCOMPARE(textGain->value(), 200);
+        editor.findChild<QLineEdit*>("annotationTextColor")->setText("#ffffff");
+        input->setPlainText("HDR");
+        QImage base(source.size(), QImage::Format_RGBA32FPx4);
+        base.fill(Qt::transparent);
+        base.setColorSpace(QColorSpace::SRgbLinear);
+        const auto maximum = [](const QImage& image) {
+            const QImage fp = image.convertToFormat(QImage::Format_RGBA32FPx4);
+            float result = 0;
+            for (int y = 0; y < fp.height(); ++y) {
+                const float* row = reinterpret_cast<const float*>(fp.constScanLine(y));
+                for (int x = 0; x < fp.width(); ++x) result = std::max(result, row[x*4]);
+            }
+            return result;
+        };
+        const QImage sdr = editor.resultImage();
+        const float twice = maximum(editor.resultImageOn(base));
+        textGain->setValue(400);
+        QCOMPARE(editor.resultImage(), sdr);
+        const float four = maximum(editor.resultImageOn(base));
+        QVERIFY(twice > 1.0F);
+        QVERIFY(std::abs(four / twice - 2.0F) < 0.02F);
+        QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(1, 1));
+        QVERIFY(!input->isVisible());
+        editor.undo();
+        QCOMPARE(editor.resultImage(), source);
+        editor.redo();
+        QCOMPARE(maximum(editor.resultImageOn(base)), four);
+    }
+
+    void textAutosavesAndOutsideClickFinishes() {
         AnnotationEditor editor;
         const QImage source = image();
         initialize(editor, source);
@@ -597,11 +663,31 @@ class AnnotationEditorTest final : public QObject {
         QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(20, 30)));
         auto* input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
         QVERIFY(input);
-        QTest::keyClicks(input, "discard this");
-        QTest::keyClick(input, Qt::Key_Escape);
+        QVERIFY(!editor.findChild<QPushButton*>("annotationTextAccept"));
+        QVERIFY(!editor.findChild<QPushButton*>("annotationTextCancel"));
+        QSignalSpy changed(&editor, &AnnotationEditor::annotationsChanged);
+        QTest::keyClicks(input, "save this");
+        QVERIFY(changed.count() > 0);
+        QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(1, 1));
         QVERIFY(!input->isVisible());
         QVERIFY(canvas->isEnabled());
+        const QImage saved = editor.resultImage();
+        QVERIFY(saved != source);
+        editor.undo();
         QCOMPARE(editor.resultImage(), source);
+        editor.redo();
+        QCOMPARE(editor.resultImage(), saved);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        selectTool(editor, 7);
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(20, 30)));
+        input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(input);
+        input->setPlainText("updated text");
+        QTest::keyClick(input, Qt::Key_Escape);
+        QVERIFY(!input->isVisible());
+        QVERIFY(editor.resultImage() != saved);
+        editor.undo();
+        QCOMPARE(editor.resultImage(), saved);
         QSignalSpy cancelled(&editor, &AnnotationEditor::cancelRequested);
         QTest::keyClick(canvas, Qt::Key_Escape);
         QCOMPARE(cancelled.count(), 1);

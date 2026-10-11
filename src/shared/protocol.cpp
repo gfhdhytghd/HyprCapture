@@ -84,6 +84,11 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"windowWheelScope", toString(defaults.windowWheelScope)},
         {"fullscreenPreviewRounding", boundedString(defaults.fullscreenPreviewRounding, MAX_METADATA_STRING_BYTES)},
         {"saveDir", boundedString(defaults.saveDir, MAX_PATH_BYTES)},
+        {"screenshotFormat", defaults.screenshotFormat},
+        {"showHdrControl", defaults.showHdrControl},
+        {"hdrSaveSdr", defaults.hdrSaveSdr},
+        {"hdrDragFormat", defaults.hdrDragFormat},
+        {"hdrClipboardFormat", defaults.hdrClipboardFormat},
         {"filenameTemplate", boundedString(defaults.filenameTemplate, MAX_METADATA_STRING_BYTES)},
         {"notificationTitleTemplate", boundedString(defaults.notificationTitleTemplate, MAX_METADATA_STRING_BYTES)},
         {"notificationBodyTemplate", boundedString(defaults.notificationBodyTemplate, MAX_METADATA_STRING_BYTES)},
@@ -239,6 +244,13 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         defaults.windowShadow = parseDecorationPolicy(value, defaults.windowShadow);
     else
         return false;
+    if (!stringValue(obj, "screenshotFormat", defaults.screenshotFormat, 16, false) ||
+        (defaults.screenshotFormat != "png" && defaults.screenshotFormat != "heic")) return false;
+    if (!boolValue(obj, "hdrSaveSdr", defaults.hdrSaveSdr, false) ||
+        !stringValue(obj, "hdrDragFormat", defaults.hdrDragFormat, 16, false) ||
+        !stringValue(obj, "hdrClipboardFormat", defaults.hdrClipboardFormat, 16, false) ||
+        (defaults.hdrDragFormat != "heic" && defaults.hdrDragFormat != "sdr") ||
+        (defaults.hdrClipboardFormat != "heic" && defaults.hdrClipboardFormat != "sdr")) return false;
     if (obj.contains("notificationBackend")) {
         if (!stringValue(obj, "notificationBackend", value, MAX_METADATA_STRING_BYTES))
             return false;
@@ -283,7 +295,7 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         return false;
 
     return boolValue(obj, "save", defaults.save, false) && boolValue(obj, "clipboard", defaults.clipboard, false) &&
-        boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
+        boolValue(obj, "showHdrControl", defaults.showHdrControl, false) && boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
         boolValue(obj, "inPlaceEditToolbar", defaults.inPlaceEditToolbar, false) &&
         stringValue(obj, "language", defaults.language, MAX_METADATA_STRING_BYTES, false) &&
         boolValue(obj, "allowQuick", defaults.allowQuick, false) && boolValue(obj, "confirmBeforeCapture", defaults.confirmBeforeCapture, false) &&
@@ -328,6 +340,9 @@ bool monitorValue(const Json& obj, MonitorInfo& out) {
     if (!stringValue(obj, "name", monitor.name, MAX_METADATA_STRING_BYTES) || !rectValue(obj, "geometry", monitor.logicalGeometry) ||
         !doubleValue(obj, "scale", monitor.scale, 0.01, 100.0) || !intValue(obj, "transform", monitor.transform, 0, 7) ||
         !boolValue(obj, "focused", monitor.focused, false) ||
+        !boolValue(obj, "hdrCapable", monitor.hdrCapable, false) ||
+        !stringValue(obj, "artifactFormat", monitor.artifactFormat, 32, false) ||
+        !doubleValue(obj, "artifactReferenceNits", monitor.artifactReferenceNits, 1.0, 10000.0, false) ||
         !stringValue(obj, "artifactPath", monitor.artifactPath, MAX_PATH_BYTES, false) ||
         !intValue(obj, "artifactWidth", monitor.artifactWidth, 0, MAX_ARTIFACT_DIMENSION, false) ||
         !intValue(obj, "artifactHeight", monitor.artifactHeight, 0, MAX_ARTIFACT_DIMENSION, false) ||
@@ -338,6 +353,7 @@ bool monitorValue(const Json& obj, MonitorInfo& out) {
         !boolValue(obj, "cursorArtifactTopDown", monitor.cursorArtifactTopDown, false))
         return false;
 
+    if (monitor.artifactFormat != "rgba8" && monitor.artifactFormat != "rgba16f-linear-srgb") return false;
     if (!monitor.artifactPath.empty() && (monitor.artifactWidth <= 0 || monitor.artifactHeight <= 0))
         return false;
     if (!monitor.cursorArtifactPath.empty() && (monitor.cursorArtifactWidth <= 0 || monitor.cursorArtifactHeight <= 0))
@@ -366,6 +382,8 @@ bool windowValue(const Json& obj, WindowInfo& out) {
         !rectValue(obj, "fullGeometry", window.fullGeometry) || !doubleValue(obj, "rounding", window.rounding, 0.0, MAX_LOGICAL_COORDINATE, false) ||
         !doubleValue(obj, "roundingPower", window.roundingPower, 1.0, 10.0, false) ||
         !doubleValue(obj, "borderSize", window.borderSize, 0.0, MAX_LOGICAL_COORDINATE, false) ||
+        !stringValue(obj, "artifactFormat", window.artifactFormat, 32, false) ||
+        !doubleValue(obj, "artifactReferenceNits", window.artifactReferenceNits, 1.0, 10000.0, false) ||
         !stringValue(obj, "artifactPath", window.artifactPath, MAX_PATH_BYTES, false) ||
         !intValue(obj, "artifactWidth", window.artifactWidth, 0, MAX_ARTIFACT_DIMENSION, false) ||
         !intValue(obj, "artifactHeight", window.artifactHeight, 0, MAX_ARTIFACT_DIMENSION, false) ||
@@ -377,6 +395,7 @@ bool windowValue(const Json& obj, WindowInfo& out) {
         !boolValue(obj, "selectable", window.selectable, false) || !boolValue(obj, "stagePreview", window.stagePreview, false))
         return false;
 
+    if (window.artifactFormat != "rgba8" && window.artifactFormat != "rgba16f-linear-srgb") return false;
     if (!window.artifactPath.empty() && (window.artifactWidth <= 0 || window.artifactHeight <= 0))
         return false;
     if (!window.realBackgroundPath.empty() && (window.realBackgroundWidth <= 0 || window.realBackgroundHeight <= 0))
@@ -435,6 +454,9 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"scale", boundedDouble(mon.scale, 0.01, 100.0, 1.0)},
             {"transform", std::clamp(mon.transform, 0, 7)},
             {"focused", mon.focused},
+            {"hdrCapable", mon.hdrCapable},
+            {"artifactFormat", mon.artifactFormat},
+            {"artifactReferenceNits", boundedDouble(mon.artifactReferenceNits, 1.0, 10000.0, 80.0)},
             {"artifactPath", boundedString(mon.artifactPath, MAX_PATH_BYTES)},
             {"artifactWidth", boundedDimension(mon.artifactWidth)},
             {"artifactHeight", boundedDimension(mon.artifactHeight)},
@@ -467,6 +489,8 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"rounding", boundedDouble(win.rounding, 0.0, MAX_LOGICAL_COORDINATE)},
             {"roundingPower", boundedDouble(win.roundingPower, 1.0, 10.0, 2.0)},
             {"borderSize", boundedDouble(win.borderSize, 0.0, MAX_LOGICAL_COORDINATE)},
+            {"artifactFormat", win.artifactFormat},
+            {"artifactReferenceNits", boundedDouble(win.artifactReferenceNits, 1.0, 10000.0, 80.0)},
             {"artifactPath", boundedString(win.artifactPath, MAX_PATH_BYTES)},
             {"artifactWidth", boundedDimension(win.artifactWidth)},
             {"artifactHeight", boundedDimension(win.artifactHeight)},

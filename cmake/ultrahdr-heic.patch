@@ -1,0 +1,132 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index a6ed814..6a45c95 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -504,6 +504,7 @@ if(NOT JPEG_FOUND)
+   set(JPEG_LIBRARIES ${JPEG_LIB_PREFIX}${JPEG_LIB})
+   if(EMSCRIPTEN)
+     ExternalProject_Add(${JPEGTURBO_TARGET_NAME}
++        UPDATE_DISCONNECTED TRUE
+         GIT_REPOSITORY https://github.com/libjpeg-turbo/libjpeg-turbo.git
+         GIT_TAG 3.1.0
+         PREFIX ${JPEGTURBO_PREFIX_DIR}
+@@ -517,6 +518,7 @@ if(NOT JPEG_FOUND)
+     )
+   else()
+     ExternalProject_Add(${JPEGTURBO_TARGET_NAME}
++        UPDATE_DISCONNECTED TRUE
+         GIT_REPOSITORY https://github.com/libjpeg-turbo/libjpeg-turbo.git
+         GIT_TAG 3.1.0
+         PREFIX ${JPEGTURBO_PREFIX_DIR}
+@@ -689,6 +691,7 @@ if(UHDR_ENABLE_HEIF)
+     endif()
+ 
+     ExternalProject_Add(${LIBHEIF_TARGET_NAME}
++        UPDATE_DISCONNECTED TRUE
+         GIT_REPOSITORY https://github.com/strukturag/libheif.git
+         GIT_TAG 4a3f74bc593ebfc29becc1ed5dd0a61cc66d40e1
+         PATCH_COMMAND ${LIBHEIF_PATCH_CMD}
+diff --git a/lib/include/ultrahdr/heifultrahdr.h b/lib/include/ultrahdr/heifultrahdr.h
+index 73b1a93..a0f44f4 100644
+--- a/lib/include/ultrahdr/heifultrahdr.h
++++ b/lib/include/ultrahdr/heifultrahdr.h
+@@ -161,7 +161,7 @@ class HeifUltraHdr : public UltraHdr {
+   uhdr_error_info_t encodeHeicUltraHdr(uhdr_raw_image_t* sdr_intent, uhdr_raw_image_t* gainmap_img,
+                                 uhdr_gainmap_metadata_ext_t* metadata,
+                                 uhdr_compressed_image_t* dest, int quality, uhdr_mem_block_t* exif,
+-                                DataStruct* baseIcc, DataStruct* alternateIcc);
++                                DataStruct* baseIcc, DataStruct* alternateIcc, uhdr_raw_image_t* alpha_source = nullptr);
+ 
+   uhdr_codec_t mCodec;
+ };
+diff --git a/lib/src/heifultrahdr.cpp b/lib/src/heifultrahdr.cpp
+index b6480c6..c2cb854 100644
+--- a/lib/src/heifultrahdr.cpp
++++ b/lib/src/heifultrahdr.cpp
+@@ -120,7 +120,7 @@ static const std::map<uhdr_color_transfer_t, heif_transfer_characteristics> map_
+     {UHDR_CT_LINEAR, heif_transfer_characteristic_linear},
+     {UHDR_CT_PQ, heif_transfer_characteristic_ITU_R_BT_2100_0_PQ},
+     {UHDR_CT_HLG, heif_transfer_characteristic_ITU_R_BT_2100_0_HLG},
+-    {UHDR_CT_SRGB, heif_transfer_characteristic_ITU_R_BT_709_5},
++    {UHDR_CT_SRGB, heif_transfer_characteristic_IEC_61966_2_1},
+     {UHDR_CT_UNSPECIFIED, heif_transfer_characteristic_unspecified},
+ };
+ 
+@@ -354,14 +354,14 @@ uhdr_error_info_t HeifUltraHdr::encodeHeicUltraHdr(uhdr_raw_image_t* hdr_intent,
+       IccHelper::writeIccProfile(gainmap->ct, gainmap->cg);
+ 
+   return encodeHeicUltraHdr(sdr_intent_yuv, gainmap.get(), &metadata, dest, quality, exif, baseIcc.get(),
+-                     alternateIcc.get());
++                     alternateIcc.get(), sdr_intent);
+ }
+ 
+ uhdr_error_info_t HeifUltraHdr::encodeHeicUltraHdr(uhdr_raw_image_t* sdr_intent, uhdr_raw_image_t* gainmap_img,
+                                      uhdr_gainmap_metadata_ext_t* metadata,
+                                      uhdr_compressed_image_t* dest, int quality,
+                                      uhdr_mem_block_t* exif, DataStruct* baseIcc,
+-                                     DataStruct* alternateIcc) {
++                                     DataStruct* alternateIcc, uhdr_raw_image_t* alpha_source) {
+   uhdr_error_info_t status = g_no_error;
+   heif_encoder* encoder = nullptr;
+   heif_encoding_options* options = nullptr;
+@@ -411,6 +411,24 @@ uhdr_error_info_t HeifUltraHdr::encodeHeicUltraHdr(uhdr_raw_image_t* sdr_intent,
+                                 chromaWd, chromaHt, sdr_intent->stride[UHDR_PLANE_U]));
+   HEIF_ERR_CHECK(fill_img_plane(baseImage, heif_channel_Cr, sdr_intent->planes[UHDR_PLANE_V],
+                                 chromaWd, chromaHt, sdr_intent->stride[UHDR_PLANE_V]));
++  // RGB-to-YCbCr conversion discards alpha; keep the SDR base's straight
++  // alpha as a HEIF auxiliary image, only when transparency is present.
++  if (alpha_source && alpha_source->fmt == UHDR_IMG_FMT_32bppRGBA8888) {
++    bool transparent = false;
++    auto* alpha_pixels = static_cast<const uint8_t*>(alpha_source->planes[0]);
++    for (unsigned y = 0; y < alpha_source->h && !transparent; ++y)
++      for (unsigned x = 0; x < alpha_source->w; ++x)
++        if (alpha_pixels[(y * alpha_source->stride[0] + x) * 4 + 3] != 255) { transparent = true; break; }
++    if (transparent) {
++      HEIF_ERR_CHECK(heif_image_add_plane(baseImage, heif_channel_Alpha,
++                                           sdr_intent->w, sdr_intent->h, 8));
++      int alpha_stride = 0;
++      auto* alpha_plane = heif_image_get_plane(baseImage, heif_channel_Alpha, &alpha_stride);
++      for (unsigned y = 0; y < alpha_source->h; ++y)
++        for (unsigned x = 0; x < alpha_source->w; ++x)
++          alpha_plane[y * alpha_stride + x] = alpha_pixels[(y * alpha_source->stride[0] + x) * 4 + 3];
++    }
++  }
+   if (baseIcc != nullptr) {
+     void* ptr = (uint8_t*)baseIcc->getData() + kICCIdentifierSize;
+     HEIF_ERR_CHECK(heif_image_set_raw_color_profile(baseImage, "prof", ptr,
+@@ -451,7 +469,11 @@ uhdr_error_info_t HeifUltraHdr::encodeHeicUltraHdr(uhdr_raw_image_t* sdr_intent,
+ 
+   // encode the gain map image
+   if (isUsingMultiChannelGainMap()) {
+-    gainmap_yuv_ext = convert_raw_input_to_ycbcr(gainmap_img, true /* use bt601 */);
++    // Gain-map values are not colors. The stored YCbCr matrix is BT.601;
++    // select that matrix explicitly (the boolean means chroma subsampling).
++    auto gainmap_yuv_input = *gainmap_img;
++    gainmap_yuv_input.cg = UHDR_CG_DISPLAY_P3;
++    gainmap_yuv_ext = convert_raw_input_to_ycbcr(&gainmap_yuv_input, false);
+     gainmap_img_yuv = gainmap_yuv_ext.get();
+   }
+   if (isUsingMultiChannelGainMap()) {
+@@ -524,7 +546,7 @@ uhdr_error_info_t HeifUltraHdr::encodeHeicUltraHdr(uhdr_raw_image_t* sdr_intent,
+                                                     options, iso_data.data(), iso_data.size(),
+                                                     hdrNclx, &secondaryHandle));
+ 
+-  heif_context_write(ctx, &w, &writer);
++  HEIF_ERR_CHECK(heif_context_write(ctx, &w, &writer));
+   memcpy(dest->data, writer.data(), writer.size());
+   dest->data_sz = dest->capacity = writer.size();
+ 
+@@ -712,6 +734,13 @@ uhdr_error_info_t HeifUltraHdr::decodeHeicUltraHdr(uhdr_compressed_image_t* uhdr
+   if (output_ct != UHDR_CT_SRGB) {
+     status = applyGainMap(sdr_intent.get(), gainmap.get(), &metadata, output_ct, output_format,
+                           max_display_boost, dest);
++    if (status.error_code == UHDR_CODEC_OK && output_format == UHDR_IMG_FMT_64bppRGBAHalfFloat) {
++      for (unsigned y = 0; y < dest->h; ++y) {
++        auto* src = static_cast<const uint8_t*>(sdr_intent->planes[0]) + y * sdr_intent->stride[0] * 4;
++        auto* dst = static_cast<uint16_t*>(dest->planes[0]) + y * dest->stride[0] * 4;
++        for (unsigned x = 0; x < dest->w; ++x) dst[x * 4 + 3] = floatToHalf(src[x * 4 + 3] / 255.0f);
++      }
++    }
+   } else {
+     status = copy_raw_image(sdr_intent.get(), dest);
+   }

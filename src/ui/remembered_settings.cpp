@@ -39,6 +39,7 @@ void transfer(QSettings& settings, CaptureDefaults& defaults, bool reading) {
     enumeration("recordAudio", defaults.recordAudio, parseRecordAudio);
     const QStringList formats{"mp4", "mov", "webm", "mkv", "gif", "apng", "webp"};
     const QStringList codecs{"auto", "h264", "h265", "av1", "vp9", "ffv1"};
+    // Dynamic range starts from configuration on every capture.
     choice("recordFormat", defaults.recordFormat, formats);
     choice("recordTransparentFormat", defaults.recordTransparentFormat, formats);
     choice("recordCodec", defaults.recordCodec, codecs);
@@ -73,6 +74,7 @@ bool saveSettings(const CaptureDefaults& defaults) {
     QSettings settings(settingsPath(), QSettings::IniFormat);
     // Only dropdown choices persist; discard keys written by older versions.
     settings.remove("mode");
+    settings.remove("screenshotFormat");
     settings.remove("recordAudioSystemGain");
     settings.remove("recordAudioMicGain");
     settings.setValue("version", 1);

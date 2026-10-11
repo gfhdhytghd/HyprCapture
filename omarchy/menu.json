@@ -1,0 +1,12 @@
+{
+  "trigger.capture.screenshot": {
+    "icon": "",
+    "label": "Screenshot",
+    "action": "[ \"$(hyprctl eval 'hl.plugin.hyprcapture.open_editor()')\" = ok ] || omarchy-capture-screenshot"
+  },
+  "trigger.capture.screenrecord": {
+    "icon": "",
+    "label": "Screenrecord",
+    "action": "[ \"$(hyprctl eval 'hl.plugin.hyprcapture.record_toggle()')\" = ok ] || omarchy-capture-screenrecording"
+  }
+}

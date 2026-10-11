@@ -453,6 +453,10 @@ class ResultThumbnailCollection {
         connectSwipeSynchronization();
     }
 
+    void setDragPath(const QString& path) {
+        for (const auto& thumbnail : m_thumbnails) thumbnail->setDragPath(path);
+    }
+
     void show() {
         for (const auto& thumbnail : m_thumbnails)
             thumbnail->show();
@@ -832,6 +836,12 @@ int main(int argc, char** argv) {
         {"window-wheel-scope", "Window wheel selection scope: workspace or under-cursor.", "scope", "workspace"},
         {"fullscreen-preview-rounding", "Fullscreen preview rounding: auto, 0, or logical pixels.", "rounding", "auto"},
         {"save-dir", "Save directory.", "path", "$XDG_PICTURES_DIR/Screenshots"},
+        {"screenshot-format", "Legacy screenshot format: png or heic.", "format", "png"},
+        {"screenshot-mode", "Default screenshot mode: sdr or hdr.", "mode"},
+        {"show-hdr-control", "Show the SDR/HDR segmented control.", "bool", "1"},
+        {"hdr-save-sdr", "Also save SDR PNG alongside HDR HEIC.", "bool", "0"},
+        {"hdr-drag-format", "HDR drag format: heic or sdr.", "format", "heic"},
+        {"hdr-clipboard-format", "HDR clipboard format: heic or sdr.", "format", "heic"},
         {"filename-template", "Filename strftime template with {window_class}/{window_title}.", "template", "Screenshot-%Y-%m-%d-%H%M%S.png"},
         {"notification-title-template", "Screenshot notification title template.", "template", "Screenshot captured"},
         {"notification-body-template", "Screenshot notification body template.", "template", "Saved {filename} ({window_title})"},
@@ -870,6 +880,7 @@ int main(int argc, char** argv) {
         {"session-json-stdin", "Receive a private session filename from the compositor startup socket."},
         {"thumbnail-window", "Show a normal thumbnail window for an image path.", "path"},
         {"thumbnail-target", "Path opened or deleted by a thumbnail preview.", "path"},
+        {"thumbnail-drag-target", "File representation used for dragging.", "path"},
         {"record-countdown-request", "Show an input-transparent recording countdown for a private request file.", "path"},
         {"recording-result", "Handle a completed recording result.", "path"},
         {"recording-pending-socket", "Watch recording finalization state.", "path"},
@@ -959,6 +970,7 @@ int main(int argc, char** argv) {
                                              boundedInt(parser.value("thumbnail-timeout-ms"), 5000, 0, MAX_THUMBNAIL_TIMEOUT_MS),
                                              false,
                                              thumbnailScreens(parser.value("thumbnail-monitor")));
+        thumbnails.setDragPath(parser.value("thumbnail-drag-target"));
         thumbnails.show();
         return app.exec();
     }
@@ -990,6 +1002,19 @@ int main(int argc, char** argv) {
         hyprcapture::parseWindowWheelScope(parser.value("window-wheel-scope").toStdString(), defaults.windowWheelScope);
     defaults.fullscreenPreviewRounding = parser.value("fullscreen-preview-rounding").toStdString();
     defaults.saveDir = parser.value("save-dir").toStdString();
+    defaults.screenshotFormat = parser.value("screenshot-format").toStdString();
+    if (defaults.screenshotFormat != "png" && defaults.screenshotFormat != "heic") parser.showHelp(1);
+    if (parser.isSet("screenshot-mode")) {
+        const auto mode = parser.value("screenshot-mode");
+        if (mode != "sdr" && mode != "hdr") parser.showHelp(1);
+        defaults.screenshotFormat = mode == "hdr" ? "heic" : "png";
+    }
+    defaults.showHdrControl = flagValue(parser, "show-hdr-control", defaults.showHdrControl);
+    defaults.hdrSaveSdr = flagValue(parser, "hdr-save-sdr", defaults.hdrSaveSdr);
+    defaults.hdrDragFormat = parser.value("hdr-drag-format").toStdString();
+    defaults.hdrClipboardFormat = parser.value("hdr-clipboard-format").toStdString();
+    if ((defaults.hdrDragFormat != "heic" && defaults.hdrDragFormat != "sdr") ||
+        (defaults.hdrClipboardFormat != "heic" && defaults.hdrClipboardFormat != "sdr")) parser.showHelp(1);
     defaults.filenameTemplate = parser.value("filename-template").toStdString();
     defaults.notificationTitleTemplate = parser.value("notification-title-template").toStdString();
     defaults.notificationBodyTemplate = parser.value("notification-body-template").toStdString();

@@ -3,6 +3,8 @@
   callPackage,
   fetchurl,
   runCommand,
+  wayland,
+  wayland-protocols,
   pipewire,
   fftw,
   cmake,
@@ -12,6 +14,7 @@
   kdePackages,
   lua,
   libpulseaudio,
+  libheif,
   ffmpeg,
   nlohmann_json,
   opencv,
@@ -20,6 +23,7 @@
   src,
 }:
 let
+  hdrCodec = callPackage ./hdr-codec.nix { };
   aecRuntime = callPackage ./aec-runtime.nix { };
   aecModels = runCommand "hyprcapture-dtln-models" { } ''
     mkdir -p "$out"
@@ -35,12 +39,15 @@ in hyprlandPlugins.mkHyprlandPlugin {
 
   nativeBuildInputs = [
     cmake
+    wayland
     pkg-config
     python3
     kdePackages.wrapQtAppsHook
   ];
 
   buildInputs = [
+    wayland
+    wayland-protocols
     pipewire
     fftw
     ffmpeg
@@ -50,12 +57,14 @@ in hyprlandPlugins.mkHyprlandPlugin {
     kdePackages.qtsvg
     lua
     libpulseaudio
+    hdrCodec
     nlohmann_json
     opencv
   ];
 
   cmakeFlags = [
     "-DBUILD_TESTING=OFF"
+    "-DHYPRCAPTURE_USE_SYSTEM_ULTRAHDR=ON"
     "-DHYPRCAPTURE_AEC_MODEL_DIR=${aecModels}"
     "-DHYPRCAPTURE_TFLITE_LIBRARY=${aecRuntime}/lib/libtensorflowlite_c.so"
     "-DHYPRCAPTURE_DEFAULT_HELPER_PATH=${builtins.placeholder "out"}/bin/hyprcapture-ui"

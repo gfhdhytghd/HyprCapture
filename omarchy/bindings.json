@@ -1,0 +1,19 @@
+[
+  {
+    "key": "PRINT",
+    "lua": "hl.plugin.hyprcapture.open_editor",
+    "description": "Screenshot with HyprCapture",
+    "replaces": ["Screenshot"]
+  },
+  {
+    "key": "SHIFT + PRINT",
+    "lua": "function() hl.plugin.hyprcapture.open(\"fullscreen\") end",
+    "description": "Screenshot full screen with HyprCapture"
+  },
+  {
+    "key": "ALT + PRINT",
+    "lua": "hl.plugin.hyprcapture.record_toggle",
+    "description": "Screen recording with HyprCapture",
+    "replaces": ["Screenrecording"]
+  }
+]

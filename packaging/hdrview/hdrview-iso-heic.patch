@@ -1,0 +1,44 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -3,7 +3,8 @@
+ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/modules" "${CMAKE_SOURCE_DIR}/cmake/")
+ 
+ include(VersionFromGit)
+-version_from_git(LOG ON TIMESTAMP "%Y-%m-%d-%H:%M:%S")
++set(VERSION 3.0.2)
++set(GIT_TAG v3.0.2)
+ 
+ project(
+   hdrview
+@@ -1018,25 +1019,14 @@
+ 
+ # cmake-format: off
+ if(HDRVIEW_ENABLE_LIBUHDR)
+-  CPMAddPackage(
+-    NAME libuhdr
+-    GITHUB_REPOSITORY google/libultrahdr
+-    # VERSION 1.4.0
+-    GIT_TAG 5ed39d67cd31d254e84ebf76b03d4b7bcc12e2f7
+-    OPTIONS "UHDR_BUILD_BENCHMARK OFF"
+-            "UHDR_BUILD_FUZZERS OFF"
+-            "JPEG_FOUND TRUE"
+-            "BUILD_SHARED_LIBS OFF"
+-            "UHDR_BUILD_DEPS ${UHDR_BUILD_DEPS}"
+-            "UHDR_BUILD_EXAMPLES OFF"
+-            "UHDR_BUILD_TESTS OFF"
+-            "UHDR_ENABLE_INSTALL OFF"
+-    SYSTEM YES
+-    EXCLUDE_FROM_ALL YES
+-  )
++  # The private libuhdr includes the HEIC tmap decoder; its libheif symbols are hidden.
++  add_library(uhdr SHARED IMPORTED)
++  set_target_properties(uhdr PROPERTIES
++    IMPORTED_LOCATION "${HDRVIEW_ULTRAHDR_LIBRARY}"
++    INTERFACE_INCLUDE_DIRECTORIES "${HDRVIEW_ULTRAHDR_INCLUDE_DIR}")
++  set(libuhdr_ADDED TRUE)
+   if(libuhdr_ADDED)
+     message(STATUS "Will build uhdr library with UHDR_BUILD_DEPS=${UHDR_BUILD_DEPS}")
+-    disable_target_warnings(uhdr)
+   elseif(TARGET core)
+     message(STATUS "Will link against system-installed uhdr library")
+   else()

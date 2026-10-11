@@ -1,0 +1,43 @@
+--- a/src/wl_window.c
++++ b/src/wl_window.c
+@@ -802,7 +802,8 @@
+ 
+         wp_image_description_creator_params_v1_set_mastering_luminance(creator,
+             (uint32_t)(transferDefaultMinNits(WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ) * WAYLAND_MIN_LUMINANCE_FACTOR),
+-            (uint32_t)(transferDefaultMaxNits(WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ)));
++            (uint32_t)(window->wl.maxLuminance > 0.f ? window->wl.maxLuminance :
++                       transferDefaultMaxNits(WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ)));
+     }
+ 
+     struct wp_image_description_v1* image_description = wp_image_description_creator_params_v1_create(creator);
+@@ -823,6 +824,7 @@
+ void imageDescriptionHandleDone(void *userData, struct wp_image_description_info_v1 *image_description_info)
+ {
+     wp_image_description_info_v1_destroy(image_description_info);
++    updateColorManagedSurface((_GLFWwindow*) userData);
+ }
+ 
+ // TODO: consider using the following callbacks to get information about the displayable color volume of the display such that
+@@ -893,8 +895,6 @@
+     window->wl.sdrWhiteLevel = reference_lum;
+     window->wl.minLuminance = (float)min_lum / WAYLAND_MIN_LUMINANCE_FACTOR;
+     window->wl.maxLuminance = (float)max_lum;
+-
+-    updateColorManagedSurface(window);
+ }
+ 
+ void imageDescriptionHandleTargetPrimaries(void *userData, struct wp_image_description_info_v1 *image_description_info, int32_t r_x, int32_t r_y, int32_t g_x, int32_t g_y, int32_t b_x, int32_t b_y, int32_t w_x, int32_t w_y)
+@@ -903,6 +903,13 @@
+ 
+ void imageDescriptionHandleTargetLuminances(void *userData, struct wp_image_description_info_v1 *image_description_info, uint32_t min_lum, uint32_t max_lum)
+ {
++    // The preferred color volume may be SDR even on an HDR output. Use the
++    // target display's actual ceiling for HDRView's clipping and headroom.
++    _GLFWwindow* window = userData;
++    if (max_lum > 0) {
++        window->wl.minLuminance = (float)min_lum / WAYLAND_MIN_LUMINANCE_FACTOR;
++        window->wl.maxLuminance = (float)max_lum;
++    }
+ }
+ 
+ void imageDescriptionHandleTargetMaxCll(void *userData, struct wp_image_description_info_v1 *image_description_info, uint32_t max_cll)

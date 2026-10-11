@@ -86,6 +86,8 @@ int main() {
     require(CaptureDefaults{}.windowWheelScroll, "window wheel scroll default");
     require(CaptureDefaults{}.windowWheelScope == WindowWheelScope::Workspace, "window wheel scope default");
     require(CaptureDefaults{}.screenshotNotification, "screenshot notification default");
+    require(CaptureDefaults{}.showHdrControl, "HDR control visible by default");
+    require(!CaptureDefaults{}.hdrSaveSdr && CaptureDefaults{}.hdrDragFormat == "heic" && CaptureDefaults{}.hdrClipboardFormat == "heic", "HDR output defaults");
     require(CaptureDefaults{}.notificationBackend == NotificationBackend::Hyprland, "notification backend default");
     require(CaptureDefaults{}.recordWindowBackend == RecordWindowBackend::Auto, "record backend default");
     require(CaptureDefaults{}.fullscreenPreviewRounding == "auto", "fullscreen preview rounding default");
@@ -215,6 +217,10 @@ int main() {
     session.defaults.windowWheelScope = WindowWheelScope::UnderCursor;
     session.defaults.notificationBackend = NotificationBackend::System;
     session.defaults.screenshotNotification = false;
+    session.defaults.showHdrControl = false;
+    session.defaults.hdrSaveSdr = true;
+    session.defaults.hdrDragFormat = "sdr";
+    session.defaults.hdrClipboardFormat = "sdr";
     session.defaults.notificationTitleTemplate = "Captured {mode}";
     session.defaults.notificationBodyTemplate = "Saved {filename}";
     session.defaults.fullscreenPreviewRounding = "27";
@@ -330,6 +336,8 @@ int main() {
     require(!decoded->defaults.windowWheelScroll, "decoded window wheel scroll");
     require(decoded->defaults.windowWheelScope == WindowWheelScope::UnderCursor, "decoded window wheel scope");
     require(decoded->defaults.notificationBackend == NotificationBackend::System, "decoded notification backend");
+    require(!decoded->defaults.showHdrControl, "HDR control visibility roundtrip");
+    require(decoded->defaults.hdrSaveSdr && decoded->defaults.hdrDragFormat == "sdr" && decoded->defaults.hdrClipboardFormat == "sdr", "HDR output policy roundtrip");
     require(!decoded->defaults.screenshotNotification, "decoded screenshot notification");
     require(decoded->defaults.notificationTitleTemplate == "Captured {mode}", "decoded notification title template");
     require(decoded->defaults.notificationBodyTemplate == "Saved {filename}", "decoded notification body template");

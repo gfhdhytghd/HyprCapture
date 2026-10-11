@@ -1,4 +1,5 @@
 #include "plugin/timestamped_rgba.hpp"
+#include "shared/sdr_video.hpp"
 #include <algorithm>
 #include <csignal>
 #include <cstdio>
@@ -10,6 +11,9 @@
 int main(int argc, char** argv) {
     using namespace hyprcapture;
     signal(SIGPIPE, SIG_IGN);
+    if (argc > 1 && std::string(argv[1]) == "--sdr-filter") {
+        std::cout << sdrVideoFilter; return 0;
+    }
     if (argc > 1 && std::string(argv[1]) == "--input-args") {
         for (const auto& s : timestampedRgbaInputArgs()) std::cout << s << '\n';
         return 0;

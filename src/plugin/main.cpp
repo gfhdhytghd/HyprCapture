@@ -157,6 +157,12 @@ void registerConfigValues() {
     addStringConfig("window_wheel_scope", "Window wheel selection scope (workspace or under-cursor)", "workspace");
     addStringConfig("fullscreen_preview_rounding", "Fullscreen preview corner rounding: auto, 0, or logical pixels", "auto");
     addStringConfig("save_dir", "Capture output directory", "$XDG_PICTURES_DIR/Screenshots");
+    addStringConfig("screenshot_mode", "Default screenshot dynamic range: sdr or hdr (empty uses legacy screenshot_format)", "");
+    addBoolConfig("show_hdr_control", "Show the SDR/HDR segmented control", true);
+    addBoolConfig("hdr_save_sdr", "Also save an SDR PNG alongside HDR HEIC", false);
+    addStringConfig("hdr_drag_format", "HDR screenshot drag format: heic or sdr", "heic");
+    addStringConfig("hdr_clipboard_format", "HDR screenshot clipboard format: heic or sdr", "heic");
+    addStringConfig("screenshot_format", "Screenshot format: png (SDR) or heic (HDR, requires libheif/HEVC encoder)", "png");
     addStringConfig("filename_template", "Screenshot filename strftime template with window metadata variables", "Screenshot-%Y-%m-%d-%H%M%S.png");
     addStringConfig("record_save_dir", "Recording output directory", "$XDG_VIDEOS_DIR/Screenrecords");
     addStringConfig("record_filename_template", "Recording filename strftime template", "Recording-%Y-%m-%d-%H%M%S.mp4");
@@ -228,6 +234,15 @@ hyprcapture::CaptureDefaults readDefaults() {
         hyprcapture::parseWindowWheelScope(configString("window_wheel_scope", hyprcapture::toString(defaults.windowWheelScope)), defaults.windowWheelScope);
     defaults.fullscreenPreviewRounding = configString("fullscreen_preview_rounding", defaults.fullscreenPreviewRounding);
     defaults.saveDir = configString("save_dir", defaults.saveDir);
+    defaults.screenshotFormat = configString("screenshot_format", defaults.screenshotFormat);
+    if (defaults.screenshotFormat != "heic") defaults.screenshotFormat = "png";
+    const auto screenshotMode = configString("screenshot_mode", "");
+    if (screenshotMode == "hdr") defaults.screenshotFormat = "heic";
+    else if (screenshotMode == "sdr") defaults.screenshotFormat = "png";
+    defaults.showHdrControl = configBool("show_hdr_control", defaults.showHdrControl);
+    defaults.hdrSaveSdr = configBool("hdr_save_sdr", defaults.hdrSaveSdr);
+    defaults.hdrDragFormat = configString("hdr_drag_format", "heic") == "sdr" ? "sdr" : "heic";
+    defaults.hdrClipboardFormat = configString("hdr_clipboard_format", "heic") == "sdr" ? "sdr" : "heic";
     defaults.filenameTemplate = configString("filename_template", defaults.filenameTemplate);
     defaults.notificationTitleTemplate = configString("notification_title_template", defaults.notificationTitleTemplate);
     defaults.notificationBodyTemplate = configString("notification_body_template", defaults.notificationBodyTemplate);

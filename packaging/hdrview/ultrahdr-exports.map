@@ -1,0 +1,4 @@
+{
+    global: uhdr_*; is_uhdr_image;
+    local: *;
+};
