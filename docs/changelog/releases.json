@@ -4,6 +4,62 @@
   "site_url": "https://gfhdhytghd.github.io/HyprCapture/",
   "releases": [
     {
+      "tag": "v0.4.0-0.56.2",
+      "version": "0.4.0",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T20:40:49Z",
+      "headline": "HDR screenshots with gain-map HEIC, native HDR editing, and Omarchy installation",
+      "sections": [
+        {
+          "title": "HDR screenshots and editing",
+          "items": [
+            "Capture fullscreen, regions, windows and scrolling screenshots on HDR outputs without discarding their linear floating-point pixels; mixed HDR/SDR captures keep the HDR foreground.",
+            "Native color-managed HDR previews in the overlay, in-place editor and thumbnails, with an SDR fallback when the required Wayland protocols or 10-bit buffers are unavailable.",
+            "Save HDR HEIC with an SDR base and an ISO 21496-1 gain map: HDR viewers show extended highlights, other viewers show the SDR base. Transparent backgrounds and annotations stay in the export.",
+            "Switch between SDR and HDR, optionally save an SDR PNG alongside the HEIC, and choose HDR or SDR for clipboard and drag output. The control appears only while a display has HDR output enabled.",
+            "Adjust annotation HDR gain with native HDR color previews; gain is preserved across SDR switches."
+          ]
+        },
+        {
+          "title": "Editor and capture",
+          "items": [
+            "Fusion mode is now the default: drag anywhere to capture a region, click a window to capture it, or click the background to capture the monitor. Set `fusion_mode = false` for the separate modes.",
+            "Notifications now use the desktop notification service by default (`notification_backend = \"system\"`); errors still use the Hyprland overlay.",
+            "Improved text editing, matching hue and HDR-gain slider indicators, and more responsive strokes while HDR previews update.",
+            "Scrolling screenshots keep pointer focus through touchpad motion, and capturing real backgrounds no longer conflicts with Hymission hooks."
+          ]
+        },
+        {
+          "title": "Recording",
+          "items": [
+            "Convert HDR, wide-gamut and ICC-managed captures to SDR before video readback or export, with explicit BT.709 color conversion and range metadata. Recordings remain SDR."
+          ]
+        },
+        {
+          "title": "Installation",
+          "items": [
+            "Install as an Omarchy shell plugin: dependencies and the build are handled in a prompt, bindings and the Screenshot/Screenrecord menu entries are applied at runtime, and the plugin rebuilds after Hyprland or source updates. The echo canceller is set up in the background without delaying capture.",
+            "HDRView packaging with gain-map HEIC decoding and Wayland HDR fixes; gain-map codec dependencies and licenses for CMake, hyprpm and Nix.",
+            "Tests stay available for development but are disabled by default and during hyprpm, Nix and Omarchy installs; enable them with `-DBUILD_TESTING=ON`."
+          ]
+        },
+        {
+          "title": "Security",
+          "items": [
+            "Recordings, screenshots, clipboard copies, thumbnails and helper audio files are created owner-only from the start instead of being restricted after writing.",
+            "Every build-time download is pinned to a checksum: libultrahdr uses the system libjpeg-turbo, libheif and all echo-canceller dependencies come from SHA256-verified archives, and nested dependency downloads are disabled."
+          ]
+        },
+        {
+          "title": "Upgrade notes",
+          "items": [
+            "Update both the compositor plugin and the Qt helper together for the new HDR transport.",
+            "Native HDR preview needs Wayland color-management-v1 parametric PQ support, viewporter and 10-bit shared-memory buffers. Building now requires the system `libjpeg-turbo`, `x265` and `libde265`."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.3.0-0.56.2",
       "version": "0.3.0",
       "hyprland": "0.56.2",
@@ -295,17 +351,5 @@
         }
       ]
     }
-  ],
-  "unreleased": {
-    "since": "v0.3.0-0.56.2",
-    "summary": "Installation and build changes after 0.3.0.",
-    "sections": [
-      {
-        "title": "Build",
-        "items": [
-          "Keep the test suite available for development, but disable it by default and skip automatic tests in hyprpm and Nix builds. Enable tests manually with `-DBUILD_TESTING=ON`."
-        ]
-      }
-    ]
-  }
+  ]
 }
