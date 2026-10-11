@@ -166,7 +166,7 @@ struct HdrBackdrop::Impl {
   }
 #endif
 };
-HdrBackdrop::HdrBackdrop(QWindow *parent) : m(std::make_unique<Impl>()) {
+HdrBackdrop::HdrBackdrop(QWindow *parent, bool aboveParent) : m(std::make_unique<Impl>()) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   if (!parent || !QGuiApplication::platformName().startsWith("wayland"))
     return;
@@ -225,7 +225,8 @@ HdrBackdrop::HdrBackdrop(QWindow *parent) : m(std::make_unique<Impl>()) {
   wl_region_destroy(empty);
   m->subsurface = wl_subcompositor_get_subsurface(m->subcompositor, m->surface,
                                                   parentSurface);
-  wl_subsurface_place_below(m->subsurface, parentSurface);
+  if (aboveParent) wl_subsurface_place_above(m->subsurface, parentSurface);
+  else wl_subsurface_place_below(m->subsurface, parentSurface);
   wl_subsurface_set_desync(m->subsurface);
   m->viewport = wp_viewporter_get_viewport(m->viewporter, m->surface);
   m->colorSurface = wp_color_manager_v1_get_surface(m->manager, m->surface);

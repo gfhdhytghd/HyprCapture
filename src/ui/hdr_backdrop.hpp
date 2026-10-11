@@ -8,7 +8,7 @@ namespace hyprcapture::ui {
 // raster backing store never receives the HDR pixels.
 class HdrBackdrop {
 public:
-  explicit HdrBackdrop(QWindow *parent);
+  explicit HdrBackdrop(QWindow *parent, bool aboveParent = false);
   ~HdrBackdrop();
   bool setImage(const QImage &image, const QRect &destination,
                 float referenceNits);

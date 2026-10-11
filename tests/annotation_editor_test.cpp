@@ -610,6 +610,31 @@ class AnnotationEditorTest final : public QObject {
         QTest::keyClick(reopened, Qt::Key_Escape);
     }
 
+    void hdrGainRampTracksTextColorAndHidesWithPalette() {
+        AnnotationEditor editor;
+        initialize(editor, image());
+        selectTool(editor, 7);
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(20, 30)));
+        auto* button = editor.findChild<QToolButton*>("annotationTextPaletteButton");
+        auto* gain = editor.findChild<QSlider*>("annotationTextHdrGain");
+        auto* color = editor.findChild<QLineEdit*>("annotationTextColor");
+        QVERIFY(button && gain && color);
+        QTest::mouseClick(button, Qt::LeftButton);
+        QVERIFY(gain->isVisible());
+        color->setText("#ff0000");
+        const QImage red = gain->grab().toImage();
+        color->setText("#0000ff");
+        const QImage blue = gain->grab().toImage();
+        QVERIFY(red != blue);
+        gain->setValue(400);
+        QVERIFY(gain->grab().toImage() != blue);
+        if (QGuiApplication::platformName() == "offscreen")
+            QVERIFY(!gain->property("hdrPreviewAvailable").toBool());
+        QTest::mouseClick(button, Qt::LeftButton);
+        QVERIFY(!gain->isVisible());
+    }
+
     void hdrTextGainPreservesSdrAndUndo() {
         AnnotationEditor editor;
         const QImage source = image();
