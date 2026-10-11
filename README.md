@@ -24,6 +24,7 @@ The screenshot annotation interface is inspired by [Omarchy Screenshot](https://
 - Fullscreen, region, and window capture modes
 - Fullscreen, region, and window recording as video or fixed-duration GIF/APNG/WebP animations
 - Immediate frozen desktop image behind the overlay
+- [HDR support](#hdr-support): native HDR overlay and editing, SDR-compatible gain-map HEIC screenshots, and HDR-to-SDR conversion for recording
 - Display-resolution output for fullscreen and region captures
 - Compositor-side window artifacts, including windows that are occluded or partly off-screen
 - Window output backgrounds: follow system, white, black, real background, or transparent
@@ -208,7 +209,9 @@ hl.config({
 })
 ```
 
-### HDR screenshots and SDR recording
+### HDR support
+
+HyprCapture supports HDR screenshots with native HDR preview and editing. Choose SDR PNG or HDR HEIC from the **SDR / HDR** segmented control. HDR HEIC includes an SDR base image and an ISO 21496-1 gain map, so compatible HDR viewers retain the highlights and wide-gamut colors while ordinary viewers display the SDR base. Recording converts HDR desktop content to SDR.
 
 On a color-managed HDR output, screenshots retain the compositor's half-float linear sRGB/scRGB pixels (1.0 = 80 cd/m²) until export. The overlay and in-place editor present the frozen HDR image through a separate Wayland color-managed 10-bit BT.2020/PQ surface beneath the transparent Qt controls. Its actual captured peak is advertised so the compositor does not tone-map the display-referred pixels a second time. Thumbnails and SDR PNG output use an sRGB rendition normalized to the output's SDR reference white, with a smooth highlight shoulder and gamut compression. SDR monitor captures stay on the sRGB path.
 
@@ -223,6 +226,8 @@ hl.config({
 The control is enabled whenever any connected display supports HDR, including when the current capture is on an SDR display. Without an HDR display or encoder, capture falls back to SDR. Set `screenshot_mode = "sdr"` or `"hdr"` for the default, and `show_hdr_control = false` to hide the control while retaining that default. The mode starts from configuration on each capture, independently of `remember_settings`. The helper also accepts `--screenshot-mode hdr --show-hdr-control 0`. HEIC output uses a normal sRGB SDR primary image with an ICC profile and matching NCLX, plus a full-resolution RGB ISO 21496-1 gain map (`tmap`). Viewers that ignore gain maps display the SDR image; gain-map-aware HDR viewers can reconstruct HDR brightness and BT.2020/P3 colors. Straight alpha is retained as a HEIF auxiliary image when needed. Its suffix becomes `.heic`; the clipboard defaults to HEIC (`image/heic`). Set `hdr_clipboard_format = "sdr"` to copy SDR PNG instead. `hdr_drag_format = "heic"` (default) or `"sdr"` selects the file dragged from the thumbnail, independently of the file opened by clicking it. `hdr_save_sdr = true` saves both the HEIC and a same-name SDR PNG; its default is `false`. SDR transport copies are private temporary PNGs when simultaneous saving is disabled. These options only affect HDR screenshots; SDR screenshots continue to use PNG. The SDR base uses exactly the screenshot's PNG conversion, including each monitor's reference white and annotations. Screenshots spanning HDR and SDR monitors combine the HDR pixels with the SDR monitor images promoted to a 203 cd/m² diffuse white. Builds without the gain-map encoder still capture and export SDR PNG; unavailable HDR pixels/encoders produce an error rather than an SDR file mislabeled as HDR. The compositor plugin and helper must both support the float transport.
 
 HDR export currently covers region, fullscreen and window screenshots on outputs with a linear HDR work buffer. Scrolling screenshots remain SDR. Native HDR preview requires Wayland color-management-v1 parametric PQ support, viewporter, 10-bit shared-memory buffers, and Qt GUI private development headers plus wayland-client, wayland-protocols and wayland-scanner at build time. Unsupported environments explicitly fall back to an SDR preview. HDR presentation in external applications requires ISO HEIF gain-map support as well as HDR display output. General HDR/PQ support alone is insufficient. Ordinary viewers still get the SDR base instead of uninterpreted PQ values.
+
+For Arch Linux, the repository includes an [HDRView PKGBUILD](packaging/hdrview/README.md) with ISO HEIC gain-map decoding and Wayland HDR display fixes for viewing these screenshots.
 
 Video output stays SDR. Captures touching HDR, wide-gamut or ICC-managed outputs use the compositor backend, including when `record_window_backend` requests the external recorder. Capture first renders in Hyprland's actual monitor work space, retaining a floating-point buffer on HDR outputs. An explicit GPU resolve converts that buffer to SDR sRGB before RGBA readback or GPU export, normalizing to the output's SDR white and preserving its black level. Merely tagging the framebuffer as sRGB is insufficient on Hyprland 0.56. Encoders use an explicit BT.709 YCbCr matrix and limited range, tagged with sRGB transfer/BT.709 primaries; RGB-preserving and animation formats keep their appropriate RGB path. No HDR recording option is introduced.
 
