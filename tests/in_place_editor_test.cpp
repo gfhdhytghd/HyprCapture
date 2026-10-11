@@ -663,6 +663,7 @@ class InPlaceEditorTest final : public QObject {
         defaults.mode = hyprcapture::CaptureMode::Window;
         defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
         const QRect thumbnail(12, 80, 90, 66);
+        defaults.fushionMode = false; // Exercise the independent window outline.
         auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, true, QSize(800,600),
             QRect(1100,300,300,220), thumbnail).toStdString());
         QVERIFY(session.has_value());
@@ -887,6 +888,7 @@ class InPlaceEditorTest final : public QObject {
     void missingWindowDoesNotBeginEditingOrOutput() {
         hyprcapture::CaptureDefaults defaults;
         defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.fushionMode = false; // Fusion intentionally falls back to a monitor click.
         defaults.inPlaceEditToolbar = true;
         const QString json = sessionJson(defaults, false);
         QVERIFY(!json.isEmpty());
