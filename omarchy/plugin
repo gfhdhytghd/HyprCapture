@@ -278,6 +278,7 @@ setup() (
     cmake --build "$CACHE/build" --target "${TARGETS[@]}"
     stage=$(mktemp -d "$CACHE/.stage.XXXXXX")
     for file in "${FILES[@]}"; do install -Dm755 "$CACHE/build/$file" "$stage/$file"; done
+    if declare -F stage_extras >/dev/null; then stage_extras "$stage"; fi
     [[ ! -e $out ]] || rm -rf -- "$out"
     mv -- "$stage" "$out"
     stage=""
@@ -294,6 +295,7 @@ setup() (
     rm -rf -- "$keep"
   done
   echo "$NAME is built for Hyprland ${running:0:12}."
+  if declare -F setup_extras >/dev/null; then setup_extras "$out"; fi
 )
 
 case ${1:-} in

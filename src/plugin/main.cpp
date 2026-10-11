@@ -149,7 +149,7 @@ void registerConfigValues() {
     addBoolConfig("remember_settings", "Restore the previous interactive capture settings", false);
     addBoolConfig("allow_quick", "Enable no-confirmation quick capture calls", false);
     addBoolConfig("confirm_before_capture", "Require explicit confirmation after target selection for normal open captures", false);
-    addBoolConfig("fusion_mode", "Fuse region and window interactions in one overlay", false);
+    addBoolConfig("fusion_mode", "Fuse region and window interactions in one overlay", true);
     addBoolConfig("fushion_mode", "Legacy alias for fusion_mode", false);
     addBoolConfig("capture_fullscreen_clients_as_monitor", "Capture a fullscreen client as its whole monitor in window and fusion modes", false);
     addBoolConfig("dynamic_window_metadata", "Use capture-aware window metadata in screenshot filename templates", true);
@@ -225,7 +225,7 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.rememberSettings = configBool("remember_settings", defaults.rememberSettings);
     defaults.allowQuick = configBool("allow_quick", defaults.allowQuick);
     defaults.confirmBeforeCapture = configBool("confirm_before_capture", defaults.confirmBeforeCapture);
-    defaults.fushionMode = configBool("fusion_mode", defaults.fushionMode) || configBool("fushion_mode", defaults.fushionMode);
+    defaults.fushionMode = configBool("fusion_mode", defaults.fushionMode) || configBool("fushion_mode", false);
     defaults.captureFullscreenClientsAsMonitor =
         configBool("capture_fullscreen_clients_as_monitor", defaults.captureFullscreenClientsAsMonitor);
     defaults.dynamicWindowMetadata = configBool("dynamic_window_metadata", defaults.dynamicWindowMetadata);

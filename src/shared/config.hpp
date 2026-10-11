@@ -36,7 +36,7 @@ struct CaptureDefaults {
     bool             rememberSettings = false;
     bool             allowQuick = false;
     bool             confirmBeforeCapture = false;
-    bool             fushionMode = false;
+    bool             fushionMode = true;
     bool             captureFullscreenClientsAsMonitor = false;
     bool             dynamicWindowMetadata = true;
     bool             windowWheelScroll = true;

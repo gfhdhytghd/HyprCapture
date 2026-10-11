@@ -491,7 +491,7 @@ hl.config({
             remember_settings = false,
             allow_quick = false,
             confirm_before_capture = false,
-            fusion_mode = false,
+            fusion_mode = true,
             capture_fullscreen_clients_as_monitor = false,
             dynamic_window_metadata = true,
             window_wheel_scroll = true,
@@ -564,7 +564,7 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 | `remember_settings` | bool | `false` | Restore only dropdown choices: fullscreen scope, window background, recording format/codec/FPS/duration/backend and sound mode/devices/mix preset. Capture mode and volume sliders are not saved or restored. Saves on capture or cancel (including Esc) to `$XDG_CONFIG_HOME/hyprcapture/last-settings.ini` (default `~/.config/hyprcapture/last-settings.ini`). Quick capture and the stop-recording UI bypass this state. The open/record dispatcher still determines screenshot versus recording. Saved choices override configured defaults while enabled; disabling this option uses the configured defaults again. |
 | `allow_quick` | bool | `false` | Enable no-confirmation `hl.plugin.hyprcapture.quick()` calls. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |
 | `confirm_before_capture` | bool | `false` | For `hl.plugin.hyprcapture.open()`, require an explicit confirmation after choosing a fullscreen, region, or window target. Region targets can be moved or resized; window targets can be switched before confirming. `quick()` and direct `record()` calls keep their existing no-extra-confirmation behavior. |
-| `fusion_mode` | bool | `false` | Fuse region and window interactions in one overlay: drag anywhere, including from the desktop background, to capture a region; single-click a window to capture that window; or single-click the background to capture the clicked monitor. The toolbar keeps the fullscreen action and configuration controls; fullscreen multi-monitor scope is shown only when multiple monitors are present. |
+| `fusion_mode` | bool | `true` | Fuse region and window interactions in one overlay: drag anywhere, including from the desktop background, to capture a region; single-click a window to capture that window; or single-click the background to capture the clicked monitor. The toolbar keeps the fullscreen action and configuration controls; fullscreen multi-monitor scope is shown only when multiple monitors are present. |
 | `fushion_mode` | bool | `false` | Legacy compatibility alias for `fusion_mode`. New configs should use `fusion_mode`. |
 | `capture_fullscreen_clients_as_monitor` | bool | `false` | In window and fusion modes, capture the fullscreen client's entire monitor instead of the isolated client. Disabled by default for compatibility. |
 | `dynamic_window_metadata` | bool | `true` | Resolve `{window_class}` and `{window_title}` from the final screenshot mode. Region captures use `region`; window captures use the selected window; fullscreen captures use the only window in the captured workspace scope, or `fullscreen` when there are zero or multiple windows. Set to `false` to restore the focused-window fallback. |

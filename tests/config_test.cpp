@@ -43,6 +43,7 @@ void eraseDefaultsJsonField(std::string& json, const std::string& key) {
 } // namespace
 
 int main() {
+    require(hyprcapture::CaptureDefaults{}.fushionMode, "fusion mode enabled by default");
     using namespace hyprcapture;
 
     {
