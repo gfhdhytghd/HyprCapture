@@ -751,26 +751,34 @@ class AnnotationCanvas final : public QWidget {
         return output;
     }
 
-    QImage resultOn(const QImage& hdrBase, bool preview = false) const {
-        if (!hyprcapture::ui::isHdrImage(hdrBase) || hdrBase.size() != base.size()) return {};
-        QImage output = hdrBase.convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
-        if (output.isNull()) return {};
-        QImage layer(base.size(), QImage::Format_ARGB32_Premultiplied);
-        if (layer.isNull()) return {};
-        QPainter painter(&output);
-        const auto draw = [&](const Annotation& annotation) {
-            layer.fill(Qt::transparent);
-            {
-                QPainter layerPainter(&layer);
-                drawMappedAnnotation(layerPainter, base, annotation, scrollLayout, false);
-            }
-            const float gain = !hdrEnabled || annotation.tool == Tool::Mosaic ? 1.0F : static_cast<float>(annotation.hdrGain);
-            painter.drawImage(QPoint(0, 0), hyprcapture::ui::sdrToHdr(layer, 203.0F * gain));
+    std::function<QImage()> rendererOn(const QImage& hdrBase, bool preview) const {
+        // Capture COW images and annotation values; workers never access widgets.
+        return [base = base, hdrBase, annotations = m_annotations, draft = m_draft,
+                editingTextIndex = m_editingTextIndex, scrollLayout = scrollLayout,
+                hdrEnabled = hdrEnabled, preview]() -> QImage {
+            if (!hyprcapture::ui::isHdrImage(hdrBase) || hdrBase.size() != base.size()) return {};
+            QImage output = hdrBase.convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
+            if (output.isNull()) return {};
+            QImage layer(base.size(), QImage::Format_ARGB32_Premultiplied);
+            if (layer.isNull()) return {};
+            QPainter painter(&output);
+            const auto draw = [&](const Annotation& annotation) {
+                layer.fill(Qt::transparent);
+                {
+                    QPainter layerPainter(&layer);
+                    drawMappedAnnotation(layerPainter, base, annotation, scrollLayout, false);
+                }
+                const float gain = !hdrEnabled || annotation.tool == Tool::Mosaic ? 1.0F : static_cast<float>(annotation.hdrGain);
+                painter.drawImage(QPoint(0, 0), hyprcapture::ui::sdrToHdr(layer, 203.0F * gain));
+            };
+            for (int i = 0; i < static_cast<int>(annotations.size()); ++i)
+                if (!preview || i != editingTextIndex) draw(annotations[i]);
+            if (preview && draft) draw(*draft);
+            return output;
         };
-        for (int i = 0; i < static_cast<int>(m_annotations.size()); ++i)
-            if (!preview || i != m_editingTextIndex) draw(m_annotations[i]);
-        if (preview && m_draft) draw(*m_draft);
-        return output;
+    }
+    QImage resultOn(const QImage& hdrBase, bool preview = false) const {
+        return rendererOn(hdrBase, preview)();
     }
 
     QRect displayRect() const { return imageTransform().mapRect(QRectF(base.rect())).toAlignedRect(); }
@@ -2418,6 +2426,7 @@ void AnnotationEditor::setExternalImagePresentation(bool enabled, bool includesA
     canvas->QWidget::update();
 }
 QImage AnnotationEditor::previewImageOn(const QImage& hdrBase) const { return m_impl->canvas->resultOn(hdrBase, true); }
+std::function<QImage()> AnnotationEditor::previewRendererOn(const QImage& hdrBase) const { return m_impl->canvas->rendererOn(hdrBase, true); }
 void AnnotationEditor::setHdrEnabled(bool enabled) {
     if (m_impl->canvas->hdrEnabled == enabled) return;
     m_impl->canvas->hdrEnabled = enabled;

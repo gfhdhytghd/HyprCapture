@@ -106,6 +106,7 @@ struct HdrBackdrop::Impl {
   bool pq = false, bt2020 = false, parametric = false, luminances = false,
        rgb30 = false, perceptual = false;
   bool descriptionReady = false, visible = false;
+  uint32_t describedPeak = 0, describedReference = 0;
   QRect destination;
   QRect clippedDestination;
   QSize imageSize;
@@ -249,30 +250,45 @@ bool HdrBackdrop::setImage(const QImage &image, const QRect &destination,
   auto pq = hdrToPq10(image, &peak, referenceNits);
   if (pq.isNull())
     return false;
-  auto *creator = wp_color_manager_v1_create_parametric_creator(m->manager);
-  wp_image_description_creator_params_v1_set_primaries_named(
-      creator, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
-  wp_image_description_creator_params_v1_set_tf_named(
-      creator, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
-  // Pixels are already display-referred: describe their actual peak, not
-  // PQ's 10000-nit coding range, to avoid a second compositor tone map.
+  return setPqImage(pq, destination, peak, referenceNits);
+#else
+  return false;
+#endif
+}
+bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
+                             float peak, float referenceNits) {
+#ifdef HYPRCAPTURE_HDR_WAYLAND
+  if (!m->surface || pq.isNull() || pq.format() != QImage::Format_RGB30 || !destination.isValid()) return false;
   const auto reference = uint32_t(std::clamp(referenceNits, 1.0F, 10000.0F));
-  wp_image_description_creator_params_v1_set_luminances(
-      creator, 0, std::max(reference, uint32_t(std::ceil(peak))), reference);
-  if (m->description)
-    wp_image_description_v1_destroy(m->description);
-  m->description = wp_image_description_creator_params_v1_create(creator);
-  m->descriptionReady = false;
-  static const wp_image_description_v1_listener listener{
-      [](void *d, wp_image_description_v1 *, uint32_t, const char *) {
-        static_cast<Impl *>(d)->descriptionReady = false;
-      },
-      [](void *d, wp_image_description_v1 *, uint32_t) {
-        static_cast<Impl *>(d)->descriptionReady = true;
-      }};
-  wp_image_description_v1_add_listener(m->description, &listener, m.get());
-  if (!m->roundtrip() || !m->descriptionReady)
-    return false;
+  // Reuse the description when its luminance envelope still covers the frame.
+  const auto envelope = std::max(reference, uint32_t(std::ceil(std::max(peak, 203.0F) / 203.0F)) * 203U);
+  if (!m->descriptionReady || m->describedReference != reference || m->describedPeak < envelope) {
+    auto *creator = wp_color_manager_v1_create_parametric_creator(m->manager);
+    wp_image_description_creator_params_v1_set_primaries_named(
+        creator, WP_COLOR_MANAGER_V1_PRIMARIES_BT2020);
+    wp_image_description_creator_params_v1_set_tf_named(
+        creator, WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
+    // Pixels are already display-referred: describe their actual peak, not
+    // PQ's 10000-nit coding range, to avoid a second compositor tone map.
+    wp_image_description_creator_params_v1_set_luminances(
+        creator, 0, envelope, reference);
+    if (m->description)
+      wp_image_description_v1_destroy(m->description);
+    m->description = wp_image_description_creator_params_v1_create(creator);
+    m->descriptionReady = false;
+    static const wp_image_description_v1_listener listener{
+        [](void *d, wp_image_description_v1 *, uint32_t, const char *) {
+          static_cast<Impl *>(d)->descriptionReady = false;
+        },
+        [](void *d, wp_image_description_v1 *, uint32_t) {
+          static_cast<Impl *>(d)->descriptionReady = true;
+        }};
+    wp_image_description_v1_add_listener(m->description, &listener, m.get());
+    if (!m->roundtrip() || !m->descriptionReady)
+      return false;
+    m->describedPeak = envelope;
+    m->describedReference = reference;
+  }
   int fd = memfd_create("hyprcapture-hdr-preview", MFD_CLOEXEC);
   if (fd < 0)
     return false;

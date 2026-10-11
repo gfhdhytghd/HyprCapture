@@ -4,6 +4,7 @@
 #include <QRect>
 #include <QWidget>
 #include <memory>
+#include <functional>
 #include "ui/scroll_stitcher.hpp"
 
 struct AnnotationSnapshot;
@@ -22,6 +23,7 @@ class AnnotationEditor final : public QWidget {
     QImage resultImage() const;
     QImage resultImageOn(const QImage& hdrBase) const;
     QImage previewImageOn(const QImage& hdrBase) const;
+    std::function<QImage()> previewRendererOn(const QImage& hdrBase) const;
     void setHdrEnabled(bool enabled);
     bool hdrEnabled() const;
     void setRegionResizeBounds(const QRect& bounds);

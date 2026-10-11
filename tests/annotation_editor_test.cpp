@@ -27,6 +27,7 @@
 #include <QToolButton>
 #include <QTest>
 #include <QWheelEvent>
+#include <future>
 
 namespace {
 QImage image(QSize size = QSize(240, 160), QColor color = Qt::transparent) {
@@ -629,12 +630,17 @@ class AnnotationEditorTest final : public QObject {
         QVERIFY(editor.previewImageOn(hdr) != editor.resultImageOn(hdr));
         QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(90,70)));
         const QImage fullHdr = editor.resultImageOn(hdr);
+        auto renderSnapshot = editor.previewRendererOn(hdr);
+        const QImage snapshot = renderSnapshot();
         const QImage sdr = editor.resultImage();
         editor.setHdrEnabled(false);
         QVERIFY(gain->isHidden());
         QCOMPARE(gain->value(), 400);
         QCOMPARE(editor.resultImage(), sdr);
         QVERIFY(editor.resultImageOn(hdr) != fullHdr);
+        // A worker renders captured values even after the live editor changes mode.
+        auto worker = std::async(std::launch::async, renderSnapshot);
+        QCOMPARE(worker.get(), snapshot);
         editor.setHdrEnabled(true);
         QCOMPARE(editor.resultImageOn(hdr), fullHdr);
         editor.undo();

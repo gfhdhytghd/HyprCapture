@@ -73,6 +73,8 @@
 #include <QTemporaryDir>
 #include <QVBoxLayout>
 #include <QTimer>
+#include <QThreadPool>
+#include <QRunnable>
 #include <QTransform>
 #include <QWheelEvent>
 
@@ -3068,15 +3070,43 @@ void CaptureOverlay::updateHdrEditBackdrop() {
         return;
     }
     if(!m_hdrEditBackdrop) m_hdrEditBackdrop=std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle());
-    if(m_hdrEditCacheKey!=m_editHdrBase.cacheKey()) {
-        float reference=203;
-        for(const auto& artifact:m_monitorArtifacts) if(!artifact.hdrImage.isNull()) {reference=artifact.referenceNits;break;}
-        if(!m_hdrEditBackdrop->setImage(m_editor->previewImageOn(m_editHdrBase),m_editor->canvasGeometry(),reference)) {
-            m_hdrEditBackdrop->setVisible(false);
-            m_editor->setExternalImagePresentation(false);
-            return;
+    if (m_hdrEditPreviewDirty || m_hdrEditCacheKey != m_editHdrBase.cacheKey()) {
+        if (m_hdrEditPreviewBusy) return;
+        m_hdrEditPreviewDirty = false;
+        m_hdrEditPreviewBusy = true;
+        const qint64 baseKey = m_editHdrBase.cacheKey();
+        auto render = m_editor->previewRendererOn(m_editHdrBase);
+        float reference = 203;
+        for (const auto& artifact : m_monitorArtifacts)
+            if (!artifact.hdrImage.isNull()) { reference = artifact.referenceNits; break; }
+        if (!m_hdrEditPreviewPool) {
+            m_hdrEditPreviewPool = new QThreadPool(this);
+            m_hdrEditPreviewPool->setMaxThreadCount(1);
         }
-        m_hdrEditCacheKey=m_editHdrBase.cacheKey();
+        QPointer<CaptureOverlay> overlay(this);
+        m_hdrEditPreviewPool->start(QRunnable::create([overlay, render = std::move(render), baseKey, reference] {
+            float peak = 0;
+            const QImage pq = hyprcapture::ui::hdrToPq10(render(), &peak, reference);
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [overlay, pq, peak, baseKey, reference] {
+                if (!overlay) return;
+                auto* self = overlay.data();
+                self->m_hdrEditPreviewBusy = false;
+                if (!self->m_editing || !self->m_editor || self->m_defaults.screenshotFormat != "heic" ||
+                    self->m_editHdrBase.cacheKey() != baseKey || self->m_scrolling || self->m_scrollResult) {
+                    self->updateHdrEditBackdrop();
+                    return;
+                }
+                if (self->m_hdrEditBackdrop->setPqImage(pq, self->m_editor->canvasGeometry(), peak, reference)) {
+                    self->m_hdrEditCacheKey = baseKey;
+                    self->m_hdrEditBackdrop->setVisible(self->m_overlayActive);
+                    self->m_editor->setExternalImagePresentation(true, true);
+                } else {
+                    self->m_hdrEditBackdrop->setVisible(false);
+                    self->m_editor->setExternalImagePresentation(false);
+                }
+                if (self->m_hdrEditPreviewDirty) self->updateHdrEditBackdrop();
+            }, Qt::QueuedConnection);
+        }));
     }
     m_hdrEditBackdrop->setGeometry(m_editor->canvasGeometry());
     m_hdrEditBackdrop->setVisible(m_overlayActive);
@@ -4782,7 +4812,8 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
         m_editor = new AnnotationEditor(this);
         m_editor->setObjectName("inPlaceEditor");
         connect(m_editor, &AnnotationEditor::previewChanged, this, [this] {
-            m_hdrEditCacheKey = 0;
+            m_hdrEditPreviewDirty = true;
+            // Painting/input only capture a snapshot; conversion runs off-thread.
             updateHdrEditBackdrop();
         });
         connect(m_editor,&AnnotationEditor::imageDisplayGeometryChanged,this,&CaptureOverlay::updateHdrEditBackdrop);

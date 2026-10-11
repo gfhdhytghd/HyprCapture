@@ -31,6 +31,7 @@ class InlineSelect;
 class AudioMeter;
 class QSlider;
 class QProcess;
+class QThreadPool;
 class AnnotationEditor;
 
 namespace hyprcapture::ui {
@@ -123,6 +124,9 @@ class CaptureOverlay final : public QMainWindow {
     bool m_hdrBackdropsAttempted = false;
     std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrEditBackdrop;
     qint64 m_hdrEditCacheKey = 0;
+    QThreadPool* m_hdrEditPreviewPool = nullptr;
+    bool m_hdrEditPreviewBusy = false;
+    bool m_hdrEditPreviewDirty = false;
     void buildToolbar();
     void ensureRecordControls();
     void initializeOverlay(const QRect& overlayGeometry);
