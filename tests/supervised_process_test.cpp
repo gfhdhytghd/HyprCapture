@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -56,6 +57,16 @@ void checkGroupStop(const std::vector<std::string>& args, int signal, int expect
 }
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::string(argv[1]) == "--private-output-child") {
+        const int fd = open(argv[2], O_WRONLY | O_CREAT | O_EXCL, 0666);
+        require(fd >= 0, "create growing recording");
+        require(write(fd, "frame", 5) == 5, "write growing recording");
+        require(write(STDOUT_FILENO, "ready", 5) == 5, "output readiness");
+        char done;
+        require(read(STDIN_FILENO, &done, 1) == 1, "wait for live permission check");
+        close(fd);
+        return 0;
+    }
     if (argc == 4 && std::string(argv[1]) == "--signal-child") {
         const int signal = std::atoi(argv[2]);
         signalExit = std::atoi(argv[3]);
@@ -76,6 +87,41 @@ int main(int argc, char** argv) {
     const auto length = readlink("/proc/self/exe", executable, sizeof(executable));
     require(length > 0 && length < static_cast<ssize_t>(sizeof(executable)), "test executable path");
     const std::string self(executable, length);
+    // Observe permissions while the encoder is still writing, in a directory
+    // other accounts can traverse, rather than checking a final chmod.
+    char directory[] = "/tmp/hyprcapture-private-output-XXXXXX";
+    require(mkdtemp(directory) != nullptr, "output directory");
+    require(chmod(directory, 0755) == 0, "traversable output directory");
+    for (const mode_t parentMask : {mode_t(0022), mode_t(0000)}) {
+        const auto originalMask = umask(parentMask);
+        for (const bool grouped : {false, true}) {
+            const auto path = std::string(directory) + "/recording";
+            int ready[2], stop[2];
+            require(pipe2(ready, O_CLOEXEC) == 0 && pipe2(stop, O_CLOEXEC) == 0, "output check pipes");
+            posix_spawn_file_actions_t actions;
+            require(posix_spawn_file_actions_init(&actions) == 0, "output actions");
+            posix_spawn_file_actions_adddup2(&actions, ready[1], STDOUT_FILENO);
+            posix_spawn_file_actions_adddup2(&actions, stop[0], STDIN_FILENO);
+            auto process = hyprcapture::spawnSupervisedProcess(shell, {self, "--private-output-child", path}, environ, actions, grouped);
+            posix_spawn_file_actions_destroy(&actions);
+            close(ready[1]);
+            close(stop[0]);
+            require(process.spawnError == 0, "spawn output writer");
+            char readiness[5];
+            require(read(ready[0], readiness, sizeof(readiness)) == 5, "output writer ready");
+            struct stat st{};
+            require(stat(path.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600 && st.st_size == 5,
+                    "growing output must already be owner only");
+            require(umask(parentMask) == parentMask, "parent umask unchanged");
+            require(write(stop[1], "x", 1) == 1, "release output writer");
+            close(ready[0]);
+            close(stop[1]);
+            require(hyprcapture::waitSupervisedProcess(process) == 0, "output writer finished");
+            require(unlink(path.c_str()) == 0, "remove test output");
+        }
+        umask(originalMask);
+    }
+    require(rmdir(directory) == 0, "remove output directory");
     // Reproduce the exact compositor policy and prove ordinary waitpid loses
     // even a successful exit before exercising the replacement.
     struct sigaction original{}, action{};
