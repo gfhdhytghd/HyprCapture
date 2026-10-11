@@ -216,7 +216,7 @@ class InPlaceEditorTest final : public QObject {
                     auto* hdr = overlay.findChild<QPushButton*>("screenshotHdr");
                     QVERIFY(control && sdr && hdr);
                     QCOMPARE(sdr->text(),QString("SDR")); QCOMPARE(hdr->text(),QString("HDR"));
-                    QCOMPARE(control->isVisible(),visible);
+                    QCOMPARE(control->isVisible(),visible && hasHdrScreen);
                     const bool available = hasHdrScreen && hyprcapture::ui::hdrHeicAvailable();
                     QCOMPARE(control->isEnabled(),available);
                     QCOMPARE(hdr->isChecked(),available && defaultHdr);

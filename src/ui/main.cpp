@@ -821,7 +821,7 @@ int main(int argc, char** argv) {
         {"window-background", "Window background.", "background", "follow-system"},
         {"window-border", "Window border policy.", "policy", "keep"},
         {"window-shadow", "Window shadow policy.", "policy", "keep"},
-        {"notification-backend", "Notification backend: hyprland or system.", "backend", "hyprland"},
+        {"notification-backend", "Notification backend: hyprland or system.", "backend", "system"},
         {"save", "Save output.", "0|1", "1"},
         {"clipboard", "Copy output.", "0|1", "1"},
         {"thumbnail", "Show thumbnail.", "0|1", "1"},

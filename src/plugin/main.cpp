@@ -137,7 +137,7 @@ void registerConfigValues() {
     addStringConfig("window_background", "Window capture background mode", "follow-system");
     addStringConfig("window_border", "Window capture border policy", "keep");
     addStringConfig("window_shadow", "Window capture shadow policy", "keep");
-    addStringConfig("notification_backend", "Backend for non-error notifications (hyprland or system)", "hyprland");
+    addStringConfig("notification_backend", "Backend for non-error notifications (hyprland or system)", "system");
     addBoolConfig("screenshot_notification", "Show a notification after a successful screenshot", true);
     addStringConfig("notification_title_template", "Screenshot notification title template", "Screenshot captured");
     addStringConfig("notification_body_template", "Screenshot notification body template", "Saved {filename} ({window_title})");

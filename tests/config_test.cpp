@@ -89,7 +89,7 @@ int main() {
     require(CaptureDefaults{}.screenshotNotification, "screenshot notification default");
     require(CaptureDefaults{}.showHdrControl, "HDR control visible by default");
     require(!CaptureDefaults{}.hdrSaveSdr && CaptureDefaults{}.hdrDragFormat == "heic" && CaptureDefaults{}.hdrClipboardFormat == "heic", "HDR output defaults");
-    require(CaptureDefaults{}.notificationBackend == NotificationBackend::Hyprland, "notification backend default");
+    require(CaptureDefaults{}.notificationBackend == NotificationBackend::System, "notification backend default");
     require(CaptureDefaults{}.recordWindowBackend == RecordWindowBackend::Auto, "record backend default");
     require(CaptureDefaults{}.fullscreenPreviewRounding == "auto", "fullscreen preview rounding default");
 
@@ -426,8 +426,8 @@ int main() {
     eraseDefaultsJsonField(legacyNotificationBackendJson, "notificationBackend");
     const auto legacyNotificationBackendDecoded = decodeSessionJson(legacyNotificationBackendJson);
     require(legacyNotificationBackendDecoded.has_value(), "session without notification backend decodes");
-    require(legacyNotificationBackendDecoded->defaults.notificationBackend == NotificationBackend::Hyprland,
-            "missing notification backend keeps hyprland default");
+    require(legacyNotificationBackendDecoded->defaults.notificationBackend == NotificationBackend::System,
+            "missing notification backend keeps system default");
 
     auto legacyScreenshotNotificationJson = json;
     eraseDefaultsJsonField(legacyScreenshotNotificationJson, "screenshotNotification");

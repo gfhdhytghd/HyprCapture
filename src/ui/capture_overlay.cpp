@@ -2613,7 +2613,7 @@ void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
 }
 
 void CaptureOverlay::updateToolbarControlsForMode() {
-    if (m_dynamicRangeControl) m_dynamicRangeControl->setVisible(m_defaults.showHdrControl && !m_record && !m_recordActive);
+    if (m_dynamicRangeControl) m_dynamicRangeControl->setVisible(m_defaults.showHdrControl && m_hasHdrScreen && !m_record && !m_recordActive);
     if (m_hdrButton) {
         m_hdrButton->setEnabled((!m_scrollResult || !m_scrollHdrOriginal.isNull()) && m_hasHdrScreen && hyprcapture::ui::hdrHeicAvailable());
         m_hdrButton->setToolTip(m_scrollResult && m_scrollHdrOriginal.isNull() ? tr("HDR frames are unavailable for this scrolling screenshot") : QString{});
