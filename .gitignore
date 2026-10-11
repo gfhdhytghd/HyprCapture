@@ -16,3 +16,4 @@ CMakeUserPresets.json
 .cache/
 .idea/
 .vscode/
+__pycache__/
