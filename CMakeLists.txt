@@ -279,6 +279,8 @@ if(BUILD_TESTING)
   # Ignore inherited PYTHONOPTIMIZE/PYTHONPATH: assertions are part of these tests.
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
+    add_test(NAME omarchy-aec-setup COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/omarchy_aec_setup_test.py)
+    set_tests_properties(omarchy-aec-setup PROPERTIES TIMEOUT 10)
     add_test(NAME session-startup-ui COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/session_startup_ui_test.py $<TARGET_FILE:hyprcapture-ui>)
     set_tests_properties(session-startup-ui PROPERTIES TIMEOUT 40)
     add_test(NAME pin-launch COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/pin_launch_test.py $<TARGET_FILE:hyprcapture-ui>)
