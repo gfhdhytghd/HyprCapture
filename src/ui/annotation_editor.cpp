@@ -362,13 +362,17 @@ protected:
         if (backdrop) backdrop->setVisible(false);
         QSlider::hideEvent(event);
     }
+    void mousePressEvent(QMouseEvent* event) override {
+        if (event->button() == Qt::LeftButton) { pick(event->position()); event->accept(); }
+        else event->ignore();
+    }
+    void mouseMoveEvent(QMouseEvent* event) override {
+        if (event->buttons() & Qt::LeftButton) { pick(event->position()); event->accept(); }
+        else event->ignore();
+    }
     void paintEvent(QPaintEvent* event) override {
-        QSlider::paintEvent(event);
-        QStyleOptionSlider option;
-        initStyleOption(&option);
-        const QRect handle = style()->subControlRect(QStyle::CC_Slider, &option, QStyle::SC_SliderHandle, this);
-        const int top = handle.height()/2;
-        const QRect track((width()-10)/2, top, 10, std::max(1, height()-handle.height()));
+        Q_UNUSED(event);
+        const QRect track = rect();
         if (dirty || ramp.size() != track.size()) {
             ramp = QImage(track.size(), QImage::Format_RGBA16FPx4);
             ramp.setColorSpace(QColorSpace::SRgbLinear);
@@ -387,9 +391,12 @@ protected:
             }
             // Keep the position marker visible above the native HDR color ramp.
             QPainter marker(&ramp);
-            const int y = std::clamp(handle.center().y()-track.top(), 0, ramp.height()-1);
-            marker.fillRect(0, y-2, ramp.width(), 5, Qt::black);
-            marker.fillRect(0, y-1, ramp.width(), 3, Qt::white);
+            const qreal y = std::clamp((maximum()-value()) * qreal(height()-1) / (maximum()-minimum()), 3.5, height()-4.5);
+            marker.setBrush(Qt::NoBrush);
+            marker.setPen(QPen(Qt::black, 3));
+            marker.drawRect(QRectF(1.5, y-2, width()-3, 4));
+            marker.setPen(QPen(Qt::white, 1));
+            marker.drawRect(QRectF(1.5, y-2, width()-3, 4));
             marker.end();
             dirty = false;
             upload = true;
@@ -409,6 +416,10 @@ protected:
         }
     }
 private:
+    void pick(const QPointF& point) {
+        const qreal fraction = std::clamp(point.y()/std::max(1, height()-1), 0.0, 1.0);
+        setValue(qRound(maximum()-fraction*(maximum()-minimum())));
+    }
     QColor target = Qt::white;
     QImage ramp;
     bool dirty = true, upload = true, nativeReady = false;
@@ -1945,8 +1956,11 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     ui.hue = new ColorField(true, ui.colorPanel);
     ui.hue->setObjectName("annotationHue");
     hsv->addWidget(ui.saturationValue);
-    hsv->addWidget(ui.hue);
-    auto* hdrGain = addHdrGainSlider(hsv, ui.colorPanel, ui.canvas->hdrGain, "annotationHdrGain");
+    auto* sliders = new QHBoxLayout;
+    sliders->setSpacing(0);
+    sliders->addWidget(ui.hue);
+    hsv->addLayout(sliders);
+    auto* hdrGain = addHdrGainSlider(sliders, ui.colorPanel, ui.canvas->hdrGain, "annotationHdrGain");
     ui.hdrGainSlider = hdrGain;
     hdrGain->setTargetColor(ui.canvas->color);
     connect(hdrGain, &QSlider::valueChanged, this, [this](int value) { m_impl->canvas->hdrGain = value / 100.0; });
@@ -2080,8 +2094,12 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         textSaturation->setObjectName("annotationTextSaturationValue");
         auto* textHue = new ColorField(true, textPalette);
         textHue->setObjectName("annotationTextHue");
-        paletteLayout->addWidget(textSaturation); paletteLayout->addWidget(textHue);
-        auto* textGain = addHdrGainSlider(paletteLayout, textPalette, existing.hdrGain, "annotationTextHdrGain");
+        paletteLayout->addWidget(textSaturation);
+        auto* textSliders = new QHBoxLayout;
+        textSliders->setSpacing(0);
+        textSliders->addWidget(textHue);
+        paletteLayout->addLayout(textSliders);
+        auto* textGain = addHdrGainSlider(textSliders, textPalette, existing.hdrGain, "annotationTextHdrGain");
         textGain->setTargetColor(existing.color);
         connect(color, &QLineEdit::textChanged, textGain, [textGain](const QString& value) {
             const QColor selected(value); if (selected.isValid()) textGain->setTargetColor(selected);
