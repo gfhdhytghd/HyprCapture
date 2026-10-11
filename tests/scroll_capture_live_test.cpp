@@ -24,6 +24,7 @@
 #include <QWindow>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <iostream>
 QImage document(int width, int height, qreal scale) {
   QImage out(qRound(width * scale), qRound(height * scale),
@@ -203,6 +204,10 @@ int main(int argc, char **argv) {
     defaults.screenshotNotification = false;
     defaults.rememberSettings = false;
     defaults.language = "en";
+    defaults.saveDir = dir.toStdString();
+    defaults.filenameTemplate = "exported.png";
+    if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR"))
+      defaults.screenshotFormat = "heic";
     hyprcapture::CaptureSession session;
     session.id = "scroll-live";
     session.regionCaptureAvailable = true;
@@ -239,6 +244,7 @@ int main(int argc, char **argv) {
                                double(screen->geometry().width()),
                                double(screen->geometry().height())};
     monitor.focused = true;
+    monitor.hdrCapable = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR");
     monitor.scale = scale;
     monitor.artifactPath = artifact.toStdString();
     monitor.artifactWidth = frozen.width();
@@ -462,6 +468,14 @@ int main(int argc, char **argv) {
             QTimer::singleShot(350, overlay, [&, overlay, expected = actual.convertToFormat(QImage::Format_ARGB32), padding, maximumError, alphaFixture, windowMode] {
               auto *ed =
                   overlay->findChild<AnnotationEditor *>("inPlaceEditor");
+              if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR")) {
+                auto *sdr = overlay->findChild<QPushButton *>("screenshotSdr");
+                auto *hdr = overlay->findChild<QPushButton *>("screenshotHdr");
+                if (!sdr || !sdr->isChecked() || !hdr || hdr->isEnabled() || ed->hdrEnabled()) {
+                  fail("scrolling result retained single-frame HDR export mode");
+                  return;
+                }
+              }
               auto marked = ed->resultImage();
               marked.save(dir + "/annotated.png");
               if (marked.pixelColor(qRound(130 * scale) + padding.x(),
@@ -573,6 +587,12 @@ int main(int argc, char **argv) {
                                             {"phases", phase}})
                       .toJson());
               passed = true;
+              if (qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR")) {
+                auto *confirm = ed->findChild<QPushButton *>("annotationConfirm");
+                if (!confirm) { fail("capture confirmation unavailable"); return; }
+                confirm->click();
+                return; // The normal export path quits after its worker completes.
+              }
               app.quit();
             });
           });
@@ -614,6 +634,20 @@ int main(int argc, char **argv) {
     });
   });
   const int result = app.exec();
+  if (passed && qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR") &&
+      !qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_CANCEL")) {
+    const auto exported = QImage(dir + "/exported.png").convertToFormat(QImage::Format_ARGB32);
+    const auto marked = QImage(dir + "/annotated.png").convertToFormat(QImage::Format_ARGB32);
+    bool pixelsEqual = !exported.isNull() && exported.size() == marked.size();
+    for (int y = 0; pixelsEqual && y < exported.height(); ++y)
+      pixelsEqual = std::memcmp(exported.constScanLine(y), marked.constScanLine(y),
+                                size_t(exported.width()) * 4) == 0;
+    // The export deliberately adds sRGB metadata; compare decoded pixels.
+    if (!pixelsEqual) {
+      std::cerr << "SDR export did not preserve the annotated scrolling result" << std::endl;
+      passed = false;
+    }
+  }
   child.terminate();
   child.waitForFinished(2000);
   if (child.state() != QProcess::NotRunning) {

@@ -359,6 +359,8 @@ After selecting a region or window in `open_editor()` (or an `open()` confirmati
 
 Scroll in either direction, including back over captured content. A live preview appears at the bottom right; click it or **Finish** to move the image smoothly into the central editor. Pausing does not finish the session. **Cancel** restores the original selection, annotations and undo history; the source application stays at its current scroll position.
 
+Scrolling capture also works on HDR outputs: frames are converted to SDR before matching and stitching. Finishing a long screenshot selects SDR PNG and disables HDR export for that result, even when the session started in HDR mode. Cancelling preserves the original HDR choice.
+
 On touchscreens, one finger draws with the current tool and two fingers scroll the source application. A second finger cancels the unfinished stroke; lift all fingers before drawing again. During scrolling, annotations move slightly and fade out. Once the page is stable and aligned, they reappear at their measured content positions and drawing resumes. In the completed editor, two fingers pan the long image.
 
 The plugin captures native, cursor-free frames while excluding this helper's layers. A window uses its own native render; a region stays within one monitor. Fixed headers and footers are retained once. Fixed sidebars expand at a quiet pixel band near the bottom, outside the footer: a linear gradient fills the added space without stretching text or icons. Dense stationary backgrounds can repeat captured pixel blocks while moving foreground anchors determine alignment. If there is no safe insertion band or alignment is ambiguous, capture retains confirmed content and asks you to recover overlap.

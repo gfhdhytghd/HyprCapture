@@ -2605,6 +2605,10 @@ void CaptureOverlay::setMode(hyprcapture::CaptureMode mode) {
 
 void CaptureOverlay::updateToolbarControlsForMode() {
     if (m_dynamicRangeControl) m_dynamicRangeControl->setVisible(m_defaults.showHdrControl && !m_record && !m_recordActive);
+    if (m_hdrButton) {
+        m_hdrButton->setEnabled(!m_scrollResult && m_hasHdrScreen && hyprcapture::ui::hdrHeicAvailable());
+        m_hdrButton->setToolTip(m_scrollResult ? tr("Scrolling screenshots are saved as SDR PNG") : QString{});
+    }
     if (auto* cancel = m_toolbar->findChild<QPushButton*>("captureCancel"))
         cancel->setVisible(!m_editing);
     for (auto* button : m_toolbar->findChildren<QPushButton*>("captureModeButton")) {
@@ -4752,6 +4756,13 @@ void CaptureOverlay::beginScrollCapture() {
     connect(controller,&hyprcapture::ui::ScrollCaptureController::completed,this,[this,controller](const QImage& image) {
         const QRect start=QRect(mapFromGlobal(controller->previewGeometry().topLeft()),controller->previewGeometry().size());
         m_scrolling=false; m_scrollResult=true; m_scrollController=nullptr;
+        // Scroll frames are resolved to SDR before matching and stitching.
+        // Do not export a stale single-frame HDR base as the long screenshot.
+        m_defaults.screenshotFormat = "png";
+        m_editHdrBase = {};
+        m_editedHdrOutput = {};
+        if (m_sdrButton) m_sdrButton->setChecked(true);
+        m_editor->setHdrEnabled(false);
         m_scrollOriginal=controller->originalResult(); m_scrollFirstFrame=controller->originalFirstFrame();
         m_scrollGeometry=controller->originalGeometry(); m_scrollLayout=controller->resultLayout();
         m_editor->setScrollEnabled(false);

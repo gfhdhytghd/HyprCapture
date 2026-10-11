@@ -415,7 +415,18 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     s->failed = true;
     return;
   }
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, framebufferId(*pbo.framebuffer));
+  // Matching and the scroll transport consume SDR RGBA8. The capture target
+  // may instead contain linear HDR or monitor-profile pixels, so resolve it
+  // before readback rather than clipping that work buffer into bytes.
+  const auto description = pbo.framebuffer->imageDescription();
+  auto readFramebuffer = description && description->needsCM(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION)
+      ? resolveSdrFramebuffer(*pbo.framebuffer, s->monitor) : pbo.framebuffer;
+  if (!readFramebuffer) {
+    restore();
+    s->failed = true;
+    return;
+  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, framebufferId(*readFramebuffer));
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   WindowStreamFrameMetadata meta{.sequence = ++s->sequence,
                                  .captureMonotonicNs = timeNs,
@@ -428,7 +439,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                                  .pixelHeight = uint32_t(height),
                                  .stride = uint32_t(width * 4),
                                  .payloadBytes = uint64_t(width) * height * 4};
-  if (!issueWindowStreamPboReadback(pbo, meta, s->id, *pbo.framebuffer, cropX,
+  if (!issueWindowStreamPboReadback(pbo, meta, s->id, *readFramebuffer, cropX,
                                     cropTop, artifact, artifact))
     s->failed = true;
   restore();
