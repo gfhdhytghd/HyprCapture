@@ -8,6 +8,7 @@ struct RgbaFrame {
     std::vector<unsigned char> pixels;
     int                        width = 0;
     int                        height = 0;
+    int                        bytesPerPixel = 4; // RGBA8 or bit-preserved RGBA16F
 };
 
 struct RgbaCrop {

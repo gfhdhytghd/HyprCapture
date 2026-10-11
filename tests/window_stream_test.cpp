@@ -169,6 +169,17 @@ int main(int argc, char** argv) {
         printGoldenHeaderHex();
         return 0;
     }
+    auto paired = metadata(7);
+    paired.format = WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR;
+    paired.payloadBytes *= 3;
+    assert(validWindowStreamFrameMetadata(paired));
+    const auto pairedHeader = encodeWindowStreamFrameHeader(paired);
+    const auto pairedDecoded = decodeWindowStreamFrameHeader(pairedHeader.data(), pairedHeader.size());
+    assert(pairedDecoded && pairedDecoded->format == paired.format && pairedDecoded->payloadBytes == paired.payloadBytes);
+    paired.payloadBytes -= 1;
+    assert(!validWindowStreamFrameMetadata(paired));
+    paired.payloadBytes += 1; paired.format = 99;
+    assert(!validWindowStreamFrameMetadata(paired));
     frameHeaderRoundTripsExactLayout();
     rejectsInvalidOrUnsealedMetadataHeader();
     latestSlotDropsReplacedFrameAndPreservesItsOwnTimestamp();

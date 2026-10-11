@@ -1224,6 +1224,8 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
     return newest;
 }
 
+GLuint framebufferId(CFramebuffer& framebuffer);
+
 bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
                                   const WindowStreamFrameMetadata& metadata,
                                   const std::string& windowAddress,
@@ -1231,7 +1233,8 @@ bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
                                   int cropX,
                                   int cropTopY,
                                   const CBox& fullBox,
-                                  const CBox& visibleBox) {
+                                  const CBox& visibleBox,
+                                  CFramebuffer* hdrFramebuffer = nullptr) {
     ScopedTiming issueTiming("window.stream.pbo_issue");
     if (state.pending >= WindowStreamPboReadbackState::BUFFER_COUNT)
         return false;
@@ -1249,6 +1252,11 @@ bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
     glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[state.next]);
     glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(state.bytes), nullptr, GL_STREAM_READ);
     glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    if (hdrFramebuffer) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebufferId(*hdrFramebuffer));
+        glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_HALF_FLOAT,
+                     reinterpret_cast<void*>(size_t(state.width) * state.height * 4));
+    }
     state.fences[state.next] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     // Submit without waiting: a timeout-zero client wait must not depend on a
     // later compositor redraw to make this fence observable.
@@ -2937,14 +2945,22 @@ bool readbackHasSize(const RgbaReadback& frame, int width, int height) {
 }
 
 RgbaReadback normalizeMonitorReadbackToLogicalOrientation(RgbaReadback readback, int transform) {
+    RgbaFrame hdr;
+    if (!readback.linear.empty()) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(readback.linear.data());
+        hdr = normalizeRgbaFrameToLogicalOrientation(
+            {.pixels = std::vector<unsigned char>(bytes, bytes + readback.linear.size() * 2),
+             .width = readback.width, .height = readback.height, .bytesPerPixel = 8}, transform);
+    }
     auto frame = normalizeRgbaFrameToLogicalOrientation(
-        {.pixels = std::move(readback.pixels), .width = readback.width, .height = readback.height},
-        transform);
-    return {
-        .pixels = std::move(frame.pixels),
-        .width = frame.width,
-        .height = frame.height,
-    };
+        {.pixels = std::move(readback.pixels), .width = readback.width, .height = readback.height}, transform);
+    RgbaReadback result{.pixels = std::move(frame.pixels), .referenceNits = readback.referenceNits,
+                       .width = frame.width, .height = frame.height};
+    if (!hdr.pixels.empty()) {
+        result.linear.resize(hdr.pixels.size() / 2);
+        std::memcpy(result.linear.data(), hdr.pixels.data(), hdr.pixels.size());
+    }
+    return result;
 }
 
 RgbaReadback solidBackgroundReadback(int width, int height, unsigned char r, unsigned char g, unsigned char b) {
@@ -3704,7 +3720,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     LinearCaptureScope linearCapture;
     CaptureSession session;
     session.regionCaptureAvailable = true;
-    session.scrollSessionVersion = 1;
+    session.scrollSessionVersion = 2;
     session.id = makeSessionId();
     session.defaults = defaults;
     if (g_pInputManager) {

@@ -2,6 +2,8 @@
 #include <QGuiApplication>
 #include <QPainter>
 #include <cmath>
+#include <qfloat16.h>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 
@@ -62,6 +64,19 @@ int main(int argc, char** argv) {
     require(stitcher.image() == accepted, "all rejected frames leave accepted pixels unchanged");
     require(stitcher.append(frame(1200)).status == Status::Appended, "recover after scrolling back into overlap");
 
+    // Repeating high-contrast artwork in the middle cannot suppress unique
+    // evidence elsewhere in the viewport (as found by the HDR live fixture).
+    auto artwork=texture(360,2400);
+    for(int y=0;y<artwork.height();++y)
+        for(int x=90;x<270;++x) artwork.setPixel(x,y,x<170 && y%113<35 ? qRgb(230,50,180) : qRgb(250,250,250));
+    ScrollStitcher artworkStitcher;
+    artworkStitcher.append(artwork.copy(0,400,360,600));
+    for(int y : {460,340,400,480,520,340}) {
+        const auto r=artworkStitcher.append(artwork.copy(0,y,360,600));
+        require(r.status==Status::Appended || r.status==Status::Relocated,"distinctive side columns register despite repeating central artwork");
+    }
+    require(artworkStitcher.image()==artwork.copy(0,340,360,780),"central artwork cannot change exact displacement");
+
     auto repeated = texture(360, 24);
     QImage stripes(360, 900, QImage::Format_ARGB32);
     for (int y = 0; y < stripes.height(); ++y)
@@ -114,6 +129,27 @@ int main(int argc, char** argv) {
         p.drawImage(50,40,document.copy(50,240,270,1120));
     }
     require(chrome.image()==expectedChrome,"fixed sidebar gradient extensions preserve flat color");
+
+    const auto floatPlane=[](const QImage& sdr) {
+        QImage hdr(sdr.size(),QImage::Format_RGBA16FPx4_Premultiplied);
+        for(int y=0;y<hdr.height();++y) {
+            auto* row=reinterpret_cast<qfloat16*>(hdr.scanLine(y));
+            for(int x=0;x<hdr.width();++x) {
+                const auto c=sdr.pixelColor(x,y);
+                row[x*4]=qfloat16(2.f+c.red()/255.f); row[x*4+1]=qfloat16(2.f+c.green()/255.f);
+                row[x*4+2]=qfloat16(2.f+c.blue()/255.f); row[x*4+3]=qfloat16(1.f);
+            }
+        }
+        return hdr;
+    };
+    ScrollStitcher hdrChrome;
+    hdrChrome.append(chromeFrame(500), {}, floatPlane(chromeFrame(500)));
+    for(int y : {350,200,450,700,800}) hdrChrome.append(chromeFrame(y), {}, floatPlane(chromeFrame(y)));
+    const auto hdrChromeResult=hdrChrome.hdrImage(), hdrChromeExpected=floatPlane(expectedChrome);
+    require(hdrChromeResult.size()==hdrChromeExpected.size(), "HDR fixed header/footer dimensions");
+    for(int y=0;y<hdrChromeResult.height();++y)
+        require(std::memcmp(hdrChromeResult.constScanLine(y),hdrChromeExpected.constScanLine(y),360*8)==0,
+                "HDR fixed headers, footers and sidebar interpolation preserve highlights");
 
     // Fixed sidebar labels must survive both sides of the insertion band.
     auto labelledSidebar = [&](int offset) {
@@ -224,6 +260,29 @@ int main(int argc, char** argv) {
     require(rawResult.copy(0,250,360,600)==translucent(350), "raw appended viewport preserved including alpha");
     require(retained.append(frame(400)).status==Status::InvalidFrame,
             "cannot silently discard the original pixel channel");
+
+    // HDR registration must follow SDR displacement exactly while retaining
+    // highlights above 1.0, negative wide-gamut channels and transparency.
+    QImage hdrDocument(360, 1800, QImage::Format_RGBA16FPx4_Premultiplied);
+    for (int y=0; y<hdrDocument.height(); ++y) {
+        auto* row=reinterpret_cast<qfloat16*>(hdrDocument.scanLine(y));
+        for (int x=0; x<360; ++x) {
+            row[x*4]=qfloat16(2.f + y/1000.f); row[x*4+1]=qfloat16(-.125f);
+            row[x*4+2]=qfloat16(x/200.f); row[x*4+3]=qfloat16(.5f);
+        }
+    }
+    ScrollStitcher hdrStitcher;
+    const auto hdrFrame=[&](int y) { return hdrDocument.copy(0,y,360,600); };
+    require(hdrStitcher.append(frame(200), {}, hdrFrame(200)).status==Status::Started, "HDR baseline");
+    require(hdrStitcher.append(frame(350), {}, hdrFrame(350)).status==Status::Appended, "HDR append");
+    require(hdrStitcher.append(frame(100), {}, hdrFrame(100)).status==Status::Appended, "HDR prepend");
+    require(hdrStitcher.append(frame(250), {}, hdrFrame(250)).status==Status::Relocated, "HDR relocation");
+    const auto hdrResult=hdrStitcher.hdrImage(), hdrExpected=hdrDocument.copy(0,100,360,850);
+    require(hdrResult.size()==hdrStitcher.image().size() && hdrResult.format()==hdrExpected.format(), "paired HDR dimensions/format");
+    for (int y=0; y<hdrResult.height(); ++y)
+        require(std::memcmp(hdrResult.constScanLine(y),hdrExpected.constScanLine(y),360*8)==0, "float HDR channels and alpha preserved exactly");
+    require(hdrStitcher.append(frame(400)).status==Status::InvalidFrame, "missing HDR plane rejected");
+    require(hdrStitcher.append(frame(400), {}, frame(400)).status==Status::InvalidFrame, "byte HDR plane rejected");
 
     ScrollStitcher limited({700, 360LL * 700, 2});
     limited.append(frame(0));

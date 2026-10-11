@@ -7,6 +7,7 @@
 #include "ui/i18n.hpp"
 #include "ui/mapped_image.hpp"
 #include <QCloseEvent>
+#include <QColorSpace>
 #include <QFile>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -236,6 +237,7 @@ void ScrollCaptureController::start() {
       {"socketPath", QString::fromLocal8Bit(socketPath)},
       {"controlPath", controlPath},
       {"windowAddress", m_windowAddress},
+      {"hdr", m_captureHdr},
       {"rect", QJsonArray{m_capture.x(), m_capture.y(), m_capture.width(),
                           m_capture.height()}}};
   QFile file(m_requestPath);
@@ -303,7 +305,7 @@ void ScrollCaptureController::readFrames() {
           descriptors.push_back(fds[i]);
       }
     const auto metadata = decodeWindowStreamFrameHeader(header, bytes);
-    QImage frame;
+    QImage frame, hdr;
     if (metadata && descriptors.size() == 1 &&
         !(message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) &&
         metadata->sequence > m_sequence &&
@@ -314,8 +316,15 @@ void ScrollCaptureController::readFrames() {
       QFile file;
       if (seals >= 0 && (seals & required) == required &&
           file.open(descriptors[0], QIODevice::ReadOnly,
-                    QFileDevice::DontCloseHandle))
-        frame = mapRawRgba(file, metadata->pixelWidth, metadata->pixelHeight);
+                    QFileDevice::DontCloseHandle)) {
+        if (metadata->format == WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR) {
+          auto planes = mapScrollSdrHdr(file, metadata->pixelWidth, metadata->pixelHeight);
+          frame = std::move(planes.first); hdr = std::move(planes.second);
+          hdr.setColorSpace(QColorSpace::SRgbLinear);
+        } else {
+          frame = mapRawRgba(file, metadata->pixelWidth, metadata->pixelHeight);
+        }
+      }
     }
     for (int fd : descriptors)
       ::close(fd);
@@ -345,7 +354,7 @@ void ScrollCaptureController::readFrames() {
       if (m_latest)
         ++m_dropped;
       m_latest = Frame{frame, geometry, metadata->sequence,
-                       metadata->captureMonotonicNs, m_background};
+                       metadata->captureMonotonicNs, m_background, hdr};
     }
     m_ready.notify_one();
   }
@@ -458,7 +467,9 @@ void ScrollCaptureController::restoreAnnotationsIfReady() {
 void ScrollCaptureController::work(std::stop_token stopToken) {
   cv::setNumThreads(1);
   cv::ocl::setUseOpenCL(false);
-  ScrollStitcher stitcher;
+  ScrollStitcher::Limits limits;
+  if (m_captureHdr) limits.maxPixels = 16LL * 1024 * 1024;
+  ScrollStitcher stitcher(limits);
   QImage candidate;
   bool aligned = false;
   while (!stopToken.stop_requested()) {
@@ -485,7 +496,7 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
       const bool stable = ScrollStitcher::stable(candidate, frame->image);
       candidate = frame->image;
       // Seed the unscrolled baseline immediately, before input is replayed.
-      auto result = stitcher.append(frame->image, original);
+      auto result = stitcher.append(frame->image, original, frame->hdr);
       aligned = result.status == ScrollStitcher::Status::Started ||
                 result.status == ScrollStitcher::Status::Appended ||
                 result.status == ScrollStitcher::Status::Relocated ||
@@ -505,9 +516,10 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
       auto image = stitcher.image();
       const auto original = m_windowAddress.isEmpty() ? QImage{} : stitcher.originalImage();
       const auto layout = stitcher.layout();
+      const auto hdr = stitcher.hdrImage();
       QMetaObject::invokeMethod(
           this,
-          [this, image, original, layout, aligned] {
+          [this, image, original, hdr, layout, aligned] {
             if (m_done)
               return;
             if (image.isNull()) {
@@ -519,6 +531,7 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
                              "confirmed content"));
             m_layout = layout;
             m_originalResult = original;
+            m_hdrResult = hdr;
             stop();
             m_done = true;
             emit completed(image);

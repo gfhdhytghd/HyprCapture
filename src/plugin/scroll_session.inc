@@ -32,7 +32,7 @@ struct ScrollSession {
   CHyprSignalListener axis, motion, button, unmap;
   std::uint64_t sequence = 0;
   bool active = false, baseline = false, released = false, replaying = false,
-       failed = false, paused = false, refocusing = false;
+       failed = false, paused = false, refocusing = false, hdr = false;
   Time::steady_tp started = Time::steadyNow();
 };
 std::unique_ptr<ScrollSession> g_scrollSession;
@@ -330,13 +330,19 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
     glPixelStorei(GL_PACK_ALIGNMENT, previousAlignment);
   };
+  LinearCaptureScope linearCapture;
   auto &pbo = s->pbo;
   if (auto ready = takeReadyWindowStreamPboFrames(pbo)) {
     auto &f = ready->frame;
     if (!s->window && s->transform != 0) {
-      RgbaReadback raw{.pixels = std::move(f.rgba),
+      const size_t planeBytes = size_t(f.metadata.pixelWidth) * f.metadata.pixelHeight * 4;
+      RgbaReadback raw{.pixels = std::vector<unsigned char>(f.rgba.begin(), f.rgba.begin() + planeBytes),
                        .width = int(f.metadata.pixelWidth),
                        .height = int(f.metadata.pixelHeight)};
+      if (f.metadata.format == WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR) {
+        raw.linear.resize(planeBytes);
+        std::memcpy(raw.linear.data(), f.rgba.data() + planeBytes, planeBytes * 2);
+      }
       raw = normalizeMonitorReadbackToLogicalOrientation(std::move(raw),
                                                          s->transform);
       const auto mon = monitorRect(s->monitor);
@@ -346,6 +352,10 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                 .width = std::lround(s->target.width * s->scale),
                 .height = std::lround(s->target.height * s->scale)});
       f.rgba = std::move(raw.pixels);
+      if (!raw.linear.empty()) {
+        const auto* data = reinterpret_cast<const unsigned char*>(raw.linear.data());
+        f.rgba.insert(f.rgba.end(), data, data + raw.linear.size() * 2);
+      }
       f.metadata.pixelWidth = raw.width;
       f.metadata.pixelHeight = raw.height;
       f.metadata.stride = raw.width * 4;
@@ -373,8 +383,11 @@ void scrollTick(SP<CEventLoopTimer> timer) {
         s->monitor);
     width = native.pixelWidth;
     height = native.pixelHeight;
+    if (uint64_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4) > 128ULL * 1024 * 1024) {
+      g_scrollRendering = false; restore(); s->failed = true; return;
+    }
     if (!ensureWindowStreamPboReadback(pbo, width, height,
-                                       size_t(width) * height * 4)) {
+                                       size_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4))) {
       g_scrollRendering = false;
       restore();
       s->failed = true;
@@ -401,8 +414,11 @@ void scrollTick(SP<CEventLoopTimer> timer) {
       height = std::lround(s->monitor->m_pixelSize.y);
       cropX = cropTop = 0;
     }
+    if (uint64_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4) > 128ULL * 1024 * 1024) {
+      g_scrollRendering = false; restore(); s->failed = true; return;
+    }
     if (!ensureWindowStreamPboReadback(pbo, width, height,
-                                       size_t(width) * height * 4)) {
+                                       size_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4))) {
       g_scrollRendering = false;
       restore();
       s->failed = true;
@@ -421,6 +437,8 @@ void scrollTick(SP<CEventLoopTimer> timer) {
   // Matching and the scroll transport consume SDR RGBA8. The capture target
   // may instead contain linear HDR or monitor-profile pixels, so resolve it
   // before readback rather than clipping that work buffer into bytes.
+  const bool hdr = s->hdr && linearCaptureFor(s->monitor) &&
+      pbo.framebuffer->m_drmFormat == DRM_FORMAT_ABGR16161616F;
   const auto description = pbo.framebuffer->imageDescription();
   auto readFramebuffer = description && description->needsCM(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION)
       ? resolveSdrFramebuffer(*pbo.framebuffer, s->monitor) : pbo.framebuffer;
@@ -441,9 +459,10 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                                  .pixelWidth = uint32_t(width),
                                  .pixelHeight = uint32_t(height),
                                  .stride = uint32_t(width * 4),
-                                 .payloadBytes = uint64_t(width) * height * 4};
-  if (!issueWindowStreamPboReadback(pbo, meta, s->id, *readFramebuffer, cropX,
-                                    cropTop, artifact, artifact))
+                                 .format = hdr ? WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR : WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN,
+                                 .payloadBytes = uint64_t(width) * height * (hdr ? 12 : 4)};
+  if (pbo.bytes != meta.payloadBytes || !issueWindowStreamPboReadback(pbo, meta, s->id, *readFramebuffer, cropX,
+                                    cropTop, artifact, artifact, hdr ? pbo.framebuffer.get() : nullptr))
     s->failed = true;
   restore();
 }
@@ -462,6 +481,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
       throw std::runtime_error("version");
     s->id = j.at("id").get<std::string>();
     s->windowAddress = j.value("windowAddress", std::string{});
+    s->hdr = j.value("hdr", false);
     if (s->id.empty() || s->id.size() > 96)
       throw std::runtime_error("id");
     const auto r = j.at("rect");

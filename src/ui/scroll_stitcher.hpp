@@ -45,9 +45,10 @@ public:
   };
   ScrollStitcher();
   explicit ScrollStitcher(Limits limits);
-  Result append(const QImage &frame, const QImage &original = {});
+  Result append(const QImage &frame, const QImage &original = {}, const QImage &hdr = {});
   QImage image() const;
   QImage originalImage() const;
+  QImage hdrImage() const;
   QImage preview(const QSize &bounds) const;
   QSize size() const {
     return empty() ? QSize{}
@@ -64,11 +65,11 @@ private:
     QImage image;
   };
   QImage bodyImage() const;
-  void paint(QPainter &painter, bool original = false) const;
+  void paint(QPainter &painter, int plane = 0) const;
   Limits m_limits;
-  QImage m_initial, m_previous, m_originalInitial;
+  QImage m_initial, m_previous, m_originalInitial, m_hdrInitial;
   ScrollLayout m_layout;
-  std::vector<Strip> m_strips, m_originalStrips;
+  std::vector<Strip> m_strips, m_originalStrips, m_hdrStrips;
   int m_frames = 0;
   bool m_layoutLocked = false;
 };

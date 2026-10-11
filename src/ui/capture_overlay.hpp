@@ -155,7 +155,7 @@ class CaptureOverlay final : public QMainWindow {
     void beginScrollCapture();
     void refreshInPlaceImage();
     QImage scrollWindowBackground(const QImage& frame, const QRect& geometry);
-    QImage renderScrollResultImage();
+    QImage renderScrollResultImage(bool hdr = false);
     void leaveInPlaceEdit();
     void exportInPlaceImage();
     void pinInPlaceImage();
@@ -252,7 +252,8 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_recordActive = false;
     bool                      m_scrolling = false;
     bool                      m_scrollResult = false;
-    QImage                    m_scrollOriginal, m_scrollFirstFrame;
+    QImage                    m_scrollOriginal, m_scrollFirstFrame, m_scrollHdrOriginal, m_scrollSdrImage;
+    float                     m_scrollReferenceNits = 203;
     QRect                     m_scrollGeometry;
     hyprcapture::ui::ScrollLayout m_scrollLayout;
     QString                   m_recordError;

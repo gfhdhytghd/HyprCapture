@@ -30,16 +30,16 @@ constexpr std::array<unsigned char, 256 * 256> makeUnpremultiplyLut() {
 
 constexpr auto UNPREMULTIPLY_LUT = makeUnpremultiplyLut();
 
-bool checkedRgbaByteSize(int width, int height, std::size_t& bytes) {
-    if (width <= 0 || height <= 0)
+bool checkedRgbaByteSize(int width, int height, std::size_t& bytes, int pixelBytes = 4) {
+    if (width <= 0 || height <= 0 || (pixelBytes != 4 && pixelBytes != 8))
         return false;
 
     const auto w = static_cast<std::size_t>(width);
     const auto h = static_cast<std::size_t>(height);
-    if (w > std::numeric_limits<std::size_t>::max() / h / RGBA_BYTES_PER_PIXEL)
+    if (w > std::numeric_limits<std::size_t>::max() / h / size_t(pixelBytes))
         return false;
 
-    bytes = w * h * RGBA_BYTES_PER_PIXEL;
+    bytes = w * h * size_t(pixelBytes);
     return true;
 }
 
@@ -49,12 +49,13 @@ RgbaFrame remapRgbaPixels(const RgbaFrame& source, int targetWidth, int targetHe
         return {};
 
     std::size_t bytes = 0;
-    if (!checkedRgbaByteSize(targetWidth, targetHeight, bytes))
+    if (!checkedRgbaByteSize(targetWidth, targetHeight, bytes, source.bytesPerPixel))
         return {};
 
     RgbaFrame target;
     target.width = targetWidth;
     target.height = targetHeight;
+    target.bytesPerPixel = source.bytesPerPixel;
     target.pixels.assign(bytes, 0);
 
     for (int y = 0; y < targetHeight; ++y) {
@@ -63,9 +64,9 @@ RgbaFrame remapRgbaPixels(const RgbaFrame& source, int targetWidth, int targetHe
             if (srcX < 0 || srcX >= source.width || srcY < 0 || srcY >= source.height)
                 return {};
 
-            const auto src = (static_cast<std::size_t>(srcY) * source.width + srcX) * RGBA_BYTES_PER_PIXEL;
-            const auto dst = (static_cast<std::size_t>(y) * targetWidth + x) * RGBA_BYTES_PER_PIXEL;
-            std::copy_n(source.pixels.data() + src, RGBA_BYTES_PER_PIXEL, target.pixels.data() + dst);
+            const auto src = (static_cast<std::size_t>(srcY) * source.width + srcX) * source.bytesPerPixel;
+            const auto dst = (static_cast<std::size_t>(y) * targetWidth + x) * source.bytesPerPixel;
+            std::copy_n(source.pixels.data() + src, source.bytesPerPixel, target.pixels.data() + dst);
         }
     }
 
@@ -100,7 +101,7 @@ RgbaFrame flipHorizontal(const RgbaFrame& source) {
 
 bool rgbaFrameHasExpectedSize(const RgbaFrame& frame) {
     std::size_t bytes = 0;
-    return checkedRgbaByteSize(frame.width, frame.height, bytes) && frame.pixels.size() == bytes;
+    return checkedRgbaByteSize(frame.width, frame.height, bytes, frame.bytesPerPixel) && frame.pixels.size() == bytes;
 }
 
 RgbaCrop logicalRgbaCropToFramebuffer(RgbaCrop crop, int framebufferWidth, int framebufferHeight, int transform) {
