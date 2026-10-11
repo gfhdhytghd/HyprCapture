@@ -3227,8 +3227,28 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     dim.addRect(rect());
     QPainterPath undimmed;
     // The mask follows the selection, independently of asynchronous HDR upload.
-    if (m_editing && m_editor)
+    if (m_editing && m_editor) {
         undimmed.addRect(m_editor->canvasGeometry());
+        if (m_mode == hyprcapture::CaptureMode::Window && !m_scrollResult) {
+            if (const auto* window = selectedWindow()) {
+                const bool crop = (currentWindowBorder() == hyprcapture::DecorationPolicy::Remove ||
+                                   currentWindowShadow() == hyprcapture::DecorationPolicy::Remove) &&
+                                  window->fullGeometry.contains(window->visibleGeometry);
+                const QRect source = crop ? window->visibleGeometry : window->fullGeometry;
+                if (source.isValid()) {
+                    const QRect canvas = m_editor->canvasGeometry();
+                    QTransform transform;
+                    transform.translate(canvas.x(), canvas.y());
+                    transform.scale(double(canvas.width()) / source.width(), double(canvas.height()) / source.height());
+                    transform.translate(-source.x(), -source.y());
+                    const auto frame = roundedWindowFramePath(crop ? window->visibleGeometry : windowFrameGeometry(*window),
+                                                              crop ? window->rounding : windowFrameRadius(*window, false),
+                                                              window->roundingPower);
+                    undimmed = undimmed.intersected(transform.map(frame));
+                }
+            }
+        }
+    }
     else if (m_mode == hyprcapture::CaptureMode::Fullscreen)
         undimmed.addRect(fullscreenCaptureRect());
     else if ((m_mode==hyprcapture::CaptureMode::Region || m_defaults.fushionMode) && normalizedSelection().width()>4 && normalizedSelection().height()>4)
@@ -3915,8 +3935,8 @@ void CaptureOverlay::endHymissionCaptureInputSuppression() {
     (void)runHymissionCaptureInputCommand(QStringLiteral("end"), token);
 }
 
-double CaptureOverlay::windowFrameRadius(const WindowArtifact& window) const {
-    if (window.stagePreview && window.selectionRounding)
+double CaptureOverlay::windowFrameRadius(const WindowArtifact& window, bool selection) const {
+    if (selection && window.stagePreview && window.selectionRounding)
         return *window.selectionRounding;
     if (window.rounding <= 0.0)
         return 0.0;
@@ -3925,7 +3945,7 @@ double CaptureOverlay::windowFrameRadius(const WindowArtifact& window) const {
     const double border = std::max(0.0, window.borderSize);
     const double correction = border * (std::sqrt(2.0) - 1.0) * std::max(2.0 - power, 0.0);
     double radius = std::max(0.0, window.rounding + border - correction);
-    if (window.stagePreview && window.selectionGeometry.isValid() && window.visibleGeometry.isValid()) {
+    if (selection && window.stagePreview && window.selectionGeometry.isValid() && window.visibleGeometry.isValid()) {
         // Use the un-clipped preview: clipping a card does not change its scale.
         const double scale = std::min(double(window.selectionGeometry.width()) / window.visibleGeometry.width(),
                                       double(window.selectionGeometry.height()) / window.visibleGeometry.height());

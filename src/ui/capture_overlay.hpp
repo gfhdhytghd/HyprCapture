@@ -221,7 +221,7 @@ class CaptureOverlay final : public QMainWindow {
     bool selectedWindowUsesOverviewSelection() const;
     void beginHymissionCaptureInputSuppression();
     void endHymissionCaptureInputSuppression();
-    double windowFrameRadius(const WindowArtifact& window) const;
+    double windowFrameRadius(const WindowArtifact& window, bool selection = true) const;
     bool hydrateWindowArtifact(WindowArtifact& window);
     bool windowWheelSelectionEnabled() const;
     std::vector<int> currentMonitorWindowCandidates() const;

@@ -597,6 +597,44 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(editor->resultImage(), original);
     }
 
+    void windowEditorMaskExcludesRoundedCorners_data() {
+        QTest::addColumn<bool>("stage");
+        QTest::newRow("desktop") << false;
+        QTest::newRow("stage") << true;
+    }
+    void windowEditorMaskExcludesRoundedCorners() {
+        QFETCH(bool, stage);
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.fushionMode = false;
+        defaults.inPlaceEditToolbar = true;
+        const QRect window(100,100,200,120);
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, true, QSize(800,600), window,
+                                                                 stage ? QRect(100,100,100,60) : QRect{}).toStdString());
+        QVERIFY(session);
+        session->windows.front().rounding = 40;
+        session->windows.front().selectionRounding = 20;
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+        overlay.show();
+        QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, stage ? QPoint(150,130) : window.center());
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QTRY_VERIFY(editor && editor->isVisible());
+        const QRect canvas(400,300,300,180);
+        editor->setImageDisplayRect(canvas);
+        QImage parent(overlay.size(), QImage::Format_ARGB32_Premultiplied);
+        parent.fill(Qt::transparent);
+        QPainter painter(&parent);
+        overlay.render(&painter, QPoint(), QRegion(), QWidget::DrawWindowBackground);
+        painter.end();
+        QCOMPARE(parent.pixelColor(canvas.center()), QColor(17,29,53));
+        // Native radius 40 becomes 60 on this canvas, regardless of Stage's
+        // thumbnail radius. These pixels lie outside/inside that curved edge.
+        QVERIFY(parent.pixelColor(canvas.topLeft() + QPoint(10,10)).blue() < 53);
+        QCOMPARE(parent.pixelColor(canvas.topLeft() + QPoint(45,20)), QColor(17,29,53));
+        QVERIFY(parent.pixelColor(canvas.bottomRight() - QPoint(10,10)).blue() < 53);
+    }
+
     void editorMaskFollowsCanvasBeforeHdrSurfaceIsReady() {
         hyprcapture::CaptureDefaults defaults;
         defaults.mode = hyprcapture::CaptureMode::Region;
