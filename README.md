@@ -43,6 +43,33 @@ https://github.com/user-attachments/assets/03a642d3-569d-4b77-8ccf-17934620bc20
 
 
 ## Installation
+
+### Install on Omarchy
+
+HyprCapture ships as an [Omarchy](https://omarchy.org/) shell plugin. Add and enable it with:
+
+```sh
+omarchy plugin add https://github.com/gfhdhytghd/HyprCapture.git --enable
+```
+
+On first enable a terminal opens, installs any missing build dependencies with `pacman` (it asks for your password), and compiles the plugin and its helper against the Hyprland you are running. The build lives in `~/.cache/io.github.gfhdhytghd.hyprcapture/`; nothing is installed system-wide. The same terminal asks whether HyprCapture should handle the **Screenshot** and **Screenrecord** entries of the Omarchy menu. If you agree, a clearly marked block is added to `~/.config/omarchy/extensions/omarchy-menu.jsonc`; it is removed again when the plugin is disabled or removed. Change your answer later with `~/.config/omarchy/plugins/io.github.gfhdhytghd.hyprcapture/omarchy/plugin menu on` (or `off`).
+
+When the build finishes the plugin loads and these bindings are registered at runtime:
+
+| Input | Action | Replaces Omarchy default |
+| --- | --- | --- |
+| `Print` | Select a target, then annotate | Screenshot |
+| `Shift + Print` | Capture the full screen | — |
+| `Alt + Print` | Open the overlay in recording mode, or stop the active recording | Screenrecording |
+| Menu › Capture › Screenshot | Select a target, then annotate | omarchy-capture-screenshot |
+| Menu › Capture › Screenrecord | Open the overlay in recording mode, or stop the active recording | Screenrecord submenu |
+
+A key you bound yourself is never taken over; it is skipped and logged instead. If HyprCapture is not loaded, for example right after a Hyprland update, the menu entries fall back to Omarchy's own tools. To choose your own bindings and settings, copy [`omarchy/defaults.lua`](omarchy/defaults.lua) to `~/.config/hyprcapture/omarchy.lua` and edit it. When that file exists it replaces the defaults, and it is applied after every config reload. Configure `plugin.hyprcapture` there rather than in `hyprland.lua`: the plugin is not loaded yet when your main config first runs.
+
+After a Hyprland update, a notification offers to rebuild. `omarchy plugin update` pulls new versions and asks for a rebuild only when the native code changed. If you previously installed HyprCapture with `hyprpm`, run `hyprpm disable hyprcapture` first so only one copy is loaded. The optional DTLN echo canceller is not part of the Omarchy install.
+
+`omarchy plugin disable io.github.gfhdhytghd.hyprcapture` unloads the plugin and restores Omarchy's bindings and menu. `omarchy plugin remove io.github.gfhdhytghd.hyprcapture` does the same and deletes the checkout; remove `~/.cache/io.github.gfhdhytghd.hyprcapture` as well to reclaim the build space.
+
 ### Dependencies
 
 - Hyprland development headers for the exact Hyprland build you are running
