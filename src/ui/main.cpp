@@ -9,6 +9,7 @@
 #include "ui/hdr_thumbnail.hpp"
 #include "ui/i18n.hpp"
 #include "ui/pinned_image.hpp"
+#include "ui/session_lock_guard.hpp"
 
 #include <LayerShellQt/Shell>
 #include <LayerShellQt/Window>
@@ -811,7 +812,7 @@ int main(int argc, char** argv) {
 #endif
 
     hyprcapture::ui::traceTiming(QStringLiteral("ui.entry"));
-    QApplication app(argc, argv);
+    hyprcapture::ui::SessionLockApplication app(argc, argv);
     QApplication::setApplicationName("hyprcapture-ui");
     hyprcapture::ui::traceTiming(QStringLiteral("ui.app_ready"));
 
@@ -906,6 +907,11 @@ int main(int argc, char** argv) {
         {"record-active", "Show recording controls as active."},
     });
     parser.process(app);
+    hyprcapture::ui::SessionLockGuard sessionLock(hyprcapture::ui::SessionLockGuard::connectToCompositor());
+    if (sessionLock.cancelled()) {
+        qWarning("HyprCapture: unlocked compositor connection required");
+        return 1;
+    }
     hyprcapture::ui::installUiTranslations(parser.value("language"));
 
     if (parser.isSet("pin-image")) {
@@ -1095,6 +1101,8 @@ int main(int argc, char** argv) {
             return 1;
         }
         sessionPath = QString::fromStdString(*received);
+        sessionLock.setStartupControl(STDIN_FILENO);
+        if (sessionLock.cancelled()) return 0;
     }
     // The snapshot must already be frozen before dismissing any countdown.
     cancelRecordingCountdown();

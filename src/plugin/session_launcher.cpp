@@ -1,6 +1,7 @@
 #include "plugin/session_launcher.hpp"
 
 #include "plugin/artifact_capture.hpp"
+#include "plugin/session_lock.hpp"
 #include "plugin/timing.hpp"
 #include "shared/session_startup.hpp"
 #include "shared/process_environment.hpp"
@@ -158,12 +159,14 @@ std::vector<std::string> childEnvironment() {
         path += directory;
     }
     env.push_back(std::move(path));
+    env.push_back("HYPRCAPTURE_LOCK_GENERATION=" + sessionLockGeneration());
     for (char** item = environ; item && *item; ++item) {
         const std::string entry(*item);
         const auto        separator = entry.find('=');
         if (separator == std::string::npos)
             continue;
-        if (desktopEnvironmentNameAllowed(std::string_view(entry).substr(0, separator)))
+        const auto name = std::string_view(entry).substr(0, separator);
+        if (name != "HYPRCAPTURE_LOCK_GENERATION" && desktopEnvironmentNameAllowed(name))
             env.push_back(entry);
     }
     return env;
@@ -310,6 +313,7 @@ std::optional<std::string> recordingHelperPath(const CaptureDefaults& defaults) 
 }
 
 LaunchResult launchHelper(const LaunchRequest& request) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     const auto helper = firstRunnableHelper(request.defaults.helper);
     if (!helper)
         return {.success = false, .error = "no trusted hyprcapture-ui helper found"};
@@ -505,6 +509,7 @@ LaunchResult cancelCaptureHelpers() {
 }
 
 LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const std::string& outputPath, const std::string& pendingSocket) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     if (outputPath.empty())
         return {.success = false, .error = "recording output path missing"};
 
@@ -591,6 +596,7 @@ LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
                                             const std::string&     outputPath,
                                             bool                  preserveAlpha,
                                             int                   durationMs) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     if (inputPath.empty() || outputPath.empty())
         return {.success = false, .error = "recording transcode path missing"};
 

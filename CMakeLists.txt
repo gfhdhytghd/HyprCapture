@@ -118,6 +118,7 @@ list(REMOVE_DUPLICATES HYPRLAND_DERIVED_INCLUDE_DIRS)
 add_library(hyprcapture SHARED
   src/plugin/audio_session.cpp
   src/plugin/main.cpp
+  src/plugin/session_lock.cpp
   src/plugin/notification.cpp
   src/plugin/artifact_capture.cpp
   src/plugin/window_stream.cpp
@@ -150,6 +151,7 @@ add_executable(hyprcapture-ui
   src/audio/echo_source.cpp
   src/audio/aec_policy.cpp
   src/ui/main.cpp
+  src/ui/session_lock_guard.cpp
   src/ui/clipboard_utils.cpp
   src/ui/capture_overlay.cpp
   src/ui/scroll_stitcher.cpp
@@ -218,6 +220,9 @@ install(PROGRAMS scripts/install-aec.sh DESTINATION ${CMAKE_INSTALL_BINDIR} RENA
 install(FILES resources/aec/DTLN-LICENSE.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/hyprcapture)
 
 if(BUILD_TESTING)
+  add_executable(hyprcapture-session-lock-test tests/session_lock_test.cpp)
+  target_include_directories(hyprcapture-session-lock-test PRIVATE src)
+  add_test(NAME session-lock COMMAND hyprcapture-session-lock-test)
   add_library(hyprcapture-fake-tflite SHARED tests/aec_fake_tflite.cpp)
   add_executable(hyprcapture-aec-spa-test tests/aec_spa_test.cpp)
   target_link_libraries(hyprcapture-aec-spa-test PRIVATE PkgConfig::PIPEWIRE ${CMAKE_DL_LIBS})
@@ -231,6 +236,11 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-aec-policy-test PRIVATE Qt6::Core)
   add_test(NAME aec-policy COMMAND hyprcapture-aec-policy-test)
   find_package(Qt6 REQUIRED COMPONENTS Test)
+  add_executable(hyprcapture-session-lock-guard-test tests/session_lock_guard_test.cpp src/ui/session_lock_guard.cpp)
+  target_include_directories(hyprcapture-session-lock-guard-test PRIVATE src)
+  target_link_libraries(hyprcapture-session-lock-guard-test PRIVATE Qt6::Widgets LayerShellQt::Interface)
+  add_test(NAME session-lock-guard COMMAND hyprcapture-session-lock-guard-test)
+  set_tests_properties(session-lock-guard PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=;QT_LINUX_ACCESSIBILITY_ALWAYS_ON=0;DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/hyprcapture-tests-no-bus" TIMEOUT 10)
   add_executable(hyprcapture-annotation-editor-test tests/annotation_editor_test.cpp src/ui/annotation_editor.cpp)
   target_include_directories(hyprcapture-annotation-editor-test PRIVATE src)
   target_link_libraries(hyprcapture-annotation-editor-test PRIVATE Qt6::Widgets Qt6::Test Qt6::Svg)

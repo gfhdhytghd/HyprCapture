@@ -1,5 +1,6 @@
 #include "plugin/artifact_capture.hpp"
 #include "plugin/hymission_capture.hpp"
+#include "plugin/session_lock.hpp"
 
 #include "plugin/session_launcher.hpp"
 #include "plugin/timing.hpp"
@@ -1653,6 +1654,10 @@ void queueRealBackgroundCapturePasses(std::vector<RealBackgroundCaptureState>& s
 }
 
 void hkRenderTextureInternal(void* openGLThisptr, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
+    if (sessionLocked()) {
+        if (g_renderTextureInternalOriginal) g_renderTextureInternalOriginal(openGLThisptr, texture, box, data);
+        return;
+    }
     auto* state = g_realBackgroundRenderHookContext ? g_realBackgroundRenderHookContext->activeBlurState : nullptr;
     const bool captureAfterDraw = isActiveBlurBackgroundPass(state, data);
 
@@ -1680,6 +1685,10 @@ void hkRenderTextureInternal(void* openGLThisptr, SP<CTexture> texture, const CB
 }
 
 void hkRenderTextureWithBlurInternal(void* openGLThisptr, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
+    if (sessionLocked()) {
+        if (g_renderTextureWithBlurInternalOriginal) g_renderTextureWithBlurInternalOriginal(openGLThisptr, texture, box, data);
+        return;
+    }
     auto* context = g_realBackgroundRenderHookContext;
     auto* state = findRealBackgroundStateForWindow(currentRenderWindow());
 
@@ -2814,7 +2823,7 @@ bool shouldCaptureWindow(const PHLWINDOW& window) {
 }
 
 bool isLiveWindowCaptureTarget(const PHLWINDOW& window) {
-    return window && window->m_isMapped && !window->isHidden() && window->m_workspace;
+    return !sessionLocked() && window && window->m_isMapped && !window->isHidden() && window->m_workspace;
 }
 
 std::vector<PHLWINDOW> windowsInRenderOrder() {
@@ -3691,6 +3700,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
 } // namespace
 
 CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool quick) {
+    if (sessionLocked()) return {};
     LinearCaptureScope linearCapture;
     CaptureSession session;
     session.regionCaptureAvailable = true;
@@ -3859,6 +3869,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
 // Bounded, cursor-free sampling for scrolling capture. Artifacts live beside
 // the private request so cancellation can remove the entire exchange at once.
 LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     const auto json = readPrivateRequestFile(path);
     const auto request = json ? decodeRecordingRequestJson(*json) : std::nullopt;
     if (!request || request->mode != CaptureMode::Region || !g_pCompositor)
@@ -3920,6 +3931,7 @@ LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
 }
 
 LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     LinearCaptureScope linearCapture;
     const auto requestJson = readPrivateRequestFile(path);
     if (!requestJson)
@@ -3997,6 +4009,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
 }
 
 LaunchResult captureExportPipeFromRequestFile(const std::string& path) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     const auto requestJson = readPrivateFifoLine(path);
     if (!requestJson)
         return {.success = false, .error = "invalid export pipe request fifo"};
@@ -4019,6 +4032,7 @@ LaunchResult captureExportPipeFromRequestFile(const std::string& path) {
 }
 
 std::optional<RecordingFrame> captureRecordingFrame(const RecordingFrameRequest& request) {
+    if (sessionLocked()) return std::nullopt;
     if (request.mode == CaptureMode::Window)
         return captureWindowRecordingFrame(request);
 
@@ -4432,6 +4446,7 @@ std::optional<WindowStreamCapturedFrame> captureWindowStreamFrameImpl(const Wind
 }
 
 std::optional<WindowStreamCapturedFrame> captureWindowStreamFrame(const WindowStreamCaptureRequest& request) {
+    if (sessionLocked()) return std::nullopt;
     std::optional<WindowStreamCapturedFrame> completed;
     (void)captureWindowStreamFrameImpl(request, [&completed](WindowStreamCapturedFrame&& frame) { completed = std::move(frame); });
     return completed;
@@ -4480,6 +4495,7 @@ void stopWindowStreamSession() {
 }
 
 void captureWindowStreamDrainTick(SP<CEventLoopTimer> self) {
+    if (sessionLocked()) { stopWindowStreamSession(); return; }
     ScopedTiming drainTiming("window.stream.drain_tick");
     auto* session = g_windowStreamSession.get();
     if (!session || !session->drainTimer || !session->drainPoll.acceptsCallback(session->drainTimer.get() == self.get()))
@@ -4498,6 +4514,7 @@ void captureWindowStreamDrainTick(SP<CEventLoopTimer> self) {
 }
 
 void captureWindowStreamTick(SP<CEventLoopTimer> self) {
+    if (sessionLocked()) { stopWindowStreamSession(); return; }
     ScopedTiming tickTiming("window.stream.tick");
     const auto tickStartedAt = Time::steadyNow();
     auto* session = g_windowStreamSession.get();
@@ -4590,6 +4607,7 @@ void captureWindowStreamTick(SP<CEventLoopTimer> self) {
 }
 
 int onWindowGpuNotification(int, uint32_t, void* data) {
+    if (sessionLocked()) return 0;
     auto* session = static_cast<WindowStreamSession*>(data);
     if (g_windowStreamSession.get() != session || !session->gpuSender || !session->timer)
         return 0;
@@ -4607,6 +4625,7 @@ bool isValidWindowStreamStartRequest(const std::string& json) {
 }
 
 LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     const auto raw = readPrivateRequestFile(path);
     if (!raw)
         return {.success = false, .error = "invalid window stream request file"};
@@ -4628,6 +4647,7 @@ LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
     session->targetWindow = targetWindow;
     session->targetSurface = targetWindow->wlSurface() ? targetWindow->wlSurface()->resource() : nullptr;
     const auto revokeTarget = [target = session.get()] {
+        if (sessionLocked()) return;
         // Do not destroy the session from inside a compositor signal callback.
         // The next capture/drain tick retires timers and outstanding exports.
         target->targetRevoked = true;
@@ -4657,6 +4677,7 @@ LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
         if (!notificationWindow)
             return {.success = false, .error = "GPU window stream target disappeared"};
         session->gpuTargetUnmapNotification = notificationWindow->m_events.unmap.listen([target = session.get()] {
+            if (sessionLocked()) return;
             if (target->timer)
                 target->timer->updateTimeout(std::chrono::microseconds(1));
         });
@@ -4755,6 +4776,13 @@ void cleanupCompositorArtifacts(const CaptureSession& session) {
         std::error_code ec;
         std::filesystem::remove(parent, ec);
     }
+}
+
+void abortArtifactCapture() {
+    stopScrollSession();
+    stopWindowStreamSession();
+    shutdownExportPipeWriters();
+    resetRecordingCaptureState();
 }
 
 void shutdownArtifactCapture() {

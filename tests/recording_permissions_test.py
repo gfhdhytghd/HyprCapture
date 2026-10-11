@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from session_lock_fixture import SessionLockFixture
 
 helper = str(Path(sys.argv[1]).resolve())
 if not shutil.which('ffmpeg'):
@@ -37,7 +38,7 @@ def observe(args, outputs, env):
                 process.kill()
                 process.wait()
 
-with tempfile.TemporaryDirectory(prefix='hyprcapture-recording-permissions-') as folder:
+with SessionLockFixture() as lock, tempfile.TemporaryDirectory(prefix='hyprcapture-recording-permissions-') as folder:
     root = Path(folder)
     root.chmod(0o755)
     source = root / 'source.mkv'
@@ -45,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-recording-permissions-') as
                     'testsrc2=s=640x360:r=24:d=4', '-c:v', 'ffv1', str(source)], check=True)
     source.chmod(0o600)
     output = root / 'output.apng'
-    env = dict(os.environ, QT_QPA_PLATFORM='offscreen', QT_WAYLAND_SHELL_INTEGRATION='',
+    env = dict(lock.env, QT_QPA_PLATFORM='offscreen', QT_WAYLAND_SHELL_INTEGRATION='',
                QT_QPA_PLATFORMTHEME='', QT_STYLE_OVERRIDE='Fusion')
     for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'DBUS_SESSION_BUS_ADDRESS'):
         env.pop(key, None)

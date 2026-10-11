@@ -3,6 +3,7 @@
 #include "shared/config.hpp"
 #include "ui/overlay_paint.hpp"
 #include "ui/scroll_stitcher.hpp"
+#include "ui/session_lock_guard.hpp"
 
 #include <QImage>
 #include <QMainWindow>
@@ -40,7 +41,7 @@ class ScrollCaptureController;
 class HdrBackdrop;
 }
 
-class CaptureOverlay final : public QMainWindow {
+class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::SessionLockParticipant {
     Q_OBJECT
     Q_PROPERTY(double overlayOpacity READ overlayOpacity WRITE setOverlayOpacity)
 
@@ -48,6 +49,7 @@ class CaptureOverlay final : public QMainWindow {
     explicit CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick, bool record, bool recordActive, QString sessionJson, QWidget* parent = nullptr);
     CaptureOverlay(const CaptureOverlay& source, const QRect& overlayGeometry, bool active, QWidget* parent = nullptr);
     ~CaptureOverlay() override;
+    void abortForSessionLock() override;
 
     QScreen* overlayScreen() const;
     hyprcapture::OverlayScope overlayScope() const;

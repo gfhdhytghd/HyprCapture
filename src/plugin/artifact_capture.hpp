@@ -60,5 +60,6 @@ void resetRecordingCaptureState();
 std::string writeCompositorSessionJsonFile(const CaptureSession& session, std::string_view json);
 void cleanupCompositorArtifacts(const CaptureSession& session);
 void shutdownArtifactCapture();
+void abortArtifactCapture();
 
 } // namespace hyprcapture

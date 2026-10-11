@@ -1581,6 +1581,22 @@ CaptureOverlay::~CaptureOverlay() {
     endHymissionCaptureInputSuppression();
 }
 
+void CaptureOverlay::abortForSessionLock() {
+    m_finishing = true;
+    clearPendingConfirm();
+    m_dragStart = {};
+    m_dragEnd = {};
+    if (m_scrollController) {
+        auto* controller = std::exchange(m_scrollController, nullptr);
+        controller->disconnect(this);
+        delete controller; // Stop/join the stitch worker, without finish/export.
+    }
+    m_scrolling = false;
+    endHymissionCaptureInputSuppression();
+    setEnabled(false);
+    hide();
+}
+
 QScreen* CaptureOverlay::overlayScreen() const {
     return screenForOverlayGeometry(m_overlayLogicalGeometry);
 }

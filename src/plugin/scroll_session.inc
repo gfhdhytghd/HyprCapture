@@ -46,6 +46,11 @@ ScrollLayerFn g_scrollLayerOriginal = nullptr;
 bool g_scrollRendering = false;
 void hkScrollLayer(void *renderer, PHLLS layer, PHLMONITOR monitor,
                    const Time::steady_tp &time, bool popups, bool lockscreen) {
+  if (sessionLocked()) {
+    if (g_scrollLayerOriginal)
+      g_scrollLayerOriginal(renderer, layer, monitor, time, popups, lockscreen);
+    return;
+  }
   if (g_scrollRendering && g_scrollSession && layer &&
       layer->getPID() == g_scrollSession->owner &&
       layer->m_namespace.starts_with("hyprcapture-"))
@@ -115,6 +120,7 @@ bool scrollTargetAlive(ScrollSession &s) {
   return scrollContains(monitorRect(s.monitor), s.target);
 }
 void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
+  if (sessionLocked()) return;
   auto window = s.window
                     ? s.window
                     : Desktop::viewState()->hitTest().windowAt(
@@ -132,6 +138,8 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     s.failed = true;
     return;
   }
+  const auto previousFocus = g_pSeatManager->m_state.pointerFocus;
+  const auto previousLocal = g_pSeatManager->m_lastLocalCoords;
   s.inputRoot = window->wlSurface()->resource();
   s.inputSurface = surface;
   const bool positionPointer = !input.native || g_pSeatManager->m_state.pointerFocus != surface;
@@ -149,8 +157,7 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     const bool layer = g_pInputManager->m_lastFocusOnLS;
     g_pInputManager->m_lastFocusOnLS = false;
     g_pInputManager->onMouseWheel(input.event, input.pointer);
-    // Live events already have a device frame boundary. Flushing here splits
-    // the two axis-stop events of a touchpad gesture and breaks Chrome's fling.
+    // Restoring focus below flushes the target frame before leaving it.
     g_pInputManager->m_lastFocusOnLS = layer;
     s.replaying = false;
   } else {
@@ -160,11 +167,15 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
         input.event.source, input.event.relativeDirection);
     g_pSeatManager->sendPointerFrame();
   }
-  // Keep pointer focus through incidental motion during a touchpad gesture.
-  // Clicks and motion outside the capture restore normal overlay hit testing.
+  // Never leave ordinary window focus installed between events: a lock can
+  // arrive before another motion/button event restores overlay hit testing.
+  if (positionPointer && !sessionLocked()) {
+    g_pSeatManager->m_lastLocalCoords = previousLocal;
+    g_pSeatManager->setPointerFocus(previousFocus.lock(), previousLocal);
+  }
 }
 void scrollInput(ScrollSession &s, ScrollInput input) {
-  if (s.failed || s.paused)
+  if (sessionLocked() || s.failed || s.paused)
     return;
   if (!s.active) {
     s.active = true;
@@ -183,6 +194,7 @@ void scrollInput(ScrollSession &s, ScrollInput input) {
     scrollDeliver(s, input);
 }
 int scrollControlReadable(int fd, uint32_t mask, void *data) {
+  if (sessionLocked()) return 0;
   auto &s = *static_cast<ScrollSession *>(data);
   if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
     s.failed = true;
@@ -301,6 +313,7 @@ int scrollControlReadable(int fd, uint32_t mask, void *data) {
   return 0;
 }
 void scrollTick(SP<CEventLoopTimer> timer) {
+  if (sessionLocked()) { stopScrollSession(); return; }
   auto *s = g_scrollSession.get();
   if (!s || s->timer != timer)
     return;
@@ -496,6 +509,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
 } // namespace
 
 LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
+  if (sessionLocked()) return {.success = false, .error = "session locked"};
   const auto raw = readPrivateRequestFile(path);
   if (!raw || g_scrollSession || !g_pEventLoopManager || !g_pSeatManager)
     return {.success = false, .error = "scroll session unavailable"};
@@ -574,14 +588,15 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
     auto *ptr = s.get();
     if (s->window)
       s->unmap = s->window->m_events.unmap.listen([ptr] {
+        if (sessionLocked()) return;
         ptr->paused = true;
         scrollNotify(*ptr, {{"event", "stopped"},
                             {"reason", "Target closed; finish or cancel"}});
       });
     s->button = Event::bus()->m_events.input.mouse.button.listen(
         [ptr](IPointer::SButtonEvent, Event::SCallbackInfo &) {
-          // A scroll frame keeps target focus until the receiver consumes it.
-          // A later click must re-hit-test the annotation layer first.
+          if (sessionLocked()) return;
+          // Re-hit-test the annotation layer before a later click.
           if (ptr->active && !ptr->replaying && !ptr->failed) {
             ptr->refocusing = true;
             g_pInputManager->simulateMouseMovement();
@@ -590,6 +605,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
         });
     s->motion = Event::bus()->m_events.input.mouse.move.listen(
         [ptr](Vector2D, Event::SCallbackInfo &info) {
+          if (sessionLocked()) return;
           if (!ptr->active || ptr->replaying || ptr->refocusing || ptr->failed ||
               ptr->paused || g_pInputManager->hasHeldButtons())
             return;
@@ -612,6 +628,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
         });
     s->axis = Event::bus()->m_events.input.mouse.axis.listen(
         [ptr](IPointer::SAxisEvent e, Event::SCallbackInfo &info) {
+          if (sessionLocked()) return;
           if (ptr->replaying || ptr->failed || ptr->paused ||
               (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_CTRL) ||
               g_pInputManager->hasHeldButtons())
