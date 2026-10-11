@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QPainter>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QPushButton>
 #include <QScreen>
 #include <QTest>
@@ -117,6 +118,13 @@ int main(int argc, char **argv) {
   if (!screen)
     return 77;
   QProcess child;
+  const bool checkGestureFocus = qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_POINTER_MOTION") &&
+                                 qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_NATIVE_FINGER");
+  if (checkGestureFocus) {
+    auto environment = QProcessEnvironment::systemEnvironment();
+    environment.insert("WAYLAND_DEBUG", "client");
+    child.setProcessEnvironment(environment);
+  }
   child.setStandardOutputFile(dir + "/fixture.log");
   child.setStandardErrorFile(dir + "/fixture-wire.log");
   const QString gtkFixture = qEnvironmentVariable("HYPRCAPTURE_SCROLL_GTK_FIXTURE");
@@ -634,6 +642,17 @@ int main(int argc, char **argv) {
     });
   });
   const int result = app.exec();
+  if (passed && checkGestureFocus) {
+    QFile wire(dir + "/fixture-wire.log");
+    wire.open(QIODevice::ReadOnly);
+    const auto events = wire.readAll();
+    const auto begin = events.indexOf(".axis_source(1)");
+    const auto end = events.indexOf(".axis_stop(", begin);
+    if (begin < 0 || end < begin || events.mid(begin, end - begin).contains(".leave(")) {
+      std::cerr << "pointer motion interrupted the native touchpad gesture" << std::endl;
+      passed = false;
+    }
+  }
   if (passed && qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_HDR") &&
       !qEnvironmentVariableIsSet("HYPRCAPTURE_SCROLL_CANCEL")) {
     const auto exported = QImage(dir + "/exported.png").convertToFormat(QImage::Format_ARGB32);

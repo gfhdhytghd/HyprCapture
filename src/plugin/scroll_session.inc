@@ -17,7 +17,7 @@ struct ScrollSession {
   PHLMONITOR monitor;
   PHLWINDOW window;
   SP<CWLSurfaceResource> surface;
-  WP<CWLSurfaceResource> inputRoot;
+  WP<CWLSurfaceResource> inputRoot, inputSurface;
   Rect windowGeometry;
   double scale = 1;
   int transform = 0, control = -1;
@@ -29,10 +29,10 @@ struct ScrollSession {
   std::unique_ptr<WindowStreamSender> sender;
   WindowStreamPboReadbackState pbo;
   SP<CEventLoopTimer> timer;
-  CHyprSignalListener axis, button, unmap;
+  CHyprSignalListener axis, motion, button, unmap;
   std::uint64_t sequence = 0;
   bool active = false, baseline = false, released = false, replaying = false,
-       failed = false, paused = false;
+       failed = false, paused = false, refocusing = false;
   Time::steady_tp started = Time::steadyNow();
 };
 std::unique_ptr<ScrollSession> g_scrollSession;
@@ -78,6 +78,7 @@ void stopScrollSession() {
   if (!s)
     return;
   s->axis.reset();
+  s->motion.reset();
   s->button.reset();
   s->unmap.reset();
   if (s->controlSource)
@@ -129,6 +130,7 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     return;
   }
   s.inputRoot = window->wlSurface()->resource();
+  s.inputSurface = surface;
   g_pSeatManager->setPointerFocus(surface, local);
   g_pSeatManager->sendPointerMotion(input.event.timeMs, local);
   // GTK 3 flushes either pointer motion or scroll data for a wl_pointer.frame.
@@ -152,7 +154,8 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
         input.event.source, input.event.relativeDirection);
     g_pSeatManager->sendPointerFrame();
   }
-  // Pointer motion naturally restores overlay focus on the next event.
+  // Keep pointer focus through incidental motion during a touchpad gesture.
+  // Clicks and motion outside the capture restore normal overlay hit testing.
 }
 void scrollInput(ScrollSession &s, ScrollInput input) {
   if (s.failed || s.paused)
@@ -532,8 +535,33 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
         [ptr](IPointer::SButtonEvent, Event::SCallbackInfo &) {
           // A scroll frame keeps target focus until the receiver consumes it.
           // A later click must re-hit-test the annotation layer first.
-          if (ptr->active && !ptr->replaying && !ptr->failed)
+          if (ptr->active && !ptr->replaying && !ptr->failed) {
+            ptr->refocusing = true;
             g_pInputManager->simulateMouseMovement();
+            ptr->refocusing = false;
+          }
+        });
+    s->motion = Event::bus()->m_events.input.mouse.move.listen(
+        [ptr](Vector2D, Event::SCallbackInfo &info) {
+          if (!ptr->active || ptr->replaying || ptr->refocusing || ptr->failed ||
+              ptr->paused || g_pInputManager->hasHeldButtons())
+            return;
+          const auto previousSurface = ptr->inputSurface.lock();
+          if (!previousSurface || g_pSeatManager->m_state.pointerFocus != previousSurface)
+            return;
+          const auto point = g_pInputManager->getMouseCoordsInternal();
+          if (!scrollContains(ptr->target, {point.x, point.y, .01, .01})) return;
+          for (const auto &r : ptr->excluded)
+            if (scrollContains(r, {point.x, point.y, .01, .01})) return;
+          const auto window = ptr->window ? ptr->window : Desktop::viewState()->hitTest().windowAt(
+              point, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+          if (!isLiveWindowCaptureTarget(window)) return;
+          Vector2D local;
+          const auto surface = Desktop::viewState()->hitTest().windowSurfaceAt(point, window, local);
+          if (surface != previousSurface) return;
+          info.cancelled = true;
+          g_pSeatManager->sendPointerMotion(Time::millis(Time::steadyNow()), local);
+          g_pSeatManager->sendPointerFrame();
         });
     s->axis = Event::bus()->m_events.input.mouse.axis.listen(
         [ptr](IPointer::SAxisEvent e, Event::SCallbackInfo &info) {
