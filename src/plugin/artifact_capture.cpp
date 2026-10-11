@@ -46,6 +46,7 @@
 #include <hyprland/src/render/gl/GLTexture.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/pass/PassElement.hpp>
+#include <hyprland/src/render/pass/SurfacePassElement.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #undef protected
 #undef private
@@ -1593,15 +1594,12 @@ struct RealBackgroundRenderHookContext {
     RealBackgroundCaptureState*             activeBlurState = nullptr;
 };
 
-using RenderWindowFn = void (*)(void*, PHLWINDOW, PHLMONITOR, const Time::steady_tp&, bool, eRenderPassMode, bool, bool);
 using RenderTextureInternalFn = void (*)(void*, SP<CTexture>, const CBox&, const CHyprOpenGLImpl::STextureRenderData&);
 using RenderTextureWithBlurInternalFn = void (*)(void*, SP<CTexture>, const CBox&, const CHyprOpenGLImpl::STextureRenderData&);
 
 RealBackgroundRenderHookContext* g_realBackgroundRenderHookContext = nullptr;
-RenderWindowFn                   g_renderWindowOriginal = nullptr;
 RenderTextureInternalFn          g_renderTextureInternalOriginal = nullptr;
 RenderTextureWithBlurInternalFn  g_renderTextureWithBlurInternalOriginal = nullptr;
-CFunctionHook*                   g_realBackgroundRenderWindowHook = nullptr;
 CFunctionHook*                   g_realBackgroundRenderTextureInternalHook = nullptr;
 CFunctionHook*                   g_realBackgroundRenderTextureWithBlurInternalHook = nullptr;
 std::optional<RealBackgroundRecordingCache> g_realBackgroundRecordingCache;
@@ -1633,28 +1631,25 @@ bool isActiveBlurBackgroundPass(RealBackgroundCaptureState* state, const CHyprOp
     return window && state->window && window.get() == state->window.get();
 }
 
-void hkRenderWindow(void* rendererThisptr,
-                    PHLWINDOW window,
-                    PHLMONITOR monitor,
-                    const Time::steady_tp& time,
-                    bool decorate,
-                    eRenderPassMode mode,
-                    bool ignorePosition,
-                    bool standalone) {
-    if (g_realBackgroundRenderHookContext && g_realBackgroundRenderHookContext->states && monitor && g_realBackgroundRenderHookContext->monitor &&
-        monitor.get() == g_realBackgroundRenderHookContext->monitor.get() && g_pHyprRenderer) {
-        for (auto& state : *g_realBackgroundRenderHookContext->states) {
-            if (state.queued || state.captured || !state.window || !window || state.window.get() != window.get())
+// Inspect the completed pass queue instead of hooking renderWindow. Hymission
+// Stage also hooks that function, and Hyprland rejects a second hook on it.
+void queueRealBackgroundCapturePasses(std::vector<RealBackgroundCaptureState>& states) {
+    auto& passes = g_pHyprRenderer->m_renderPass.m_passElements;
+    for (std::size_t i = 0; i < passes.size(); ++i) {
+        const auto* surface = dynamic_cast<const CSurfacePassElement*>(passes[i].element.get());
+        if (!surface || !surface->m_data.pWindow)
+            continue;
+        for (auto& state : states) {
+            if (state.queued || state.captured || state.window != surface->m_data.pWindow)
                 continue;
-
             state.queued = true;
-            g_pHyprRenderer->m_renderPass.add(makeUnique<RealBackgroundCapturePass>(&state));
+            Render::CRenderPass::SPassElementData capture;
+            capture.element = makeUnique<RealBackgroundCapturePass>(&state);
+            passes.insert(passes.begin() + i, std::move(capture));
+            ++i; // Skip the capture and keep the original surface in order.
             break;
         }
     }
-
-    if (g_renderWindowOriginal)
-        g_renderWindowOriginal(rendererThisptr, window, monitor, time, decorate, mode, ignorePosition, standalone);
 }
 
 void hkRenderTextureInternal(void* openGLThisptr, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
@@ -2552,12 +2547,6 @@ void* findFunctionByDemangledName(const std::string& lookupName, const std::stri
     return nullptr;
 }
 
-void* findRenderWindowFunction() {
-    if (auto* renderer = findFunctionByDemangledName("renderWindow", "IHyprRenderer::renderWindow("))
-        return renderer;
-    return findFunctionByDemangledName("renderWindow", "CHyprRenderer::renderWindow(");
-}
-
 void* findRenderTextureInternalFunction() {
     return findFunctionByDemangledName("renderTextureInternal", "CHyprOpenGLImpl::renderTextureInternal(");
 }
@@ -2576,35 +2565,17 @@ void removeRealBackgroundHook(CFunctionHook*& hook) {
 
 void shutdownRealBackgroundHooks() {
     g_realBackgroundRenderHookContext = nullptr;
-    g_renderWindowOriginal = nullptr;
     g_renderTextureInternalOriginal = nullptr;
     g_renderTextureWithBlurInternalOriginal = nullptr;
     removeRealBackgroundHook(g_realBackgroundRenderTextureWithBlurInternalHook);
     removeRealBackgroundHook(g_realBackgroundRenderTextureInternalHook);
-    removeRealBackgroundHook(g_realBackgroundRenderWindowHook);
 }
 
 bool ensureRealBackgroundHooks() {
-    if (g_realBackgroundRenderWindowHook && g_renderWindowOriginal)
+    if (g_realBackgroundRenderTextureInternalHook && g_realBackgroundRenderTextureWithBlurInternalHook)
         return true;
 
     shutdownRealBackgroundHooks();
-
-    void* renderWindowSource = findRenderWindowFunction();
-    if (!renderWindowSource)
-        return false;
-
-    g_realBackgroundRenderWindowHook = HyprlandAPI::createFunctionHook(g_pluginHandle, renderWindowSource, reinterpret_cast<void*>(&hkRenderWindow));
-    if (!g_realBackgroundRenderWindowHook || !g_realBackgroundRenderWindowHook->hook()) {
-        shutdownRealBackgroundHooks();
-        return false;
-    }
-
-    g_renderWindowOriginal = reinterpret_cast<RenderWindowFn>(g_realBackgroundRenderWindowHook->m_original);
-    if (!g_renderWindowOriginal) {
-        shutdownRealBackgroundHooks();
-        return false;
-    }
 
     void* renderTextureInternalSource = findRenderTextureInternalFunction();
     void* renderTextureWithBlurInternalSource = findRenderTextureWithBlurInternalFunction();
@@ -2706,6 +2677,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
     Event::bus()->m_events.render.stage.emit(RENDER_PRE);
     g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     g_pHyprRenderer->renderWorkspace(monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
+    queueRealBackgroundCapturePasses(states);
     g_pHyprRenderer->m_renderData.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     clearHookContext();
@@ -2790,6 +2762,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
         ScopedTiming timing("realbg.render_workspace");
         g_pHyprRenderer->renderWorkspace(monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
     }
+    queueRealBackgroundCapturePasses(states);
     g_pHyprRenderer->m_renderData.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     clearHookContext();
