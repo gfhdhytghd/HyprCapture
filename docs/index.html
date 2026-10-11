@@ -167,7 +167,7 @@
     <h1>HyprCapture</h1>
     <p class="lede">Release history of the HyprCapture screenshot and screen recording plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
     <ul class="actions">
-      <li><a class="button primary" href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.4.0-0.56.2">Latest: v0.4.0-0.56.2</a></li>
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.4.1-0.56.2">Latest: v0.4.1-0.56.2</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture#installation">Installation</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture/releases">All GitHub releases</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture">Source code</a></li>
@@ -178,6 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
+      <li><a href="#v0-4-1-0-56-2">0.4.1 <span>2026-10-11</span></a></li>
       <li><a href="#v0-4-0-0-56-2">0.4.0 <span>2026-10-11</span></a></li>
       <li><a href="#v0-3-0-0-56-2">0.3.0 <span>2026-10-08</span></a></li>
       <li><a href="#v0-2-8-0-56-2">0.2.8 <span>2026-09-06</span></a></li>
@@ -195,10 +196,33 @@
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
       <li>
+        <article class="entry" id="v0-4-1-0-56-2" aria-labelledby="v0-4-1-0-56-2-title">
+          <div class="entry-head">
+            <h2 id="v0-4-1-0-56-2-title"><a href="#v0-4-1-0-56-2">0.4.1</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-11T21:35:51Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.4.1-0.56.2</code></div>
+          </div>
+          <p class="headline">Session-lock safety, sturdier scrolling captures, and faster HDR overlays</p>
+          <h3>Security</h3>
+          <ul>
+            <li>Locking the session now stops HyprCapture from observing or redirecting input: every input hook, dispatcher and Lua entry yields to the lock screen, scrolling sessions are aborted without moving pointer focus, open selection and editor helpers close, and active recordings are stopped and saved. Nothing resumes after unlocking.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Scrolling screenshots handle animated and fixed page elements: motion is estimated from several regions, seams avoid changing areas, and uncertain frames keep the existing result instead of corrupting it.</li>
+            <li>Window highlights in the editor are clipped to the window&#x27;s rounded frame.</li>
+          </ul>
+          <h3>Faster</h3>
+          <ul>
+            <li>HDR backdrop conversion no longer delays the overlay&#x27;s first paint.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.4.1-0.56.2">Release notes for v0.4.1-0.56.2 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.4.0-0.56.2...v0.4.1-0.56.2">Compare with v0.4.0-0.56.2</a></div>
+        </article>
+      </li>
+      <li>
         <article class="entry" id="v0-4-0-0-56-2" aria-labelledby="v0-4-0-0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-4-0-0-56-2-title"><a href="#v0-4-0-0-56-2">0.4.0</a></h2>
-            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-11T20:41:06Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.4.0-0.56.2</code></div>
+            <div class="meta"><time datetime="2026-10-11T20:41:06Z">Oct 11, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.4.0-0.56.2</code></div>
           </div>
           <p class="headline">HDR screenshots with gain-map HEIC, native HDR editing, and Omarchy installation</p>
           <h3>HDR screenshots and editing</h3>

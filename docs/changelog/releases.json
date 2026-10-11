@@ -4,6 +4,34 @@
   "site_url": "https://gfhdhytghd.github.io/HyprCapture/",
   "releases": [
     {
+      "tag": "v0.4.1-0.56.2",
+      "version": "0.4.1",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-11T21:35:51Z",
+      "headline": "Session-lock safety, sturdier scrolling captures, and faster HDR overlays",
+      "sections": [
+        {
+          "title": "Security",
+          "items": [
+            "Locking the session now stops HyprCapture from observing or redirecting input: every input hook, dispatcher and Lua entry yields to the lock screen, scrolling sessions are aborted without moving pointer focus, open selection and editor helpers close, and active recordings are stopped and saved. Nothing resumes after unlocking."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Scrolling screenshots handle animated and fixed page elements: motion is estimated from several regions, seams avoid changing areas, and uncertain frames keep the existing result instead of corrupting it.",
+            "Window highlights in the editor are clipped to the window's rounded frame."
+          ]
+        },
+        {
+          "title": "Faster",
+          "items": [
+            "HDR backdrop conversion no longer delays the overlay's first paint."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.4.0-0.56.2",
       "version": "0.4.0",
       "hyprland": "0.56.2",
