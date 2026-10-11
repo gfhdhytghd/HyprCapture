@@ -60,13 +60,13 @@ bool validWindowStreamFrameMetadata(const WindowStreamFrameMetadata& metadata) {
     if (metadata.sequence == 0 || metadata.geometryEpoch == 0 || !std::isfinite(metadata.logicalX) || !std::isfinite(metadata.logicalY) || !std::isfinite(metadata.logicalWidth) ||
         !std::isfinite(metadata.logicalHeight) || metadata.logicalWidth <= 0.0 || metadata.logicalHeight <= 0.0 ||
         !std::isfinite(metadata.logicalX + metadata.logicalWidth) || !std::isfinite(metadata.logicalY + metadata.logicalHeight) ||
-        metadata.pixelWidth == 0 || metadata.pixelHeight == 0 || metadata.format != WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN)
+        metadata.pixelWidth == 0 || metadata.pixelHeight == 0 || (metadata.format != WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN && metadata.format != WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR))
         return false;
 
     const auto minimumStride = static_cast<std::uint64_t>(metadata.pixelWidth) * RGBA_BYTES_PER_PIXEL;
     if (metadata.stride != minimumStride)
         return false;
-    const auto expectedBytes = static_cast<std::uint64_t>(metadata.stride) * metadata.pixelHeight;
+    const auto expectedBytes = static_cast<std::uint64_t>(metadata.stride) * metadata.pixelHeight * (metadata.format == WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR ? 3 : 1);
     return expectedBytes <= MAX_WINDOW_STREAM_PAYLOAD_BYTES && metadata.payloadBytes == expectedBytes;
 }
 

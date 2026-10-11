@@ -137,7 +137,7 @@ void registerConfigValues() {
     addStringConfig("window_background", "Window capture background mode", "follow-system");
     addStringConfig("window_border", "Window capture border policy", "keep");
     addStringConfig("window_shadow", "Window capture shadow policy", "keep");
-    addStringConfig("notification_backend", "Backend for non-error notifications (hyprland or system)", "hyprland");
+    addStringConfig("notification_backend", "Backend for non-error notifications (hyprland or system)", "system");
     addBoolConfig("screenshot_notification", "Show a notification after a successful screenshot", true);
     addStringConfig("notification_title_template", "Screenshot notification title template", "Screenshot captured");
     addStringConfig("notification_body_template", "Screenshot notification body template", "Saved {filename} ({window_title})");
@@ -149,7 +149,7 @@ void registerConfigValues() {
     addBoolConfig("remember_settings", "Restore the previous interactive capture settings", false);
     addBoolConfig("allow_quick", "Enable no-confirmation quick capture calls", false);
     addBoolConfig("confirm_before_capture", "Require explicit confirmation after target selection for normal open captures", false);
-    addBoolConfig("fusion_mode", "Fuse region and window interactions in one overlay", false);
+    addBoolConfig("fusion_mode", "Fuse region and window interactions in one overlay", true);
     addBoolConfig("fushion_mode", "Legacy alias for fusion_mode", false);
     addBoolConfig("capture_fullscreen_clients_as_monitor", "Capture a fullscreen client as its whole monitor in window and fusion modes", false);
     addBoolConfig("dynamic_window_metadata", "Use capture-aware window metadata in screenshot filename templates", true);
@@ -225,7 +225,7 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.rememberSettings = configBool("remember_settings", defaults.rememberSettings);
     defaults.allowQuick = configBool("allow_quick", defaults.allowQuick);
     defaults.confirmBeforeCapture = configBool("confirm_before_capture", defaults.confirmBeforeCapture);
-    defaults.fushionMode = configBool("fusion_mode", defaults.fushionMode) || configBool("fushion_mode", defaults.fushionMode);
+    defaults.fushionMode = configBool("fusion_mode", defaults.fushionMode) || configBool("fushion_mode", false);
     defaults.captureFullscreenClientsAsMonitor =
         configBool("capture_fullscreen_clients_as_monitor", defaults.captureFullscreenClientsAsMonitor);
     defaults.dynamicWindowMetadata = configBool("dynamic_window_metadata", defaults.dynamicWindowMetadata);
@@ -385,7 +385,7 @@ SDispatchResult dispatchWindowStreamStop(const std::string& args) {
 }
 
 SDispatchResult dispatchCancel(const std::string&) {
-    return {.success = true};
+    return dispatchResult(hyprcapture::cancelCaptureHelpers());
 }
 
 int luaDispatchResult(lua_State* L, const SDispatchResult& result) {

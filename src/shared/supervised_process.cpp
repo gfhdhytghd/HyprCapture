@@ -30,7 +30,11 @@ SupervisedProcess spawnSupervisedProcess(const std::string& shell, const std::ve
     // Group stop signals target both the recorder and this shell. Catch them
     // here so the shell can report the recorder's result even when it dies by
     // signal. Do not ignore them: ignored dispositions survive exec in the child.
-    const std::string script = std::string(ownProcessGroup ? "trap ':' INT TERM; " : "") +
+    // Apply the private creation policy in the child before the encoder runs.
+    // Changing umask in the compositor would race its other threads, and a
+    // chmod after encoding leaves the growing recording readable meanwhile.
+    const std::string script = std::string("umask 077 || exit 125; ") +
+        (ownProcessGroup ? "trap ':' INT TERM; " : "") +
         "\"$@\" 3>&-; result=$?; printf '%s\\n' \"$result\" >&3; exit \"$result\"";
     std::vector<std::string> command{shell, "-c", script,
                                      "hyprcapture-supervisor"};

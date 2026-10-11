@@ -7,6 +7,7 @@
 #include "ui/i18n.hpp"
 #include "ui/mapped_image.hpp"
 #include <QCloseEvent>
+#include <QColorSpace>
 #include <QFile>
 #include <QGuiApplication>
 #include <QHBoxLayout>
@@ -236,6 +237,7 @@ void ScrollCaptureController::start() {
       {"socketPath", QString::fromLocal8Bit(socketPath)},
       {"controlPath", controlPath},
       {"windowAddress", m_windowAddress},
+      {"hdr", m_captureHdr},
       {"rect", QJsonArray{m_capture.x(), m_capture.y(), m_capture.width(),
                           m_capture.height()}}};
   QFile file(m_requestPath);
@@ -303,7 +305,7 @@ void ScrollCaptureController::readFrames() {
           descriptors.push_back(fds[i]);
       }
     const auto metadata = decodeWindowStreamFrameHeader(header, bytes);
-    QImage frame;
+    QImage frame, hdr;
     if (metadata && descriptors.size() == 1 &&
         !(message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) &&
         metadata->sequence > m_sequence &&
@@ -314,8 +316,15 @@ void ScrollCaptureController::readFrames() {
       QFile file;
       if (seals >= 0 && (seals & required) == required &&
           file.open(descriptors[0], QIODevice::ReadOnly,
-                    QFileDevice::DontCloseHandle))
-        frame = mapRawRgba(file, metadata->pixelWidth, metadata->pixelHeight);
+                    QFileDevice::DontCloseHandle)) {
+        if (metadata->format == WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR) {
+          auto planes = mapScrollSdrHdr(file, metadata->pixelWidth, metadata->pixelHeight);
+          frame = std::move(planes.first); hdr = std::move(planes.second);
+          hdr.setColorSpace(QColorSpace::SRgbLinear);
+        } else {
+          frame = mapRawRgba(file, metadata->pixelWidth, metadata->pixelHeight);
+        }
+      }
     }
     for (int fd : descriptors)
       ::close(fd);
@@ -339,13 +348,13 @@ void ScrollCaptureController::readFrames() {
       if (m_background.isNull()) m_backgroundProvider = {};
     }
     m_sequence = metadata->sequence;
-    m_watchdog.start(5000);
+    if (m_active) m_watchdog.start(5000);
     {
       std::lock_guard lock(m_mutex);
       if (m_latest)
         ++m_dropped;
       m_latest = Frame{frame, geometry, metadata->sequence,
-                       metadata->captureMonotonicNs, m_background};
+                       metadata->captureMonotonicNs, m_background, hdr};
     }
     m_ready.notify_one();
   }
@@ -404,8 +413,19 @@ void ScrollCaptureController::readControl() {
     const auto event = j["event"].toString();
     if (event == "begin" && !m_active) {
       m_active = true;
+      m_watchdog.start(5000);
       if (m_editor)
         m_before = m_editor->snapshot();
+      if (m_editor) {
+        if (!m_warmFrame.isNull()) {
+          // Snapshot first: cancel must restore the original editor geometry.
+          // Install native padding before anchoring annotations to the document.
+          m_editor->replaceCaptureImage(m_warmFrame,QRect(m_editor->mapFromGlobal(m_warmGeometry.topLeft()),m_warmGeometry.size()));
+          m_editor->setScrollImage(m_warmFrame,m_layout,true);
+          m_editorPrepared = true;
+        }
+        m_editor->setLiveScrollPresentation(true);
+      }
       show();
       raise();
       exclude(m_exclusions);
@@ -458,7 +478,9 @@ void ScrollCaptureController::restoreAnnotationsIfReady() {
 void ScrollCaptureController::work(std::stop_token stopToken) {
   cv::setNumThreads(1);
   cv::ocl::setUseOpenCL(false);
-  ScrollStitcher stitcher;
+  ScrollStitcher::Limits limits;
+  if (m_captureHdr) limits.maxPixels = 16LL * 1024 * 1024;
+  ScrollStitcher stitcher(limits);
   QImage candidate;
   bool aligned = false;
   while (!stopToken.stop_requested()) {
@@ -485,18 +507,19 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
       const bool stable = ScrollStitcher::stable(candidate, frame->image);
       candidate = frame->image;
       // Seed the unscrolled baseline immediately, before input is replayed.
-      auto result = stitcher.append(frame->image, original);
+      auto result = stitcher.append(frame->image, original, frame->hdr);
       aligned = result.status == ScrollStitcher::Status::Started ||
                 result.status == ScrollStitcher::Status::Appended ||
                 result.status == ScrollStitcher::Status::Relocated ||
                 result.status == ScrollStitcher::Status::Unchanged;
       auto preview = stitcher.preview({thumbnail::kThumbnailMaxWidth * 4, thumbnail::kThumbnailMaxHeight * 4});
+      const auto hdrPreview = stitcher.preview({thumbnail::kThumbnailMaxWidth * 4, thumbnail::kThumbnailMaxHeight * 4}, true);
       const auto layout = stitcher.layout();
       const int captures = stitcher.frameCount();
       QMetaObject::invokeMethod(
           this,
-          [this, f = *frame, preview, layout, result, captures, stable] {
-            present(f.image, f.geometry, preview, layout, result, captures,
+          [this, f = *frame, preview, hdrPreview, layout, result, captures, stable] {
+            present(f.image, f.geometry, preview, hdrPreview, layout, result, captures,
                     stable, f.sequence, f.timeNs);
           },
           Qt::QueuedConnection);
@@ -504,10 +527,12 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
     if (final) {
       auto image = stitcher.image();
       const auto original = m_windowAddress.isEmpty() ? QImage{} : stitcher.originalImage();
+      const auto hdrPreview = stitcher.preview({thumbnail::kThumbnailMaxWidth * 4, thumbnail::kThumbnailMaxHeight * 4}, true);
       const auto layout = stitcher.layout();
+      const auto hdr = stitcher.hdrImage();
       QMetaObject::invokeMethod(
           this,
-          [this, image, original, layout, aligned] {
+          [this, image, original, hdr, layout, aligned] {
             if (m_done)
               return;
             if (image.isNull()) {
@@ -519,6 +544,7 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
                              "confirmed content"));
             m_layout = layout;
             m_originalResult = original;
+            m_hdrResult = hdr;
             stop();
             m_done = true;
             emit completed(image);
@@ -529,7 +555,7 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
   }
 }
 void ScrollCaptureController::present(QImage frame, QRect geometry,
-                                      QImage preview, ScrollLayout layout,
+                                      QImage preview, QImage hdrPreview, ScrollLayout layout,
                                       ScrollStitcher::Result result,
                                       int captures, bool stable,
                                       quint64 sequence, quint64 timeNs) {
@@ -544,15 +570,23 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
   m_latestCaptureNs = timeNs;
   if (result.status == ScrollStitcher::Status::Started)
     command({{"command", "baseline"}});
+  if (!m_active) {
+    m_layout = layout;
+    m_warmFrame = frame;
+    m_warmGeometry = geometry;
+    return; // A warmed baseline must not change the editor or its history.
+  }
   if (aligned) {
     m_layout = layout;
     m_thumbnail = preview;
     m_finish->setEnabled(true);
     if (m_editor) {
-      if (result.status == ScrollStitcher::Status::Started)
+      if (!m_editorPrepared) {
         m_editor->replaceCaptureImage(
             frame, QRect(m_editor->mapFromGlobal(geometry.topLeft()),
                          geometry.size()));
+        m_editorPrepared = true;
+      }
       m_editor->setScrollImage(frame, layout, true);
       preview = m_editor->annotatedPreview(preview, layout);
     }
@@ -568,6 +602,16 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
     m_preview->setPixmap(pixmap);
     m_preview->setFixedSize(pixmap.deviceIndependentSize().toSize());
     relayoutPreview();
+    if (m_hdrPreviewEnabled && !hdrPreview.isNull()) {
+      if (m_editor) hdrPreview = m_editor->annotatedPreview(hdrPreview, layout);
+      QPainter mark(&hdrPreview);
+      mark.setPen(QPen(QColor::fromRgbF(0.19, 0.42, 0.8), 2));
+      mark.drawRect(QRectF(layout.viewportInImage().x()*sx, layout.viewportInImage().y()*sy, layout.content.width()*sx, layout.content.height()*sy));
+      mark.end();
+      QWidget* top = window(); top->winId();
+      if (!m_hdrPreviewBackdrop) m_hdrPreviewBackdrop = std::make_unique<HdrBackdrop>(top->windowHandle(), true);
+      if (m_hdrPreviewBackdrop->setImage(hdrPreview, QRect(m_preview->mapTo(top, QPoint{}), m_preview->size()), 203)) m_preview->clear();
+    }
     emit progress(QSize(layout.frameSize.width(), layout.outputHeight()),
                   captures);
     setStatus(tr("%1 × %2 · Scroll either way")
@@ -603,6 +647,7 @@ void ScrollCaptureController::relayoutPreview() {
   if (!m_screen) return;
   const QRect card = scrollControlsPlacement(m_capture, {m_screen->geometry()}, size());
   move(parentWidget() ? parentWidget()->mapFromGlobal(card.topLeft()) : card.topLeft());
+  if (m_hdrPreviewBackdrop) m_hdrPreviewBackdrop->setGeometry(QRect(m_preview->mapTo(window(), QPoint{}), m_preview->size()));
   if (m_active) exclude(m_exclusions);
 }
 QRect ScrollCaptureController::previewGeometry() const {
@@ -628,6 +673,7 @@ void ScrollCaptureController::stop() {
   if (m_stopping)
     return;
   m_stopping = true;
+  m_hdrPreviewBackdrop.reset();
   command({{"command", "stop"}});
   m_watchdog.stop();
   m_idle.stop();

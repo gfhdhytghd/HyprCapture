@@ -26,7 +26,7 @@ struct CaptureDefaults {
     WindowBackground windowBackground = WindowBackground::FollowSystem;
     DecorationPolicy windowBorder = DecorationPolicy::Keep;
     DecorationPolicy windowShadow = DecorationPolicy::Keep;
-    NotificationBackend notificationBackend = NotificationBackend::Hyprland;
+    NotificationBackend notificationBackend = NotificationBackend::System;
     bool             save = true;
     bool             clipboard = true;
     bool             showThumbnail = true;
@@ -36,7 +36,7 @@ struct CaptureDefaults {
     bool             rememberSettings = false;
     bool             allowQuick = false;
     bool             confirmBeforeCapture = false;
-    bool             fushionMode = false;
+    bool             fushionMode = true;
     bool             captureFullscreenClientsAsMonitor = false;
     bool             dynamicWindowMetadata = true;
     bool             windowWheelScroll = true;
@@ -98,7 +98,7 @@ DecorationPolicy parseDecorationPolicy(std::string_view value, DecorationPolicy 
 WindowWheelScope parseWindowWheelScope(std::string_view value, WindowWheelScope fallback = WindowWheelScope::Workspace);
 RecordAudio parseRecordAudio(std::string_view value, RecordAudio fallback = RecordAudio::Off);
 RecordWindowBackend parseRecordWindowBackend(std::string_view value, RecordWindowBackend fallback = RecordWindowBackend::Auto);
-NotificationBackend parseNotificationBackend(std::string_view value, NotificationBackend fallback = NotificationBackend::Hyprland);
+NotificationBackend parseNotificationBackend(std::string_view value, NotificationBackend fallback = NotificationBackend::System);
 WatermarkPosition parseWatermarkPosition(std::string_view value, WatermarkPosition fallback = WatermarkPosition::Central);
 std::string normalizeRecordFormat(std::string_view value);
 bool recordFormatIsImageAnimation(std::string_view value);

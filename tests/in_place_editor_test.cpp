@@ -4,6 +4,7 @@
 #include "ui/clipboard_utils.hpp"
 #include "ui/i18n.hpp"
 #include "ui/hdr_image.hpp"
+#include "ui/hdr_thumbnail.hpp"
 #include <QtCore/qfloat16.h>
 #include <QColorSpace>
 
@@ -196,6 +197,7 @@ class InPlaceEditorTest final : public QObject {
                     defaults.screenshotFormat = defaultHdr ? "heic" : "png";
                     auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, false).toStdString());
                     QVERIFY(session);
+                    session->monitors.front().hdrCapable = true; // Capability alone must not enable HDR.
                     // The focused/captured screen is SDR. An unfocused HDR
                     // screen with no artifact must still enable the control.
                     if (hasHdrScreen) {
@@ -203,6 +205,7 @@ class InPlaceEditorTest final : public QObject {
                         other.name = "unfocused-HDR";
                         other.logicalGeometry = {800,0,800,600};
                         other.hdrCapable = true;
+                        other.hdrActive = true;
                         session->monitors.push_back(other);
                     }
                     CaptureOverlay overlay(defaults,false,false,false,QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
@@ -213,7 +216,7 @@ class InPlaceEditorTest final : public QObject {
                     auto* hdr = overlay.findChild<QPushButton*>("screenshotHdr");
                     QVERIFY(control && sdr && hdr);
                     QCOMPARE(sdr->text(),QString("SDR")); QCOMPARE(hdr->text(),QString("HDR"));
-                    QCOMPARE(control->isVisible(),visible);
+                    QCOMPARE(control->isVisible(),visible && hasHdrScreen);
                     const bool available = hasHdrScreen && hyprcapture::ui::hdrHeicAvailable();
                     QCOMPARE(control->isEnabled(),available);
                     QCOMPARE(hdr->isChecked(),available && defaultHdr);
@@ -278,7 +281,7 @@ class InPlaceEditorTest final : public QObject {
         hyprcapture::CaptureSession session;
         session.id = "hdr-ui-test"; session.defaults = defaults;
         hyprcapture::MonitorInfo monitor;
-        monitor.name = "HDR"; monitor.focused = true; monitor.hdrCapable = true;
+        monitor.name = "HDR"; monitor.focused = true; monitor.hdrCapable = true; monitor.hdrActive = true;
         monitor.logicalGeometry = {0, 0, kLogicalWidth, kLogicalHeight}; monitor.scale = 2;
         monitor.artifactFormat = "rgba16f-linear-srgb"; monitor.artifactReferenceNits = 203;
         monitor.artifactPath = path.toStdString(); monitor.artifactWidth = linear.width(); monitor.artifactHeight = linear.height();
@@ -292,6 +295,16 @@ class InPlaceEditorTest final : public QObject {
         QTest::mouseClick(full, Qt::LeftButton);
         auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
         QTRY_VERIFY(editor && editor->isVisible());
+        QCOMPARE(editor->hdrEnabled(), defaults.screenshotFormat == "heic");
+        if (defaults.screenshotFormat == "heic") {
+            auto* sdr = overlay.findChild<QPushButton*>("screenshotSdr");
+            auto* hdr = overlay.findChild<QPushButton*>("screenshotHdr");
+            QVERIFY(sdr && hdr);
+            sdr->click();
+            QVERIFY(!editor->hdrEnabled());
+            hdr->click();
+            QVERIFY(editor->hdrEnabled());
+        }
         const auto result = editor->resultImage();
         QCOMPARE(result.size(), linear.size());
         const auto expected = hyprcapture::ui::hdrToSdr(linear);
@@ -315,8 +328,13 @@ class InPlaceEditorTest final : public QObject {
         const QByteArray header = clip.read(12);
         if (clipboardFormat == "heic") QCOMPARE(header.mid(4,4), QByteArray("ftyp"));
         else QVERIFY(header.startsWith(QByteArray::fromHex("89504e47")));
+        QFile hdrAck(thumbnail + ".hdr");
+        QTRY_VERIFY_WITH_TIMEOUT(hdrAck.size() > 0, 5000);
+        QVERIFY(hdrAck.open(QIODevice::ReadOnly));
+        QVERIFY(hdrAck.readAll().toFloat() >= 12.4F); // no clipping to an SDR preview
         QFile dragArgs(thumbnail + ".drag");
-        QTRY_VERIFY_WITH_TIMEOUT(dragArgs.exists(), 5000);
+        // The mock creates the file before writing the SDR drag path.
+        QTRY_VERIFY_WITH_TIMEOUT(dragArgs.exists() && (dragFormat != "sdr" || dragArgs.size() > 0), 5000);
         QVERIFY(dragArgs.open(QIODevice::ReadOnly));
         const QString dragPath = QString::fromUtf8(dragArgs.readAll());
         if (dragFormat == "sdr") {
@@ -513,6 +531,28 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(editor->resultImage(), original);
     }
 
+    void editorMaskFollowsCanvasBeforeHdrSurfaceIsReady() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        defaults.inPlaceEditToolbar = true;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.show();
+        QTest::qWait(30);
+        selectRegion(overlay, QPoint(200,180), QPoint(349,279));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor && editor->isVisible());
+        editor->setImageDisplayRect(QRect(600,400,150,100));
+        QImage parent(overlay.size(), QImage::Format_ARGB32_Premultiplied);
+        parent.fill(Qt::transparent);
+        QPainter painter(&parent);
+        // Exclude the opaque SDR editor child: this is the mask over native HDR.
+        overlay.render(&painter, QPoint(), QRegion(), QWidget::DrawWindowBackground);
+        painter.end();
+        QCOMPARE(parent.pixelColor(650,450), QColor(17,29,53));
+        QVERIFY(parent.pixelColor(550,450).blue() < 53);
+        QVERIFY(parent.pixelColor(250,220).blue() < 53);
+    }
+
     void regionEditorResizesEveryEdgeAndCorner_data() {
         QTest::addColumn<QPoint>("handle");
         QTest::addColumn<QPoint>("delta");
@@ -625,6 +665,7 @@ class InPlaceEditorTest final : public QObject {
         defaults.mode = hyprcapture::CaptureMode::Window;
         defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
         const QRect thumbnail(12, 80, 90, 66);
+        defaults.fushionMode = false; // Exercise the independent window outline.
         auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, true, QSize(800,600),
             QRect(1100,300,300,220), thumbnail).toStdString());
         QVERIFY(session.has_value());
@@ -849,6 +890,7 @@ class InPlaceEditorTest final : public QObject {
     void missingWindowDoesNotBeginEditingOrOutput() {
         hyprcapture::CaptureDefaults defaults;
         defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.fushionMode = false; // Fusion intentionally falls back to a monitor click.
         defaults.inPlaceEditToolbar = true;
         const QString json = sessionJson(defaults, false);
         QVERIFY(!json.isEmpty());
@@ -1282,7 +1324,7 @@ int hdrEditorLive(int argc,char** argv) {
     hyprcapture::CaptureSession session;
     session.id="hdr-editor-live";session.defaults=defaults;
     hyprcapture::MonitorInfo monitor;
-    monitor.name=screen->name().toStdString();monitor.focused=true;monitor.hdrCapable=true;
+    monitor.name=screen->name().toStdString();monitor.focused=true;monitor.hdrCapable=true;monitor.hdrActive=true;
     monitor.logicalGeometry={double(geometry.x()),double(geometry.y()),double(geometry.width()),double(geometry.height())};
     monitor.artifactPath=path.toStdString();monitor.artifactWidth=512;monitor.artifactHeight=256;
     monitor.artifactFormat="rgba16f-linear-srgb";monitor.artifactReferenceNits=173;
@@ -1384,6 +1426,20 @@ int main(int argc, char** argv) {
     if (argc > 2 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--thumbnail-window")) {
         QCoreApplication child(argc, argv);
         const QString target = qEnvironmentVariable("HYPRCAPTURE_TEST_THUMBNAIL");
+        const auto arguments=child.arguments();
+        const int hdrIndex=arguments.indexOf("--thumbnail-hdr-preview");
+        if(hdrIndex>=0 && hdrIndex+1<arguments.size()) {
+            const auto native=hyprcapture::ui::takeHdrThumbnail(arguments.at(hdrIndex+1));
+            if(native.isNull()) return 2;
+            float peak=0;
+            for(int y=0;y<native.height();++y) {
+                const auto* pixels=reinterpret_cast<const qfloat16*>(native.constScanLine(y));
+                for(int x=0;x<native.width();++x) for(int c=0;c<3;++c) peak=std::max(peak,float(pixels[x*4+c]));
+            }
+            QFile ack(target+".hdr");
+            if(!ack.open(QIODevice::WriteOnly)) return 3;
+            ack.write(QByteArray::number(peak)); ack.close();
+        }
         QFile argsFile(target + ".drag");
         if (argsFile.open(QIODevice::WriteOnly)) {
             const auto args = child.arguments();

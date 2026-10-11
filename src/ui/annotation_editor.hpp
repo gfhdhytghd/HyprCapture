@@ -4,6 +4,7 @@
 #include <QRect>
 #include <QWidget>
 #include <memory>
+#include <functional>
 #include "ui/scroll_stitcher.hpp"
 
 struct AnnotationSnapshot;
@@ -21,6 +22,10 @@ class AnnotationEditor final : public QWidget {
     void setImage(const QImage& image, bool preserveAnnotations = false);
     QImage resultImage() const;
     QImage resultImageOn(const QImage& hdrBase) const;
+    QImage previewImageOn(const QImage& hdrBase) const;
+    std::function<QImage()> previewRendererOn(const QImage& hdrBase) const;
+    void setHdrEnabled(bool enabled);
+    bool hdrEnabled() const;
     void setRegionResizeBounds(const QRect& bounds);
     void replaceCaptureImage(const QImage& image, const QRect& displayRect);
 
@@ -29,7 +34,8 @@ class AnnotationEditor final : public QWidget {
     // Original object coordinates and history remain immutable as the canvas grows.
     void setScrollImage(const QImage& image, const hyprcapture::ui::ScrollLayout& layout, bool live);
     void setScrollEnabled(bool enabled);
-    void setExternalImagePresentation(bool enabled);
+    void setLiveScrollPresentation(bool live);
+    void setExternalImagePresentation(bool enabled, bool includesAnnotations = false);
     bool externalImagePresentation() const;
     void setAnnotationPresentation(bool ready, qreal opacity = 1, qreal offset = 0);
     QImage annotatedPreview(const QImage& preview, const hyprcapture::ui::ScrollLayout& layout) const;
@@ -55,6 +61,7 @@ class AnnotationEditor final : public QWidget {
     void pinRequested();
     void reselectRequested();
     void annotationsChanged();
+    void previewChanged();
     void captureRectChangeRequested(const QRect& rect);
     void toolbarGeometryChanged(const QRect& geometry);
 

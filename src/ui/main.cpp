@@ -6,6 +6,7 @@
 #include "ui/capture_overlay.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/result_thumbnail.hpp"
+#include "ui/hdr_thumbnail.hpp"
 #include "ui/i18n.hpp"
 #include "ui/pinned_image.hpp"
 
@@ -13,6 +14,7 @@
 #include <LayerShellQt/Window>
 
 #include <QApplication>
+#include <QSocketNotifier>
 #include <QCommandLineParser>
 #include <QCursor>
 #include <QDir>
@@ -40,6 +42,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <memory>
 #include <utility>
 #include <vector>
@@ -453,6 +456,10 @@ class ResultThumbnailCollection {
         connectSwipeSynchronization();
     }
 
+    void setHdrImage(const QImage& image) {
+        for (const auto& thumbnail : m_thumbnails) thumbnail->setHdrImage(image);
+    }
+
     void setDragPath(const QString& path) {
         for (const auto& thumbnail : m_thumbnails) thumbnail->setDragPath(path);
     }
@@ -814,7 +821,7 @@ int main(int argc, char** argv) {
         {"window-background", "Window background.", "background", "follow-system"},
         {"window-border", "Window border policy.", "policy", "keep"},
         {"window-shadow", "Window shadow policy.", "policy", "keep"},
-        {"notification-backend", "Notification backend: hyprland or system.", "backend", "hyprland"},
+        {"notification-backend", "Notification backend: hyprland or system.", "backend", "system"},
         {"save", "Save output.", "0|1", "1"},
         {"clipboard", "Copy output.", "0|1", "1"},
         {"thumbnail", "Show thumbnail.", "0|1", "1"},
@@ -878,6 +885,7 @@ int main(int argc, char** argv) {
         {"session-json", "Compositor session metadata.", "json", "{}"},
         {"session-json-file", "Private compositor session metadata file.", "path"},
         {"session-json-stdin", "Receive a private session filename from the compositor startup socket."},
+        {"thumbnail-hdr-preview", "Private HDR thumbnail pixels.", "path"},
         {"thumbnail-window", "Show a normal thumbnail window for an image path.", "path"},
         {"thumbnail-target", "Path opened or deleted by a thumbnail preview.", "path"},
         {"thumbnail-drag-target", "File representation used for dragging.", "path"},
@@ -970,6 +978,7 @@ int main(int argc, char** argv) {
                                              boundedInt(parser.value("thumbnail-timeout-ms"), 5000, 0, MAX_THUMBNAIL_TIMEOUT_MS),
                                              false,
                                              thumbnailScreens(parser.value("thumbnail-monitor")));
+        thumbnails.setHdrImage(hyprcapture::ui::takeHdrThumbnail(parser.value("thumbnail-hdr-preview")));
         thumbnails.setDragPath(parser.value("thumbnail-drag-target"));
         thumbnails.show();
         return app.exec();
@@ -1078,7 +1087,6 @@ int main(int argc, char** argv) {
     if (parser.isSet("session-json-stdin")) {
         hyprcapture::ui::ScopedUiTiming waitTiming(QStringLiteral("ui.session_wait"));
         const auto received = hyprcapture::receiveStartupPath(STDIN_FILENO);
-        close(STDIN_FILENO);
         if (!received) {
             qWarning("HyprCapture: compositor session startup failed or timed out");
             return 1;
@@ -1178,6 +1186,17 @@ int main(int argc, char** argv) {
     overlay.activateWindow();
     overlay.raise();
     hyprcapture::ui::traceTiming(QStringLiteral("ui.show_end"));
+
+    std::unique_ptr<QSocketNotifier> captureControl;
+    if (parser.isSet("session-json-stdin")) {
+        captureControl = std::make_unique<QSocketNotifier>(STDIN_FILENO, QSocketNotifier::Read, &app);
+        QObject::connect(captureControl.get(), &QSocketNotifier::activated, &app, [&] {
+            char command[8];
+            const auto size = recv(STDIN_FILENO, command, sizeof(command), MSG_DONTWAIT | MSG_TRUNC);
+            if (size == 6 && std::memcmp(command, "cancel", 6) == 0) app.quit();
+            if (size == 0) captureControl->setEnabled(false);
+        });
+    }
 
     return app.exec();
 }

@@ -49,6 +49,7 @@
 #include <hyprland/src/render/gl/GLTexture.hpp>
 #include <hyprland/src/render/OpenGL.hpp>
 #include <hyprland/src/render/pass/PassElement.hpp>
+#include <hyprland/src/render/pass/SurfacePassElement.hpp>
 #include <hyprland/src/render/Renderer.hpp>
 #undef protected
 #undef private
@@ -58,6 +59,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <deque>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -1231,6 +1233,8 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
     return newest;
 }
 
+GLuint framebufferId(CFramebuffer& framebuffer);
+
 bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
                                   const WindowStreamFrameMetadata& metadata,
                                   const std::string& windowAddress,
@@ -1238,7 +1242,8 @@ bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
                                   int cropX,
                                   int cropTopY,
                                   const CBox& fullBox,
-                                  const CBox& visibleBox) {
+                                  const CBox& visibleBox,
+                                  CFramebuffer* hdrFramebuffer = nullptr) {
     ScopedTiming issueTiming("window.stream.pbo_issue");
     if (state.pending >= WindowStreamPboReadbackState::BUFFER_COUNT)
         return false;
@@ -1256,6 +1261,11 @@ bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
     glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[state.next]);
     glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(state.bytes), nullptr, GL_STREAM_READ);
     glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    if (hdrFramebuffer) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, framebufferId(*hdrFramebuffer));
+        glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_HALF_FLOAT,
+                     reinterpret_cast<void*>(size_t(state.width) * state.height * 4));
+    }
     state.fences[state.next] = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
     // Submit without waiting: a timeout-zero client wait must not depend on a
     // later compositor redraw to make this fence observable.
@@ -1601,15 +1611,12 @@ struct HookSignature<Result (Class::*)(Args...)> {
     using Type = Result (*)(void*, Args...);
 };
 
-using RenderWindowFn = HookSignature<decltype(&Render::IHyprRenderer::renderWindow)>::Type;
 using RenderTextureInternalFn = HookSignature<decltype(&CHyprOpenGLImpl::renderTextureInternal)>::Type;
 using RenderTextureWithBlurInternalFn = HookSignature<decltype(&CHyprOpenGLImpl::renderTextureWithBlurInternal)>::Type;
 
 RealBackgroundRenderHookContext* g_realBackgroundRenderHookContext = nullptr;
-RenderWindowFn                   g_renderWindowOriginal = nullptr;
 RenderTextureInternalFn          g_renderTextureInternalOriginal = nullptr;
 RenderTextureWithBlurInternalFn  g_renderTextureWithBlurInternalOriginal = nullptr;
-CFunctionHook*                   g_realBackgroundRenderWindowHook = nullptr;
 CFunctionHook*                   g_realBackgroundRenderTextureInternalHook = nullptr;
 CFunctionHook*                   g_realBackgroundRenderTextureWithBlurInternalHook = nullptr;
 std::optional<RealBackgroundRecordingCache> g_realBackgroundRecordingCache;
@@ -1641,30 +1648,25 @@ bool isActiveBlurBackgroundPass(Render::CRenderContext& ctx, RealBackgroundCaptu
     return window && state->window && window.get() == state->window.get();
 }
 
-void hkRenderWindow(void* rendererThisptr,
-                    Render::CRenderContext& ctx,
-                    PHLWINDOW window,
-                    PHLMONITOR monitor,
-                    const Render::SWindowRenderPresentation& presentation,
-                    const Time::steady_tp& time,
-                    bool decorate,
-                    eRenderPassMode mode,
-                    bool ignorePosition,
-                    bool standalone) {
-    if (g_realBackgroundRenderHookContext && g_realBackgroundRenderHookContext->states && monitor && g_realBackgroundRenderHookContext->monitor &&
-        monitor.get() == g_realBackgroundRenderHookContext->monitor.get() && g_pHyprRenderer) {
-        for (auto& state : *g_realBackgroundRenderHookContext->states) {
-            if (state.queued || state.captured || !state.window || !window || state.window.get() != window.get())
+// Inspect the completed pass queue instead of hooking renderWindow. Hymission
+// Stage also hooks that function, and Hyprland rejects a second hook on it.
+void queueRealBackgroundCapturePasses(std::vector<RealBackgroundCaptureState>& states) {
+    auto& passes = renderContext().m_pass.m_passElements;
+    for (std::size_t i = 0; i < passes.size(); ++i) {
+        const auto* surface = dynamic_cast<const CSurfacePassElement*>(passes[i].element.get());
+        if (!surface || !surface->m_data.pWindow)
+            continue;
+        for (auto& state : states) {
+            if (state.queued || state.captured || state.window != surface->m_data.pWindow)
                 continue;
-
             state.queued = true;
-            Render::IHyprRenderer::addPassElement(ctx, makeUnique<RealBackgroundCapturePass>(&state));
+            Render::CRenderPass::SPassElementData capture;
+            capture.element = makeUnique<RealBackgroundCapturePass>(&state);
+            passes.insert(passes.begin() + i, std::move(capture));
+            ++i; // Skip the capture and keep the original surface in order.
             break;
         }
     }
-
-    if (g_renderWindowOriginal)
-        g_renderWindowOriginal(rendererThisptr, ctx, window, monitor, presentation, time, decorate, mode, ignorePosition, standalone);
 }
 
 void hkRenderTextureInternal(void* openGLThisptr, Render::CRenderContext& ctx, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
@@ -1715,7 +1717,6 @@ void hkRenderTextureWithBlurInternal(void* openGLThisptr, Render::CRenderContext
     context->activeBlurState = previousActiveBlurState;
 }
 
-static_assert(std::is_same_v<RenderWindowFn, decltype(&hkRenderWindow)>);
 static_assert(std::is_same_v<RenderTextureInternalFn, decltype(&hkRenderTextureInternal)>);
 static_assert(std::is_same_v<RenderTextureWithBlurInternalFn, decltype(&hkRenderTextureWithBlurInternal)>);
 
@@ -2568,10 +2569,6 @@ void* findFunctionByDemangledName(const std::string& lookupName, const std::stri
     return nullptr;
 }
 
-void* findRenderWindowFunction() {
-    return findFunctionByDemangledName("renderWindow", "Render::IHyprRenderer::renderWindow(");
-}
-
 void* findRenderTextureInternalFunction() {
     return findFunctionByDemangledName("renderTextureInternal", "CHyprOpenGLImpl::renderTextureInternal(");
 }
@@ -2590,35 +2587,17 @@ void removeRealBackgroundHook(CFunctionHook*& hook) {
 
 void shutdownRealBackgroundHooks() {
     g_realBackgroundRenderHookContext = nullptr;
-    g_renderWindowOriginal = nullptr;
     g_renderTextureInternalOriginal = nullptr;
     g_renderTextureWithBlurInternalOriginal = nullptr;
     removeRealBackgroundHook(g_realBackgroundRenderTextureWithBlurInternalHook);
     removeRealBackgroundHook(g_realBackgroundRenderTextureInternalHook);
-    removeRealBackgroundHook(g_realBackgroundRenderWindowHook);
 }
 
 bool ensureRealBackgroundHooks() {
-    if (g_realBackgroundRenderWindowHook && g_renderWindowOriginal)
+    if (g_realBackgroundRenderTextureInternalHook && g_realBackgroundRenderTextureWithBlurInternalHook)
         return true;
 
     shutdownRealBackgroundHooks();
-
-    void* renderWindowSource = findRenderWindowFunction();
-    if (!renderWindowSource)
-        return false;
-
-    g_realBackgroundRenderWindowHook = HyprlandAPI::createFunctionHook(g_pluginHandle, renderWindowSource, reinterpret_cast<void*>(&hkRenderWindow));
-    if (!g_realBackgroundRenderWindowHook || !g_realBackgroundRenderWindowHook->hook()) {
-        shutdownRealBackgroundHooks();
-        return false;
-    }
-
-    g_renderWindowOriginal = reinterpret_cast<RenderWindowFn>(g_realBackgroundRenderWindowHook->m_original);
-    if (!g_renderWindowOriginal) {
-        shutdownRealBackgroundHooks();
-        return false;
-    }
 
     void* renderTextureInternalSource = findRenderTextureInternalFunction();
     void* renderTextureWithBlurInternalSource = findRenderTextureWithBlurInternalFunction();
@@ -2721,6 +2700,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
     Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_PRE, .monitor = monitor});
     g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
+    queueRealBackgroundCapturePasses(states);
     renderContext().m_data.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     clearHookContext();
@@ -2806,6 +2786,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
         ScopedTiming timing("realbg.render_workspace");
         g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
     }
+    queueRealBackgroundCapturePasses(states);
     renderContext().m_data.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     clearHookContext();
@@ -2962,14 +2943,22 @@ bool readbackHasSize(const RgbaReadback& frame, int width, int height) {
 }
 
 RgbaReadback normalizeMonitorReadbackToLogicalOrientation(RgbaReadback readback, int transform) {
+    RgbaFrame hdr;
+    if (!readback.linear.empty()) {
+        const auto* bytes = reinterpret_cast<const unsigned char*>(readback.linear.data());
+        hdr = normalizeRgbaFrameToLogicalOrientation(
+            {.pixels = std::vector<unsigned char>(bytes, bytes + readback.linear.size() * 2),
+             .width = readback.width, .height = readback.height, .bytesPerPixel = 8}, transform);
+    }
     auto frame = normalizeRgbaFrameToLogicalOrientation(
-        {.pixels = std::move(readback.pixels), .width = readback.width, .height = readback.height},
-        transform);
-    return {
-        .pixels = std::move(frame.pixels),
-        .width = frame.width,
-        .height = frame.height,
-    };
+        {.pixels = std::move(readback.pixels), .width = readback.width, .height = readback.height}, transform);
+    RgbaReadback result{.pixels = std::move(frame.pixels), .referenceNits = readback.referenceNits,
+                       .width = frame.width, .height = frame.height};
+    if (!hdr.pixels.empty()) {
+        result.linear.resize(hdr.pixels.size() / 2);
+        std::memcpy(result.linear.data(), hdr.pixels.data(), hdr.pixels.size());
+    }
+    return result;
 }
 
 RgbaReadback solidBackgroundReadback(int width, int height, unsigned char r, unsigned char g, unsigned char b) {
@@ -3741,7 +3730,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     LinearCaptureScope linearCapture;
     CaptureSession session;
     session.regionCaptureAvailable = true;
-    session.scrollSessionVersion = 1;
+    session.scrollSessionVersion = 2;
     session.id = makeSessionId();
     session.defaults = defaults;
     if (g_pInputManager) {
@@ -3773,6 +3762,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
         info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
         info.hdrCapable = monitor->supportsHDR() || monitor->inHDR();
+        info.hdrActive = monitor->inHDR();
         info.name = monitor->m_name;
         info.logicalGeometry = monitorRect(monitor);
         info.scale = monitor->m_scale;

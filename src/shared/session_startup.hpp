@@ -33,6 +33,13 @@ class SessionStartupChannel {
 
     bool valid() const { return m_fds[0] >= 0 && m_fds[1] >= 0; }
     int childFd() const { return m_fds[1]; }
+    bool peerClosed() const {
+        pollfd descriptor{m_fds[0], POLLIN, 0};
+        return poll(&descriptor, 1, 0) > 0 && (descriptor.revents & (POLLHUP | POLLERR | POLLNVAL));
+    }
+    bool cancel() const {
+        return send(m_fds[0], "cancel", 6, MSG_NOSIGNAL | MSG_DONTWAIT) == 6;
+    }
     void closeChild() {
         if (m_fds[1] >= 0)
             close(m_fds[1]);

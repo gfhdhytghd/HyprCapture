@@ -12,6 +12,8 @@ public:
   ~HdrBackdrop();
   bool setImage(const QImage &image, const QRect &destination,
                 float referenceNits);
+  bool setPqImage(const QImage &image, const QRect &destination,
+                  float peakNits, float referenceNits);
   void setGeometry(const QRect &destination);
   void setVisible(bool visible);
   bool ready() const;

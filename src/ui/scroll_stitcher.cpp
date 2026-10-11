@@ -1,4 +1,6 @@
 #include "ui/scroll_stitcher.hpp"
+#include <qfloat16.h>
+#include <QColorSpace>
 #include <QLinearGradient>
 #include <algorithm>
 #include <cmath>
@@ -85,20 +87,27 @@ Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false) 
   const int h = std::min(48, frame.rows / 4);
   // Several independent templates, retaining every peak rather than a top-N
   // shortlist: periodic paragraphs must remain ambiguous.
-  for (int y : {0, (frame.rows - h) / 2, frame.rows - h}) {
-    const int w = std::min(96, frame.cols), x = (frame.cols - w) / 2;
-    const cv::Mat pattern = frame(cv::Rect(x, y, w, h));
-    cv::Scalar mean, deviation;
-    cv::meanStdDev(pattern, mean, deviation);
-    if (deviation[0] < 3)
-      continue;
-    cv::Mat score;
-    cv::matchTemplate(page.colRange(x, x + w), pattern, score,
-                      cv::TM_CCOEFF_NORMED);
-    for (int row = 0; row < score.rows; ++row)
-      if (score.at<float>(row, 0) >= .90f)
-        candidates.insert(row - y);
+  const int w = std::min(96, frame.cols);
+  bool overwhelmed = false;
+  for (int x : {0, (frame.cols - w) / 2, frame.cols - w}) {
+    std::set<int> columnCandidates;
+    for (int y : {0, (frame.rows - h) / 2, frame.rows - h}) {
+      const cv::Mat pattern = frame(cv::Rect(x, y, w, h));
+      cv::Scalar mean, deviation;
+      cv::meanStdDev(pattern, mean, deviation);
+      if (deviation[0] < 3) continue;
+      cv::Mat score;
+      cv::matchTemplate(page.colRange(x, x + w), pattern, score, cv::TM_CCOEFF_NORMED);
+      for (int row = 0; row < score.rows; ++row)
+        if (score.at<float>(row, 0) >= .90f) columnCandidates.insert(row - y);
+    }
+    // A flat/repeating central image can produce dozens of equally good
+    // peaks. It must not hide distinctive text in the other columns. Keep
+    // every peak in each informative column, then verify the whole overlap.
+    if (columnCandidates.size() > 64) { overwhelmed = true; continue; }
+    candidates.insert(columnCandidates.begin(), columnCandidates.end());
   }
+  if (candidates.empty() && overwhelmed) return {0, false, true};
   if (candidates.empty()) {
     if (page.size() == frame.size()) {
       cv::Mat a, b, window;
@@ -112,7 +121,7 @@ Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false) 
           candidates.insert(qRound(shift.y) + d);
     }
   }
-  if (candidates.size() > 64)
+  if (candidates.size() > 192)
     return {0, false, true};
   std::vector<std::pair<double, int>> verified;
   for (int candidate : candidates) {
@@ -355,12 +364,15 @@ bool ScrollStitcher::stable(const QImage &a, const QImage &b) {
          static_cast<size_t>(cv::countNonZero(diff.reshape(1) > 12)) <=
              diff.total() / 1000;
 }
-ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage &original) {
+ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage &original, const QImage &hdr) {
+  if ((!hdr.isNull() && (hdr.size() != source.size() || hdr.format() != QImage::Format_RGBA16FPx4_Premultiplied)) ||
+      (!empty() && hdr.isNull() != m_hdrInitial.isNull())) return {Status::InvalidFrame};
   if ((!original.isNull() && original.size() != source.size()) ||
       (!empty() && original.isNull() != m_originalInitial.isNull()))
     return {Status::InvalidFrame};
   if (source.isNull() || source.width() < 64 || source.height() < 96)
     return {Status::InvalidFrame};
+  if (!hdr.isNull()) m_limits.maxPixels = std::min(m_limits.maxPixels, 16LL * 1024 * 1024);
   if (source.height() > m_limits.maxHeight ||
       qint64(source.width()) * source.height() > m_limits.maxPixels)
     return {Status::LimitReached};
@@ -368,6 +380,7 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (empty()) {
     m_initial = m_previous = frame;
     m_originalInitial = original.convertToFormat(QImage::Format_ARGB32);
+    m_hdrInitial = hdr;
     m_layout = {frame.rect(), frame.size()};
     m_frames = 1;
     return {Status::Started, frame.height()};
@@ -461,6 +474,28 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     const int footer = frame.height() - content.bottom() - 1;
     if (translatedBand(frame.height() - footer - d, footer))
       content.setBottom(frame.height() - 1);
+    // Sparse moving gutter markers can look stationary on a one-pixel
+    // touchpad step. Reclaim only columns that change and whose entire
+    // translated interior agrees; fixed sidebar labels must still stay fixed.
+    const auto translatedSide = [&](int x, int width, bool left) {
+      const int y = content.top() + 32;
+      const int height = content.height() - d - 64;
+      if (width <= 0 || height < 96) return -1;
+      int edge = left ? x + width : x - 1;
+      for (int column = x; column < x + width; ++column) {
+        bool changed = false, translated = true;
+        for (int row = y; row < y + height; ++row) {
+          const auto a = upper.pixel(column, row + d), b = lower.pixel(column, row);
+          if (std::max({std::abs(qRed(a)-qRed(b)),std::abs(qGreen(a)-qGreen(b)),std::abs(qBlue(a)-qBlue(b)),std::abs(qAlpha(a)-qAlpha(b))}) > 1) { translated = false; break; }
+          const auto unshifted = upper.pixel(column, row);
+          changed |= std::max({std::abs(qRed(unshifted)-qRed(b)),std::abs(qGreen(unshifted)-qGreen(b)),std::abs(qBlue(unshifted)-qBlue(b))}) > 2;
+        }
+        if (changed && translated) edge = left ? std::min(edge,column) : std::max(edge,column);
+      }
+      return edge >= x && edge < x + width ? edge : -1;
+    };
+    if (const int edge = translatedSide(0, content.left(), true); edge >= 0) content.setLeft(edge);
+    if (const int edge = translatedSide(content.right()+1, frame.width()-content.right()-1, false); edge >= 0) content.setRight(edge);
   }
   const int minY = std::min(m_layout.minimumY, position),
             maxY = std::max(m_layout.maximumY, position);
@@ -494,8 +529,38 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     m_layout.rightSeam = right;
     m_layoutLocked = true;
     m_strips.push_back({0, m_initial.copy(content)});
+    if (!hdr.isNull()) m_hdrStrips.push_back({0, m_hdrInitial.copy(content)});
     if (!original.isNull())
-      m_originalStrips.push_back({0, m_originalInitial.copy(content)});
+      m_originalStrips.push_back({0, m_originalInitial.copy(content), content.y()});
+  }
+  // Native window corners are clipped in every source viewport. Once that
+  // viewport edge becomes an interior seam, a later overlapping frame can
+  // recover the unobscured pixels. Original alpha is the quality mask; an
+  // decoration under a rounded corner additionally needs a source row away
+  // from viewport edges. Other translucent pixels with unchanged alpha stay.
+  if (!original.isNull()) {
+    const auto incoming = original.convertToFormat(QImage::Format_ARGB32);
+    for (size_t i=0; i<m_originalStrips.size(); ++i) {
+      auto& raw = m_originalStrips[i];
+      const int from = std::max(raw.y,position), to = std::min(raw.y+raw.image.height(),position+content.height());
+      for (int documentY=from; documentY<to; ++documentY) {
+        const int storedY=documentY-raw.y, sourceY=content.y()+documentY-position;
+        const auto* sourceRaw=reinterpret_cast<const QRgb*>(incoming.constScanLine(sourceY))+content.x();
+        const auto* storedRaw=reinterpret_cast<const QRgb*>(raw.image.constScanLine(storedY));
+        for (int x=0;x<content.width();++x) {
+          const int oldEdge=std::min(raw.sourceTop+storedY,frame.height()-1-raw.sourceTop-storedY);
+          const int newEdge=std::min(sourceY,frame.height()-1-sourceY);
+          const bool recoverCorner=oldEdge<64 && newEdge>=64 && qAlpha(sourceRaw[x])>=qAlpha(storedRaw[x]);
+          if (!recoverCorner && qAlpha(sourceRaw[x])<=qAlpha(storedRaw[x])+2) continue;
+          raw.image.setPixel(x,storedY,sourceRaw[x]);
+          // setPixel may detach the original plane; refresh its read pointer.
+          storedRaw=reinterpret_cast<const QRgb*>(raw.image.constScanLine(storedY));
+          m_strips[i].image.setPixel(x,storedY,frame.pixel(content.x()+x,sourceY));
+          if (!hdr.isNull())
+            std::memcpy(m_hdrStrips[i].image.scanLine(storedY)+x*8,hdr.constScanLine(sourceY)+(content.x()+x)*8,8);
+        }
+      }
+    }
   }
   if (minY < m_layout.minimumY)
     m_strips.push_back(
@@ -512,12 +577,21 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (!original.isNull()) {
     if (minY < m_layout.minimumY)
       m_originalStrips.push_back({minY, original.copy(content.x(), content.y(),
-          content.width(), m_layout.minimumY - minY).convertToFormat(QImage::Format_ARGB32)});
+          content.width(), m_layout.minimumY - minY).convertToFormat(QImage::Format_ARGB32), content.y()});
     if (maxY > m_layout.maximumY) {
       const int count = maxY - m_layout.maximumY;
       m_originalStrips.push_back({m_layout.maximumY + content.height(),
           original.copy(content.x(), content.bottom() + 1 - count,
-                        content.width(), count).convertToFormat(QImage::Format_ARGB32)});
+                        content.width(), count).convertToFormat(QImage::Format_ARGB32), content.bottom()+1-count});
+    }
+  }
+  if (!hdr.isNull()) {
+    if (minY < m_layout.minimumY)
+      m_hdrStrips.push_back({minY, hdr.copy(content.x(), content.y(), content.width(), m_layout.minimumY - minY)});
+    if (maxY > m_layout.maximumY) {
+      const int count = maxY - m_layout.maximumY;
+      m_hdrStrips.push_back({m_layout.maximumY + content.height(),
+          hdr.copy(content.x(), content.bottom() + 1 - count, content.width(), count)});
     }
   }
   const int delta = position - m_layout.viewportY;
@@ -540,9 +614,9 @@ QImage ScrollStitcher::bodyImage() const {
     p.drawImage(0, strip.y - m_layout.minimumY, strip.image);
   return result;
 }
-void ScrollStitcher::paint(QPainter &p, bool original) const {
-  const auto& initial = original && !m_originalInitial.isNull() ? m_originalInitial : m_initial;
-  const auto& strips = original && !m_originalInitial.isNull() ? m_originalStrips : m_strips;
+void ScrollStitcher::paint(QPainter &p, int plane) const {
+  const auto& initial = plane == 2 ? m_hdrInitial : plane == 1 && !m_originalInitial.isNull() ? m_originalInitial : m_initial;
+  const auto& strips = plane == 2 ? m_hdrStrips : plane == 1 && !m_originalInitial.isNull() ? m_originalStrips : m_strips;
   if (!m_layoutLocked) {
     p.drawImage(0, 0, initial);
     return;
@@ -573,6 +647,28 @@ void ScrollStitcher::paint(QPainter &p, bool original) const {
                 initial, QRect(x, seam, width, c.bottom() + 1 - seam));
     if (growth <= 0)
       return;
+    if (plane == 2) {
+      // QColor/8-bit gradients clip highlights. Interpolate premultiplied
+      // floating-point samples directly, including alpha and out-of-gamut RGB.
+      // A thumbnail only needs device-resolution samples of this gradient.
+      // Full-size exports keep the original per-pixel interpolation unchanged.
+      const auto device=p.worldTransform().mapRect(QRectF(x,seam,width,growth)).size();
+      const int bandWidth=std::min(width,std::max(1,int(std::ceil(device.width()))));
+      const int bandHeight=std::min(growth,std::max(1,int(std::ceil(device.height()))));
+      QImage band(bandWidth,bandHeight,QImage::Format_RGBA16FPx4_Premultiplied);
+      const auto* above = reinterpret_cast<const qfloat16*>(initial.constScanLine(seam - 1)) + x * 4;
+      const auto* below = reinterpret_cast<const qfloat16*>(initial.constScanLine(seam)) + x * 4;
+      for (int y = 0; y < bandHeight; ++y) {
+        auto* row = reinterpret_cast<qfloat16*>(band.scanLine(y));
+        const float t = (y + .5f) / bandHeight;
+        for (int i=0;i<bandWidth;++i) {
+          const int source=std::min(width-1,int((i+.5)*width/bandWidth))*4;
+          for(int c=0;c<4;++c) row[i*4+c]=qfloat16(float(above[source+c])*(1-t)+float(below[source+c])*t);
+        }
+      }
+      p.drawImage(QRect(x,seam,width,growth),band);
+      return;
+    }
     for (int i = 0; i < width; ++i) {
       QLinearGradient gradient(0, seam, 0, seam + growth);
       gradient.setColorAt(0, initial.pixelColor(x + i, seam - 1));
@@ -608,17 +704,28 @@ QImage ScrollStitcher::originalImage() const {
   paint(painter, true);
   return result;
 }
-QImage ScrollStitcher::preview(const QSize &bounds) const {
+QImage ScrollStitcher::hdrImage() const {
+  if (m_hdrInitial.isNull()) return {};
+  QImage result(size(), QImage::Format_RGBA16FPx4_Premultiplied);
+  if (result.isNull()) return {};
+  result.fill(Qt::transparent);
+  QPainter painter(&result);
+  paint(painter, 2);
+  result.setColorSpace(m_hdrInitial.colorSpace());
+  return result;
+}
+QImage ScrollStitcher::preview(const QSize &bounds, bool hdr) const {
   if (empty())
     return {};
+  if (hdr && m_hdrInitial.isNull()) return {};
   QImage result(size().scaled(bounds, Qt::KeepAspectRatio),
-                QImage::Format_ARGB32);
+                hdr ? QImage::Format_RGBA16FPx4_Premultiplied : QImage::Format_ARGB32);
   result.fill(Qt::transparent);
   QPainter p(&result);
   p.setRenderHint(QPainter::SmoothPixmapTransform);
   p.scale(qreal(result.width()) / size().width(),
           qreal(result.height()) / size().height());
-  paint(p);
+  paint(p, hdr ? 2 : 0);
   return result;
 }
 } // namespace hyprcapture::ui

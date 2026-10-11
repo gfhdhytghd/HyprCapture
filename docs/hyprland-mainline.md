@@ -1,5 +1,25 @@
 # Hyprland mainline adaptation
 
+## 2026-10-11 follow-up synchronization
+
+Merged stable `master` through `2782d7b`, including HDR scrolling and thumbnails,
+recording output permission hardening, fusion enabled by default, system
+notifications by default, active-HDR control visibility, and nonblocking
+optional Omarchy AEC installation.
+
+The real-background capture fix now inserts capture passes into the mainline
+render context's pass queue, retaining the mainline texture-hook signatures
+without hooking `renderWindow`. The Hyprland lock remains
+`5a78b5e927345860a27e2893bf894f97ee620c48`.
+
+The plugin, Qt helper, audio helper, installation, and fixup passed a full Nix
+sandbox build. Output:
+`/nix/store/gddjq0lv60ncxwckfd3z72bcjk2b8dij-hyprcapture-0.3.0`.
+Build log: `/tmp/hyprcapture-mainline-2782d7b-build.log` on the validation host.
+Tests remain disabled in this branch's default package and did not run.
+No live compositor plugin was installed or reloaded; runtime acceptance remains
+pending.
+
 ## 2026-10-11 feature synchronization
 
 Merged stable `master` through `a75d97a`, including native HDR previews,

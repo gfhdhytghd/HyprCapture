@@ -17,11 +17,11 @@ namespace {
 
 NotificationBackend configuredBackend() {
     if (!g_pluginHandle || !Config::mgr())
-        return NotificationBackend::Hyprland;
+        return NotificationBackend::System;
 
     const auto value = Config::mgr()->getConfigValue("plugin:hyprcapture:notification_backend");
     if (!value.dataptr || !value.type)
-        return NotificationBackend::Hyprland;
+        return NotificationBackend::System;
 
     const auto type = std::type_index(*value.type);
     if (type == typeid(Config::STRING))
@@ -30,7 +30,7 @@ NotificationBackend configuredBackend() {
         const auto raw = *reinterpret_cast<Hyprlang::STRING const*>(value.dataptr);
         return parseNotificationBackend(raw ? raw : "");
     }
-    return NotificationBackend::Hyprland;
+    return NotificationBackend::System;
 }
 
 CHyprColor notificationColor(NotificationLevel level) {

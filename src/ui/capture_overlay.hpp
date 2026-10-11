@@ -31,6 +31,7 @@ class InlineSelect;
 class AudioMeter;
 class QSlider;
 class QProcess;
+class QThreadPool;
 class AnnotationEditor;
 
 namespace hyprcapture::ui {
@@ -123,6 +124,9 @@ class CaptureOverlay final : public QMainWindow {
     bool m_hdrBackdropsAttempted = false;
     std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrEditBackdrop;
     qint64 m_hdrEditCacheKey = 0;
+    QThreadPool* m_hdrEditPreviewPool = nullptr;
+    bool m_hdrEditPreviewBusy = false;
+    bool m_hdrEditPreviewDirty = false;
     void buildToolbar();
     void ensureRecordControls();
     void initializeOverlay(const QRect& overlayGeometry);
@@ -151,7 +155,7 @@ class CaptureOverlay final : public QMainWindow {
     void beginScrollCapture();
     void refreshInPlaceImage();
     QImage scrollWindowBackground(const QImage& frame, const QRect& geometry);
-    QImage renderScrollResultImage();
+    QImage renderScrollResultImage(bool hdr = false);
     void leaveInPlaceEdit();
     void exportInPlaceImage();
     void pinInPlaceImage();
@@ -235,7 +239,7 @@ class CaptureOverlay final : public QMainWindow {
     bool windowCaptureAvailable() const;
     void updateStatus();
     void relayoutToolbar();
-    void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath);
+    void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath, const QImage& hdrPreview = {});
     double overlayOpacity() const;
     void setOverlayOpacity(double opacity);
     void fadeOutThen(std::function<void()> finished);
@@ -248,7 +252,8 @@ class CaptureOverlay final : public QMainWindow {
     bool                      m_recordActive = false;
     bool                      m_scrolling = false;
     bool                      m_scrollResult = false;
-    QImage                    m_scrollOriginal, m_scrollFirstFrame;
+    QImage                    m_scrollOriginal, m_scrollFirstFrame, m_scrollHdrOriginal, m_scrollSdrImage;
+    float                     m_scrollReferenceNits = 203;
     QRect                     m_scrollGeometry;
     hyprcapture::ui::ScrollLayout m_scrollLayout;
     QString                   m_recordError;

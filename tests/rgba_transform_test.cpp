@@ -110,6 +110,20 @@ int main() {
     malformed.pixels.pop_back();
     require(hyprcapture::normalizeRgbaFrameToLogicalOrientation(std::move(malformed), 1).pixels.empty(), "reject malformed frame");
 
+    auto bytes = numberedFrame();
+    hyprcapture::RgbaFrame halves{.width=bytes.width, .height=bytes.height, .bytesPerPixel=8};
+    for (size_t i=0;i<bytes.pixels.size();i+=4) {
+        halves.pixels.insert(halves.pixels.end(),bytes.pixels.begin()+i,bytes.pixels.begin()+i+4);
+        halves.pixels.insert(halves.pixels.end(),bytes.pixels.begin()+i,bytes.pixels.begin()+i+4);
+    }
+    for (int transform=0;transform<8;++transform) {
+        const auto a=hyprcapture::normalizeRgbaFrameToLogicalOrientation(bytes,transform);
+        const auto b=hyprcapture::normalizeRgbaFrameToLogicalOrientation(halves,transform);
+        require(a.width==b.width && a.height==b.height && b.bytesPerPixel==8, "float transform dimensions");
+        for (size_t i=0;i<a.pixels.size();i+=4)
+            for(size_t c=0;c<4;++c)
+                require(a.pixels[i+c]==b.pixels[i*2+c] && a.pixels[i+c]==b.pixels[i*2+c+4], "both half-float channel pairs preserve orientation");
+    }
     unpremultiplyLutMatchesLegacyFormulaForEveryBytePair();
 
     std::cout << "rgba transform tests passed\n";

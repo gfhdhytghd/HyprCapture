@@ -2,6 +2,8 @@
 #include <QCoreApplication>
 #include <QTemporaryFile>
 #include <QPainter>
+#include <qfloat16.h>
+#include <cstring>
 #include <cstdlib>
 #include <iostream>
 
@@ -44,5 +46,27 @@ int main(int argc, char** argv) {
     require(shared.flipped(Qt::Vertical) == expected.flipped(Qt::Vertical), "bottom-up orientation");
     shared = {};
     require(edited.pixelColor(0, 0) == QColor(Qt::red), "edited image survives final mapping owner");
+    QTemporaryFile pairedFile;
+    require(pairedFile.open(), "paired temporary frame");
+    QImage hdr(32,24,QImage::Format_RGBA16FPx4_Premultiplied);
+    for(int y=0;y<hdr.height();++y) {
+        auto* row=reinterpret_cast<qfloat16*>(hdr.scanLine(y));
+        for(int x=0;x<hdr.width();++x) {
+            row[x*4]=qfloat16(3.25f); row[x*4+1]=qfloat16(-.125f);
+            row[x*4+2]=qfloat16(.75f); row[x*4+3]=qfloat16(.5f);
+        }
+    }
+    pairedFile.write(reinterpret_cast<const char*>(expected.constBits()),expected.sizeInBytes());
+    pairedFile.write(reinterpret_cast<const char*>(hdr.constBits()),hdr.sizeInBytes());
+    pairedFile.flush();
+    auto planes=hyprcapture::ui::mapScrollSdrHdr(pairedFile,32,24);
+    require(!planes.first.isNull() && !planes.second.isNull(), "paired planes mapped");
+    require(hyprcapture::ui::mapScrollSdrHdr(pairedFile,31,24).first.isNull(), "paired payload size validated");
+    require(std::memcmp(planes.second.constBits(),hdr.constBits(),size_t(hdr.sizeInBytes()))==0, "HDR bits and plane offset preserved");
+    auto hdrShared=planes.second;
+    planes={}; pairedFile.close(); pairedFile.remove();
+    require(std::memcmp(hdrShared.constBits(),hdr.constBits(),size_t(hdr.sizeInBytes()))==0, "second plane owns mapping after first plane and descriptor are gone");
+    auto hdrEdited=hdrShared; hdrEdited.bits()[0]^=0xff;
+    require(std::memcmp(hdrShared.constBits(),hdr.constBits(),size_t(hdr.sizeInBytes()))==0 && hdrEdited.constBits()!=hdrShared.constBits(), "HDR writer detaches readonly paired mapping");
     return 0;
 }

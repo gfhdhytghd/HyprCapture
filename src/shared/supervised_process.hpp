@@ -11,6 +11,7 @@ namespace hyprcapture {
 // Hyprland uses SA_NOCLDWAIT, so its plugins cannot retrieve child exit
 // statuses with waitpid. A shell supervisor owns the child and reports its
 // status over a private pipe without changing the compositor's signal policy.
+// The child runs with umask 077; the compositor's umask is unchanged.
 struct SupervisedProcess {
     pid_t pid = -1;
     int statusFd = -1;

@@ -367,7 +367,8 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
         applyLayerSize();
     }, false);
     addAction(hyprcapture::ui::uiText(m_copyFile ? "Copy file" : "Copy image"), [this] {
-        const auto currentPixmap = m_imageLabel->pixmap();
+        // Native HDR painting leaves the QLabel empty; retain its raster fallback.
+        const auto currentPixmap = m_dragPreview;
         if (m_copyFile && !m_path.isEmpty())
             hyprcapture::ui::copyFileUrlToClipboard(m_path);
         else if (!currentPixmap.isNull())
@@ -414,6 +415,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     layout->addWidget(m_menuShell, 0, Qt::AlignRight);
 
     QPixmap scaledPixmap = hyprcapture::ui::thumbnail::scaledPixmap(pixmap, targetScreen);
+    m_dragPreview = scaledPixmap;
     const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize();
     m_card = new QWidget(this);
     m_card->setObjectName("thumbnailImageCard");
@@ -462,6 +464,31 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
         resetSwipe();
         emit swipeResetStarted();
     });
+}
+
+ResultThumbnail::~ResultThumbnail() = default;
+
+void ResultThumbnail::setHdrImage(const QImage& image) {
+    if (image.isNull()) return;
+    m_hdrBackdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), true);
+    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()), 203)) {
+        m_hdrBackdrop.reset(); return;
+    }
+    m_imageLabel->clear();
+    m_imageLabel->installEventFilter(this);
+    m_card->installEventFilter(this);
+    QTimer::singleShot(0, this, [this] { updateHdrGeometry(); });
+}
+void ResultThumbnail::updateHdrGeometry() {
+    if (m_hdrBackdrop) {
+        m_hdrBackdrop->setGeometry(QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()));
+        m_hdrBackdrop->setVisible(isVisible());
+    }
+}
+bool ResultThumbnail::eventFilter(QObject* object, QEvent* event) {
+    if (event->type() == QEvent::Move || event->type() == QEvent::Resize || event->type() == QEvent::Show || event->type() == QEvent::Hide)
+        QTimer::singleShot(0, this, [this] { updateHdrGeometry(); });
+    return QWidget::eventFilter(object, event);
 }
 
 void ResultThumbnail::closeEvent(QCloseEvent* event) {
@@ -630,6 +657,7 @@ void ResultThumbnail::setMenuVisible(bool visible) {
 
 void ResultThumbnail::applyLayerSize() {
     adjustSize();
+    updateHdrGeometry();
     if (auto* layerWindow = LayerShellQt::Window::get(windowHandle()))
         layerWindow->setDesiredSize(size());
 }
@@ -731,7 +759,9 @@ void ResultThumbnail::startFileDrag() {
     auto* mimeData = new QMimeData;
     mimeData->setUrls({QUrl::fromLocalFile(dragPath)});
 
-    const auto currentPixmap = m_imageLabel->pixmap();
+    // The native HDR surface replaces QLabel painting, but the Qt drag icon
+    // still needs its independent SDR preview. The URI keeps the chosen format.
+    const auto currentPixmap = m_dragPreview;
     if (!currentPixmap.isNull()) {
         drag->setPixmap(currentPixmap.scaled(180, 120, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         drag->setHotSpot(QPoint(drag->pixmap().width() / 2, drag->pixmap().height() / 2));
@@ -756,7 +786,9 @@ void ResultThumbnail::leaveEvent(QEvent*) {
 void ResultThumbnail::setImagePixmap(const QPixmap& pixmap) {
     if (!m_imageLabel || pixmap.isNull())
         return;
-    m_imageLabel->setPixmap(hyprcapture::ui::thumbnail::scaledPixmap(pixmap, m_targetScreen));
+    m_hdrBackdrop.reset();
+    m_dragPreview = hyprcapture::ui::thumbnail::scaledPixmap(pixmap, m_targetScreen);
+    m_imageLabel->setPixmap(m_dragPreview);
 }
 
 void ResultThumbnail::setTranscodeProgress(double progress) {

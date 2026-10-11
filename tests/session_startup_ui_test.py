@@ -22,7 +22,7 @@ def main():
                    DBUS_SESSION_BUS_ADDRESS=f'unix:path={root}/no-session-bus')
         log = root / 'timing.log'
         env['HYPRCAPTURE_TIMING_FILE'] = str(log)
-        cases = ['closed', 'relative', 'oversized', 'untrusted', 'invalid-json', 'valid']
+        cases = ['closed', 'relative', 'oversized', 'untrusted', 'invalid-json', 'valid', 'valid-cancel']
         for case in cases:
             log.write_text('')
             server, client = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
@@ -36,10 +36,10 @@ def main():
                     server.send(b'/' * 4097)
                 elif case == 'untrusted':
                     server.send(b'/etc/passwd')
-                elif case in ('invalid-json', 'valid'):
+                elif case == 'invalid-json' or case.startswith('valid'):
                     metadata = root / f'{case}.json'
                     artifact = root / 'monitor.rgba'
-                    if case == 'valid':
+                    if case.startswith('valid'):
                         artifact.write_bytes(bytes([17, 29, 53, 255]) * (64 * 64))
                         artifact.chmod(0o600)
                         metadata.write_text(json.dumps({
@@ -52,16 +52,21 @@ def main():
                         metadata.write_text('{}')
                     metadata.chmod(0o600)
                     server.send(os.fsencode(metadata))
-                server.close()
-                if case == 'valid':
+                if case != 'valid-cancel':
+                    server.close()
+                if case.startswith('valid'):
                     deadline = time.monotonic() + 5
                     while time.monotonic() < deadline and process.poll() is None and 'ui.show_end' not in log.read_text():
                         time.sleep(0.01)
                     assert process.poll() is None, process.stderr.read().decode()
                     assert 'ui.show_end' in log.read_text(), 'valid metadata did not construct overlay'
                     assert not metadata.exists() and not artifact.exists(), 'session files were not consumed'
-                    process.terminate()
-                    process.wait(timeout=5)
+                    if case == 'valid-cancel':
+                        server.send(b'cancel')
+                        assert process.wait(timeout=5) == 0, 'cancel did not close the actual helper cleanly'
+                    else:
+                        process.terminate()
+                        process.wait(timeout=5)
                 else:
                     assert process.wait(timeout=5) == 1, (case, process.stderr.read().decode())
                     assert 'ui.show_begin' not in log.read_text(), 'failure fell through to a new capture'
@@ -70,7 +75,7 @@ def main():
                 if process.poll() is None:
                     process.kill()
                     process.wait(timeout=5)
-        print('startup UI: valid frozen session and five failure paths passed')
+        print('startup UI: frozen session, graceful cancel, closed control peer and five failure paths passed')
 
 
 if __name__ == '__main__':

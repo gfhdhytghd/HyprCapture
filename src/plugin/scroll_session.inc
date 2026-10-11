@@ -17,7 +17,7 @@ struct ScrollSession {
   PHLMONITOR monitor;
   PHLWINDOW window;
   SP<CWLSurfaceResource> surface;
-  WP<CWLSurfaceResource> inputRoot;
+  WP<CWLSurfaceResource> inputRoot, inputSurface;
   Rect windowGeometry;
   double scale = 1;
   int transform = 0, control = -1;
@@ -25,14 +25,17 @@ struct ScrollSession {
   wl_event_source *controlSource = nullptr;
   std::string input;
   std::vector<Rect> excluded;
-  std::vector<ScrollInput> pending;
+  std::deque<ScrollInput> pending;
+  Time::steady_tp replayStarted;
+  uint32_t replayOriginMs = 0, replayClockOffsetMs = 0;
+  bool draining = false;
   std::unique_ptr<WindowStreamSender> sender;
   WindowStreamPboReadbackState pbo;
   SP<CEventLoopTimer> timer;
-  CHyprSignalListener axis, button, unmap;
+  CHyprSignalListener axis, motion, button, unmap;
   std::uint64_t sequence = 0;
   bool active = false, baseline = false, released = false, replaying = false,
-       failed = false, paused = false;
+       failed = false, paused = false, refocusing = false, hdr = false;
   Time::steady_tp started = Time::steadyNow();
 };
 std::unique_ptr<ScrollSession> g_scrollSession;
@@ -78,6 +81,7 @@ void stopScrollSession() {
   if (!s)
     return;
   s->axis.reset();
+  s->motion.reset();
   s->button.reset();
   s->unmap.reset();
   if (s->controlSource)
@@ -129,12 +133,15 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     return;
   }
   s.inputRoot = window->wlSurface()->resource();
-  g_pSeatManager->setPointerFocus(surface, local);
-  g_pSeatManager->sendPointerMotion(input.event.timeMs, local);
-  // GTK 3 flushes either pointer motion or scroll data for a wl_pointer.frame.
-  // Finish the synthetic positioning event first, otherwise a FINGER axis in
-  // the same frame is swallowed (while Gecko's separate wheel path still works).
-  g_pSeatManager->sendPointerFrame();
+  s.inputSurface = surface;
+  const bool positionPointer = !input.native || g_pSeatManager->m_state.pointerFocus != surface;
+  if (positionPointer) {
+    g_pSeatManager->setPointerFocus(surface, local);
+    g_pSeatManager->sendPointerMotion(input.event.timeMs, local);
+    // GTK 3 flushes either pointer motion or scroll data for a wl_pointer.frame.
+    // Finish positioning first so a FINGER axis in the same frame is not lost.
+    g_pSeatManager->sendPointerFrame();
+  }
   if (input.native) {
     // Re-enter the native path exactly once, preserving per-device factors,
     // wheel v120 accumulation, application overrides and natural scrolling.
@@ -142,7 +149,8 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     const bool layer = g_pInputManager->m_lastFocusOnLS;
     g_pInputManager->m_lastFocusOnLS = false;
     g_pInputManager->onMouseWheel(input.event, input.pointer);
-    g_pInputManager->onPointerFrame();
+    // Live events already have a device frame boundary. Flushing here splits
+    // the two axis-stop events of a touchpad gesture and breaks Chrome's fling.
     g_pInputManager->m_lastFocusOnLS = layer;
     s.replaying = false;
   } else {
@@ -152,7 +160,8 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
         input.event.source, input.event.relativeDirection);
     g_pSeatManager->sendPointerFrame();
   }
-  // Pointer motion naturally restores overlay focus on the next event.
+  // Keep pointer focus through incidental motion during a touchpad gesture.
+  // Clicks and motion outside the capture restore normal overlay hit testing.
 }
 void scrollInput(ScrollSession &s, ScrollInput input) {
   if (s.failed || s.paused)
@@ -164,7 +173,7 @@ void scrollInput(ScrollSession &s, ScrollInput input) {
     s.timer->updateTimeout(std::chrono::milliseconds(1));
   }
   scrollNotify(s, {{"event", "motion"}, {"delta", input.event.delta}});
-  if (!s.released) {
+  if (!s.released || s.draining) {
     if (s.pending.size() >= 256) {
       s.failed = true;
       return;
@@ -215,9 +224,13 @@ int scrollControlReadable(int fd, uint32_t mask, void *data) {
         if (!s.baseline || s.released)
           continue;
         s.released = true;
-        for (const auto &input : s.pending)
-          scrollDeliver(s, input);
-        s.pending.clear();
+        if (!s.pending.empty()) {
+          s.draining = true;
+          s.replayStarted = Time::steadyNow();
+          s.replayOriginMs = s.pending.front().event.timeMs;
+          s.replayClockOffsetMs = Time::millis(s.replayStarted) - s.replayOriginMs;
+          s.timer->updateTimeout(std::chrono::milliseconds(1));
+        }
         continue;
       }
       if (type == "target" && !s.active && s.windowAddress.empty()) {
@@ -297,7 +310,10 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     return;
   }
   timer->updateTimeout(std::chrono::milliseconds(33));
-  if (!s->active || s->paused)
+  // Warm the fixed window baseline while its editor is idle. Waiting for the
+  // first touchpad event queues an entire gesture behind the HDR readback and
+  // then replays it in a burst. Regions remain lazy because they can resize.
+  if (s->paused || (!s->active && (!s->window || s->released)))
     return;
   if (!scrollTargetAlive(*s) ||
       Time::steadyNow() - s->started > std::chrono::minutes(5)) {
@@ -306,6 +322,20 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                   {"reason", "Target or display changed; finish or cancel"}});
     s->paused = true;
     return;
+  }
+  if (s->draining) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Time::steadyNow() - s->replayStarted).count();
+    bool nativeFrame = false;
+    while (!s->pending.empty() && uint32_t(s->pending.front().event.timeMs - s->replayOriginMs) <= elapsed) {
+      auto input = s->pending.front();
+      s->pending.pop_front();
+      if (input.native) input.event.timeMs += s->replayClockOffsetMs;
+      scrollDeliver(*s, input);
+      nativeFrame = nativeFrame || input.native;
+      scrollNotify(*s, {{"event", "motion"}, {"delta", input.event.delta}});
+    }
+    if (nativeFrame) g_pInputManager->onPointerFrame();
+    s->draining = !s->pending.empty();
   }
   // Offscreen reads intentionally suppress presentation feedback. A client
   // obscured by the editor may otherwise wait forever for its next frame
@@ -327,13 +357,19 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, previousRead);
     glPixelStorei(GL_PACK_ALIGNMENT, previousAlignment);
   };
+  LinearCaptureScope linearCapture;
   auto &pbo = s->pbo;
   if (auto ready = takeReadyWindowStreamPboFrames(pbo)) {
     auto &f = ready->frame;
     if (!s->window && s->transform != 0) {
-      RgbaReadback raw{.pixels = std::move(f.rgba),
+      const size_t planeBytes = size_t(f.metadata.pixelWidth) * f.metadata.pixelHeight * 4;
+      RgbaReadback raw{.pixels = std::vector<unsigned char>(f.rgba.begin(), f.rgba.begin() + planeBytes),
                        .width = int(f.metadata.pixelWidth),
                        .height = int(f.metadata.pixelHeight)};
+      if (f.metadata.format == WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR) {
+        raw.linear.resize(planeBytes);
+        std::memcpy(raw.linear.data(), f.rgba.data() + planeBytes, planeBytes * 2);
+      }
       raw = normalizeMonitorReadbackToLogicalOrientation(std::move(raw),
                                                          s->transform);
       const auto mon = monitorRect(s->monitor);
@@ -343,6 +379,10 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                 .width = std::lround(s->target.width * s->scale),
                 .height = std::lround(s->target.height * s->scale)});
       f.rgba = std::move(raw.pixels);
+      if (!raw.linear.empty()) {
+        const auto* data = reinterpret_cast<const unsigned char*>(raw.linear.data());
+        f.rgba.insert(f.rgba.end(), data, data + raw.linear.size() * 2);
+      }
       f.metadata.pixelWidth = raw.width;
       f.metadata.pixelHeight = raw.height;
       f.metadata.stride = raw.width * 4;
@@ -370,8 +410,11 @@ void scrollTick(SP<CEventLoopTimer> timer) {
         s->monitor);
     width = native.pixelWidth;
     height = native.pixelHeight;
+    if (uint64_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4) > 128ULL * 1024 * 1024) {
+      g_scrollRendering = false; restore(); s->failed = true; return;
+    }
     if (!ensureWindowStreamPboReadback(pbo, width, height,
-                                       size_t(width) * height * 4)) {
+                                       size_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4))) {
       g_scrollRendering = false;
       restore();
       s->failed = true;
@@ -398,8 +441,11 @@ void scrollTick(SP<CEventLoopTimer> timer) {
       height = std::lround(s->monitor->m_pixelSize.y);
       cropX = cropTop = 0;
     }
+    if (uint64_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4) > 128ULL * 1024 * 1024) {
+      g_scrollRendering = false; restore(); s->failed = true; return;
+    }
     if (!ensureWindowStreamPboReadback(pbo, width, height,
-                                       size_t(width) * height * 4)) {
+                                       size_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4))) {
       g_scrollRendering = false;
       restore();
       s->failed = true;
@@ -415,7 +461,20 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     s->failed = true;
     return;
   }
-  glBindFramebuffer(GL_READ_FRAMEBUFFER, framebufferId(*pbo.framebuffer));
+  // Matching and the scroll transport consume SDR RGBA8. The capture target
+  // may instead contain linear HDR or monitor-profile pixels, so resolve it
+  // before readback rather than clipping that work buffer into bytes.
+  const bool hdr = s->hdr && linearCaptureFor(s->monitor) &&
+      pbo.framebuffer->m_drmFormat == DRM_FORMAT_ABGR16161616F;
+  const auto description = pbo.framebuffer->imageDescription();
+  auto readFramebuffer = description && description->needsCM(NColorManagement::DEFAULT_SRGB_IMAGE_DESCRIPTION)
+      ? resolveSdrFramebuffer(*pbo.framebuffer, s->monitor) : pbo.framebuffer;
+  if (!readFramebuffer) {
+    restore();
+    s->failed = true;
+    return;
+  }
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, framebufferId(*readFramebuffer));
   glPixelStorei(GL_PACK_ALIGNMENT, 1);
   WindowStreamFrameMetadata meta{.sequence = ++s->sequence,
                                  .captureMonotonicNs = timeNs,
@@ -427,9 +486,10 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                                  .pixelWidth = uint32_t(width),
                                  .pixelHeight = uint32_t(height),
                                  .stride = uint32_t(width * 4),
-                                 .payloadBytes = uint64_t(width) * height * 4};
-  if (!issueWindowStreamPboReadback(pbo, meta, s->id, *pbo.framebuffer, cropX,
-                                    cropTop, artifact, artifact))
+                                 .format = hdr ? WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR : WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN,
+                                 .payloadBytes = uint64_t(width) * height * (hdr ? 12 : 4)};
+  if (pbo.bytes != meta.payloadBytes || !issueWindowStreamPboReadback(pbo, meta, s->id, *readFramebuffer, cropX,
+                                    cropTop, artifact, artifact, hdr ? pbo.framebuffer.get() : nullptr))
     s->failed = true;
   restore();
 }
@@ -448,6 +508,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
       throw std::runtime_error("version");
     s->id = j.at("id").get<std::string>();
     s->windowAddress = j.value("windowAddress", std::string{});
+    s->hdr = j.value("hdr", false);
     if (s->id.empty() || s->id.size() > 96)
       throw std::runtime_error("id");
     const auto r = j.at("rect");
@@ -521,8 +582,33 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
         [ptr](IPointer::SButtonEvent, Event::SCallbackInfo &) {
           // A scroll frame keeps target focus until the receiver consumes it.
           // A later click must re-hit-test the annotation layer first.
-          if (ptr->active && !ptr->replaying && !ptr->failed)
+          if (ptr->active && !ptr->replaying && !ptr->failed) {
+            ptr->refocusing = true;
             g_pInputManager->simulateMouseMovement();
+            ptr->refocusing = false;
+          }
+        });
+    s->motion = Event::bus()->m_events.input.mouse.move.listen(
+        [ptr](Vector2D, Event::SCallbackInfo &info) {
+          if (!ptr->active || ptr->replaying || ptr->refocusing || ptr->failed ||
+              ptr->paused || g_pInputManager->hasHeldButtons())
+            return;
+          const auto previousSurface = ptr->inputSurface.lock();
+          if (!previousSurface || g_pSeatManager->m_state.pointerFocus != previousSurface)
+            return;
+          const auto point = g_pInputManager->getMouseCoordsInternal();
+          if (!scrollContains(ptr->target, {point.x, point.y, .01, .01})) return;
+          for (const auto &r : ptr->excluded)
+            if (scrollContains(r, {point.x, point.y, .01, .01})) return;
+          const auto window = ptr->window ? ptr->window : Desktop::viewState()->hitTest().windowAt(
+              point, Desktop::View::RESERVED_EXTENTS | Desktop::View::INPUT_EXTENTS | Desktop::View::ALLOW_FLOATING);
+          if (!isLiveWindowCaptureTarget(window)) return;
+          Vector2D local;
+          const auto surface = Desktop::viewState()->hitTest().windowSurfaceAt(point, window, local);
+          if (surface != previousSurface) return;
+          info.cancelled = true;
+          g_pSeatManager->sendPointerMotion(Time::millis(Time::steadyNow()), local);
+          g_pSeatManager->sendPointerFrame();
         });
     s->axis = Event::bus()->m_events.input.mouse.axis.listen(
         [ptr](IPointer::SAxisEvent e, Event::SCallbackInfo &info) {
@@ -536,7 +622,8 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
           for (const auto &r : ptr->excluded)
             if (scrollContains(r, {point.x, point.y, .01, .01}))
               return;
-          if (e.axis != WL_POINTER_AXIS_VERTICAL_SCROLL)
+          if (e.axis != WL_POINTER_AXIS_VERTICAL_SCROLL &&
+              (e.source != WL_POINTER_AXIS_SOURCE_FINGER || !ptr->active))
             return;
           info.cancelled = true;
           scrollInput(*ptr, {.event = e,

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ui/hdr_backdrop.hpp"
+#include <QPixmap>
 #include <QPoint>
 #include <QPointF>
 #include <QPointer>
@@ -25,6 +27,8 @@ class ResultThumbnail final : public QWidget {
                     bool copyFile = false,
                     QScreen* targetScreen = nullptr,
                     QWidget* parent = nullptr);
+    ~ResultThumbnail() override;
+    void setHdrImage(const QImage& image);
     void setDragPath(const QString& path) { m_dragPath = path; }
     void setImagePixmap(const QPixmap& pixmap);
     void setTranscodeProgress(double progress);
@@ -39,6 +43,7 @@ class ResultThumbnail final : public QWidget {
     void swipeActionStarted(bool deleteRequested);
 
   protected:
+    bool eventFilter(QObject*, QEvent*) override;
     void closeEvent(QCloseEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
@@ -65,6 +70,9 @@ class ResultThumbnail final : public QWidget {
     void restoreClipboard() const;
     void startCloseTimer(int timeoutMs);
 
+    void updateHdrGeometry();
+    std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrBackdrop;
+    QPixmap m_dragPreview;
     QString m_path;
     QString m_dragPath;
     QString m_restoreClipboardPath;

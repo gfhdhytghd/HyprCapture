@@ -15,6 +15,9 @@ namespace hyprcapture {
 constexpr std::size_t WINDOW_STREAM_FRAME_HEADER_BYTES = 96;
 constexpr std::uint16_t WINDOW_STREAM_FRAME_VERSION = 1;
 constexpr std::uint32_t WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN = 1;
+// Scroll-only paired planes: RGBA8 followed by premultiplied linear sRGB
+// RGBA16F in scRGB units (1.0 = 80 nits), captured under the same PBO fence.
+constexpr std::uint32_t WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR = 2;
 
 // Pure lifecycle policy for the event-loop PBO-drain timer.  The callback
 // owns the actual GL fence test; this only makes its arm/disarm and stale

@@ -9,6 +9,8 @@
 #include <cassert>
 #include <cstdio>
 #include <chrono>
+#include <cstring>
+#include <algorithm>
 #ifdef HYPRCAPTURE_HAVE_ULTRAHDR
 #include <ultrahdr_api.h>
 #include <QFile>
@@ -17,6 +19,35 @@
 using namespace hyprcapture;
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+#ifdef HYPRCAPTURE_HAVE_ULTRAHDR
+    if (argc >= 3 && std::strcmp(argv[1], "--inspect-file") == 0) {
+        QFile file(QString::fromLocal8Bit(argv[2]));
+        if (!file.open(QIODevice::ReadOnly)) return 2;
+        const auto bytes=file.readAll();
+        auto* decoder=uhdr_create_decoder();
+        if (!decoder) return 2;
+        uhdr_compressed_image_t input{const_cast<char*>(bytes.constData()),size_t(bytes.size()),size_t(bytes.size()),UHDR_CG_UNSPECIFIED,UHDR_CT_UNSPECIFIED,UHDR_CR_UNSPECIFIED};
+        const auto check=[](uhdr_error_info_t e) { if(e.error_code==UHDR_CODEC_OK) return true; fprintf(stderr,"HDR inspect: %s\n",e.detail); return false; };
+        if (!check(uhdr_dec_set_image(decoder,&input)) ||
+            !check(uhdr_dec_set_out_img_format(decoder,UHDR_IMG_FMT_64bppRGBAHalfFloat)) ||
+            !check(uhdr_dec_set_out_color_transfer(decoder,UHDR_CT_LINEAR)) ||
+            !check(uhdr_dec_set_out_max_display_boost(decoder,10000.f/203)) ||
+            !check(uhdr_dec_probe(decoder)) || !check(uhdr_decode(decoder))) { uhdr_release_decoder(decoder); return 3; }
+        const auto* image=uhdr_get_decoded_image(decoder);
+        if (!image || image->cg!=UHDR_CG_BT_2100 || !uhdr_dec_get_gainmap_metadata(decoder)) { uhdr_release_decoder(decoder); return 4; }
+        float peak=0;
+        for(unsigned y=0;y<image->h;++y) {
+            const auto* row=static_cast<const qfloat16*>(image->planes[0])+y*image->stride[0]*4;
+            for(unsigned x=0;x<image->w;++x) for(int c=0;c<3;++c) peak=std::max(peak,float(row[x*4+c])*203);
+        }
+        const int gainWidth=uhdr_dec_get_gainmap_width(decoder), gainHeight=uhdr_dec_get_gainmap_height(decoder);
+        const int width=image->w,height=image->h;
+        printf("{\"width\":%d,\"height\":%d,\"gain_map_width\":%d,\"gain_map_height\":%d,\"peak_channel_nits\":%.2f}\n",width,height,gainWidth,gainHeight,peak);
+        uhdr_release_decoder(decoder);
+        const float minimum=argc>=4 ? QString::fromLocal8Bit(argv[3]).toFloat() : 0;
+        return gainWidth==width && gainHeight==height && peak>=minimum ? 0 : 5;
+    }
+#endif
     for (unsigned i = 0; i < 65536; ++i) {
         const auto h = uint16_t(i);
         if ((h & 0x7c00) != 0x7c00) assert(color::floatToHalf(color::halfToFloat(h)) == h);

@@ -282,6 +282,12 @@ setup() (
     mv -- "$stage" "$out"
     stage=""
   fi
+  # Retry missing optional components even when the core build is complete.
+  if declare -F stage_extras >/dev/null; then
+    if ! stage_extras "$out"; then
+      echo "$NAME: optional components unavailable; normal capture remains available." >&2
+    fi
+  fi
   stamp_tmp=$(mktemp "$CACHE/.stamp.XXXXXX")
   jq -n --arg dir "$out" --arg lib "${FILES[0]}" --arg h "$running" --arg s "$source" \
     '{dir: $dir, lib: $lib, hyprland: $h, source: $s}' >"$stamp_tmp"
@@ -294,6 +300,7 @@ setup() (
     rm -rf -- "$keep"
   done
   echo "$NAME is built for Hyprland ${running:0:12}."
+  if declare -F setup_extras >/dev/null; then setup_extras "$out"; fi
 )
 
 case ${1:-} in

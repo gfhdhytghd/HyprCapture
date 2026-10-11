@@ -1,5 +1,6 @@
 #pragma once
 #include "ui/scroll_stitcher.hpp"
+#include "ui/hdr_backdrop.hpp"
 #include <QElapsedTimer>
 #include <QJsonObject>
 #include <QPointer>
@@ -33,6 +34,9 @@ public:
   bool prepare(const QRect &capture, QString &error,
                const QString &windowAddress = {});
   void setEditor(AnnotationEditor *editor);
+  void setHdrPreview(bool enabled) { m_hdrPreviewEnabled = enabled; }
+  void setHdrCapture(bool enabled) { m_captureHdr = enabled; }
+  QImage hdrResult() const { return m_hdrResult; }
   void setWindowBackgroundProvider(std::function<QImage(const QImage&, const QRect&)> provider);
   void updateTarget(const QRect &capture);
   QRect captureGeometry() const { return m_capture; }
@@ -63,7 +67,7 @@ private:
     QImage image;
     QRect geometry;
     quint64 sequence = 0, timeNs = 0;
-    QImage background;
+    QImage background, hdr;
   };
   void acceptFrames();
   void readFrames();
@@ -72,7 +76,7 @@ private:
   void work(std::stop_token stop);
   void motion(double delta);
   void restoreAnnotationsIfReady();
-  void present(QImage frame, QRect geometry, QImage preview,
+  void present(QImage frame, QRect geometry, QImage preview, QImage hdrPreview,
                ScrollLayout layout, ScrollStitcher::Result result, int captures,
                bool stable, quint64 sequence, quint64 timeNs);
   void stop();
@@ -93,6 +97,8 @@ private:
   QWidget *m_menu = nullptr;
   QLabel *m_status = nullptr;
   QLabel *m_preview = nullptr;
+  bool m_hdrPreviewEnabled = false;
+  std::unique_ptr<HdrBackdrop> m_hdrPreviewBackdrop;
   QPushButton *m_finish = nullptr;
   QVariantAnimation *m_animation = nullptr;
   QTimer m_idle, m_watchdog;
@@ -107,7 +113,10 @@ private:
   QList<QJsonObject> m_commands;
   QByteArray m_controlBytes;
   ScrollLayout m_layout;
-  QImage m_thumbnail, m_originalResult, m_originalFirstFrame;
+  QImage m_thumbnail, m_originalResult, m_originalFirstFrame, m_hdrResult;
+  QImage m_warmFrame;
+  QRect m_warmGeometry;
+  bool m_editorPrepared = false;
   std::mutex m_mutex;
   std::condition_variable_any m_ready;
   std::optional<Frame> m_latest;
@@ -115,6 +124,6 @@ private:
   std::jthread m_worker;
   quint64 m_sequence = 0, m_lastAcceptedSequence = 0, m_dropped = 0;
   bool m_active = false, m_done = false, m_finishing = false,
-       m_hiddenAnnotations = false, m_stopping = false;
+       m_hiddenAnnotations = false, m_stopping = false, m_captureHdr = false;
 };
 } // namespace hyprcapture::ui
