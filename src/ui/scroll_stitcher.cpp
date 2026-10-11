@@ -82,6 +82,105 @@ struct Match {
   int position = 0;
   bool found = false, ambiguous = false;
 };
+// Independent templates vote for a *vertical translation*, not an affine
+// warp. Like multi-template screenshot stitchers, cap each spatial cell at
+// one vote. A detailed GIF cannot buy more votes by containing more corners.
+// Native RGBA checks keep downsampling and repeated text from inventing a
+// correspondence. Stationary cells form a separate zero-motion layer.
+Match matchConsensus(const QImage &first, const QImage &second, QRect content,
+                     bool history = false) {
+  const auto a = compact(gray(history ? first : first.copy(content)));
+  const auto b = compact(gray(second.copy(content)));
+  cv::Mat aa(first.height(), first.width(), CV_8UC4,
+             const_cast<uchar *>(first.constBits()), first.bytesPerLine());
+  cv::Mat bb(second.height(), second.width(), CV_8UC4,
+             const_cast<uchar *>(second.constBits()), second.bytesPerLine());
+  struct Vote { int x, y; };
+  std::map<int, std::vector<Vote>> votes;
+  constexpr int columns = 6, rows = 12;
+  const int w = std::min(48, b.cols / 2), h = std::min(48, b.rows / 8);
+  if (w < 8 || h < 8) return {};
+  const auto error = [&](int x, int y, int d) {
+    const int left = x * content.width() / b.cols;
+    const int right = (x + w) * content.width() / b.cols;
+    const cv::Rect rb(content.x() + left, content.y() + y, right - left, h);
+    auto ra = rb;
+    ra.y += d;
+    cv::Mat diff;
+    cv::absdiff(aa(ra), bb(rb), diff);
+    const auto mean = cv::mean(diff);
+    const double worst = std::max({mean[0], mean[1], mean[2], mean[3]});
+    // An averaged error alone hides differing line numbers beside repeated
+    // text. Native captures are lossless: require nearly identical pixels in
+    // each voting patch, leaving translucent detail to the strict matcher.
+    return worst <= .35 && size_t(cv::countNonZero(diff.reshape(1) > 3)) <= diff.total() / 1000
+               ? worst : 1e9;
+  };
+  for (int row = 0; row < rows; ++row) {
+    const int y = row * (b.rows - h) / (rows - 1);
+    for (int column = 0; column < columns; ++column) {
+      const int x = column * (b.cols - w) / (columns - 1);
+      const auto pattern = b(cv::Rect(x, y, w, h));
+      cv::Scalar mean, dev;
+      cv::meanStdDev(pattern, mean, dev);
+      if (dev[0] < 3) continue; // Blank margins have no motion information.
+      if (!history && error(x, y, 0) <= .35) {
+        votes[0].push_back({x, y});
+        continue;
+      }
+      cv::Mat score;
+      cv::matchTemplate(a.colRange(x, x + w), pattern, score, cv::TM_CCOEFF_NORMED);
+      std::vector<std::pair<double, int>> peaks;
+      for (int from = 0; from < score.rows; ++from) {
+        const int d = from - y;
+        const bool inRange = history ? d >= 0 && d + b.rows <= a.rows
+            : b.rows - std::abs(d) >= std::max(64, b.rows / 4);
+        if (!inRange ||
+            score.at<float>(from, 0) < .97f)
+          continue;
+        const double e = error(x, y, d);
+        if (e <= .35) peaks.emplace_back(e, d);
+        if (peaks.size() > 32) break; // Repeated history cannot cast a unique vote.
+      }
+      if (peaks.empty() || peaks.size() > 32) continue; // No unique correspondence.
+      std::sort(peaks.begin(), peaks.end());
+      const auto [best, d] = peaks.front();
+      const bool ambiguous = std::any_of(peaks.begin() + 1, peaks.end(),
+          [&](const auto &peak) {
+            return std::abs(peak.second - d) > 2 && peak.first <= best + .5;
+          });
+      if (ambiguous) continue;
+      votes[d].push_back({x, y});
+    }
+  }
+  std::vector<int> accepted;
+  bool stationary = false;
+  for (const auto &[d, support] : votes) {
+    if (support.size() < 6) continue;
+    int minX = b.cols, maxX = 0, minY = b.rows, maxY = 0;
+    std::set<int> bands, lanes;
+    for (const auto &v : support) {
+      minX = std::min(minX, v.x); maxX = std::max(maxX, v.x);
+      minY = std::min(minY, v.y); maxY = std::max(maxY, v.y);
+      bands.insert(v.y); lanes.insert(v.x);
+    }
+    // A scrolling video inside a stationary page can itself have perfect
+    // matches. Require evidence spread across the overlap, not one widget.
+    const int overlap = history ? b.rows : b.rows - std::abs(d);
+    const bool broad = lanes.size() >= 2 && maxX - minX >= b.cols * .35;
+    // A wide fixed panel can leave only a narrow column of line numbers.
+    // Accept that column only with more independently matched vertical bands.
+    const bool tall = bands.size() >= 5 && maxY - minY >= overlap * .75;
+    if (bands.size() < 3 || (!broad && !tall) || maxY - minY < overlap * .60)
+      continue;
+    if (d == 0 && !history) stationary = true;
+    else accepted.push_back(d);
+  }
+  if (accepted.size() > 1) return {0, false, true};
+  if (accepted.size() == 1) return {accepted.front(), true, false};
+  if (stationary) return {0, true, false};
+  return {};
+}
 Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false) {
   std::set<int> candidates;
   const int h = std::min(48, frame.rows / 4);
@@ -226,6 +325,28 @@ bool exactOverlap(const QImage &first, const QImage &second, QRect content, int 
                     size_t(content.width()) * 4) != 0)
       return false;
   return true;
+}
+// Once motion is known, source selection is a separate problem. If a changing
+// object crosses the insertion edge, move the cut into an agreeing band in the
+// overlap. Copy whole rows from one capture; never blend text or HDR values.
+int coherentSeam(const QImage &retained, const QImage &incoming, bool down) {
+  const int boundary = down ? retained.height() : 0;
+  int run = 0;
+  for (int step = 0; step < retained.height(); ++step) {
+    const int y = down ? retained.height() - 1 - step : step;
+    const auto *a = reinterpret_cast<const QRgb *>(retained.constScanLine(y));
+    const auto *b = reinterpret_cast<const QRgb *>(incoming.constScanLine(y));
+    int changed = 0;
+    for (int x = 0; x < retained.width(); ++x)
+      changed += std::max({std::abs(qRed(a[x]) - qRed(b[x])),
+                          std::abs(qGreen(a[x]) - qGreen(b[x])),
+                          std::abs(qBlue(a[x]) - qBlue(b[x])),
+                          std::abs(qAlpha(a[x]) - qAlpha(b[x]))}) > 3;
+    run = changed <= retained.width() / 200 ? run + 1 : 0;
+    if (run == 8)
+      return step == 7 ? boundary : down ? y + 4 : y - 3;
+  }
+  return boundary; // No observed clean cut: retain the existing overlap.
 }
 bool verifyOriginalPixels(const QImage &first, const QImage &second,
                           QRect content, int d, bool foreground = false) {
@@ -398,8 +519,11 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   const auto currentCompact = compact(crop(current, content));
   const auto rawAlignment = match(previousCompact, currentCompact);
   auto alignment = rawAlignment;
+  bool consensusMotion = false;
   // Opaque documents usually have a byte-identical overlap. This stronger,
   // inexpensive check avoids filtering full-resolution frames on that path.
+  const bool smallInferredContent = !m_layoutLocked &&
+      (content.width() < frame.width() * .6 || content.height() < frame.height() * .6);
   if (!alignment.found || !exactOverlap(m_previous, frame, content, alignment.position)) {
     alignment = match(foregroundDetail(previousCompact), foregroundDetail(currentCompact), true);
     if (alignment.found &&
@@ -421,6 +545,22 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
         alignment.ambiguous |= detailAmbiguous;
     }
   }
+  if (!alignment.found || alignment.position == 0 || smallInferredContent) {
+    // Inspect the whole viewport until actual scroll establishes its chrome.
+    // An idle GIF otherwise makes detectContent() crop to the animated widget.
+    const auto consensus = matchConsensus(m_previous, frame,
+        m_layoutLocked ? content : frame.rect());
+    if (consensus.found || consensus.ambiguous) {
+      alignment = consensus;
+      consensusMotion = consensus.found && consensus.position != 0;
+    }
+    else if (smallInferredContent) alignment.found = false;
+  }
+  if (alignment.found && alignment.position == 0) {
+    // Keep the last registered anchor. Unmatched animation must not replace
+    // it (or silently rebase a moving region whose motion was not observed).
+    return {Status::Unchanged};
+  }
   int position = m_layout.viewportY + alignment.position;
   if (!alignment.found && !alignment.ambiguous && m_layoutLocked) {
     const auto body = bodyImage();
@@ -430,15 +570,20 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     const bool foreground = alignment.found;
     if (!alignment.found && !alignment.ambiguous)
       alignment = match(history, visible);
+    bool consensus = false;
+    const auto visibleFrame = frame.copy(content);
+    if (!alignment.found && !alignment.ambiguous) {
+      alignment = matchConsensus(body, visibleFrame, visibleFrame.rect(), true);
+      consensus = alignment.found;
+    }
     position = m_layout.minimumY + alignment.position;
     // Relocation may only land wholly within retained history. A lost gap
     // must not create an unobserved interval in the output.
     if (position < m_layout.minimumY || position > m_layout.maximumY)
       alignment.found = false;
-    if (alignment.found) {
+    if (alignment.found && !consensus) {
       const auto retained = body.copy(0, alignment.position,
                                       content.width(), content.height());
-      const auto visibleFrame = frame.copy(content);
       if (!verifyOriginalPixels(retained, visibleFrame, visibleFrame.rect(), 0, foreground))
         alignment.found = false;
     }
@@ -533,6 +678,42 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     if (!original.isNull())
       m_originalStrips.push_back({0, m_originalInitial.copy(content), content.y()});
   }
+  int prependTo = m_layout.minimumY;
+  int appendFrom = m_layout.maximumY + content.height();
+  if (consensusMotion && added) {
+    const int from = std::max(position, m_layout.minimumY);
+    const int to = std::min(position + content.height(), appendFrom);
+    QImage retained(content.width(), to - from, QImage::Format_ARGB32);
+    for (const auto &strip : m_strips)
+      for (int y = std::max(from, strip.y);
+           y < std::min(to, strip.y + strip.image.height()); ++y)
+        std::memcpy(retained.scanLine(y - from), strip.image.constScanLine(y - strip.y),
+                    size_t(content.width()) * 4);
+    const auto incoming = frame.copy(content.x(), content.y() + from - position,
+                                      content.width(), to - from);
+    const bool down = maxY > m_layout.maximumY;
+    const int seam = from + coherentSeam(retained, incoming, down);
+    const auto trim = [&](std::vector<Strip> &strips) {
+      std::erase_if(strips, [&](const Strip &strip) {
+        return down ? strip.y >= seam : strip.y + strip.image.height() <= seam;
+      });
+      for (auto &strip : strips) {
+        if (down && strip.y + strip.image.height() > seam)
+          strip.image = strip.image.copy(0, 0, content.width(), seam - strip.y);
+        else if (!down && strip.y < seam) {
+          const int cut = seam - strip.y;
+          strip.image = strip.image.copy(0, cut, content.width(), strip.image.height() - cut);
+          strip.sourceTop += cut;
+          strip.y = seam;
+        }
+      }
+    };
+    trim(m_strips);
+    trim(m_originalStrips);
+    trim(m_hdrStrips);
+    if (down) appendFrom = seam;
+    else prependTo = seam;
+  }
   // Native window corners are clipped in every source viewport. Once that
   // viewport edge becomes an interior seam, a later overlapping frame can
   // recover the unobscured pixels. Original alpha is the quality mask; an
@@ -565,10 +746,10 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (minY < m_layout.minimumY)
     m_strips.push_back(
         {minY, frame.copy(content.x(), content.y(), content.width(),
-                          m_layout.minimumY - minY)});
+                          prependTo - minY)});
   if (maxY > m_layout.maximumY) {
-    const int count = maxY - m_layout.maximumY;
-    m_strips.push_back({m_layout.maximumY + content.height(),
+    const int count = position + content.height() - appendFrom;
+    m_strips.push_back({appendFrom,
                         frame.copy(content.x(), content.bottom() + 1 - count,
                                    content.width(), count)});
   }
@@ -577,20 +758,20 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (!original.isNull()) {
     if (minY < m_layout.minimumY)
       m_originalStrips.push_back({minY, original.copy(content.x(), content.y(),
-          content.width(), m_layout.minimumY - minY).convertToFormat(QImage::Format_ARGB32), content.y()});
+          content.width(), prependTo - minY).convertToFormat(QImage::Format_ARGB32), content.y()});
     if (maxY > m_layout.maximumY) {
-      const int count = maxY - m_layout.maximumY;
-      m_originalStrips.push_back({m_layout.maximumY + content.height(),
+      const int count = position + content.height() - appendFrom;
+      m_originalStrips.push_back({appendFrom,
           original.copy(content.x(), content.bottom() + 1 - count,
                         content.width(), count).convertToFormat(QImage::Format_ARGB32), content.bottom()+1-count});
     }
   }
   if (!hdr.isNull()) {
     if (minY < m_layout.minimumY)
-      m_hdrStrips.push_back({minY, hdr.copy(content.x(), content.y(), content.width(), m_layout.minimumY - minY)});
+      m_hdrStrips.push_back({minY, hdr.copy(content.x(), content.y(), content.width(), prependTo - minY)});
     if (maxY > m_layout.maximumY) {
-      const int count = maxY - m_layout.maximumY;
-      m_hdrStrips.push_back({m_layout.maximumY + content.height(),
+      const int count = position + content.height() - appendFrom;
+      m_hdrStrips.push_back({appendFrom,
           hdr.copy(content.x(), content.bottom() + 1 - count, content.width(), count)});
     }
   }

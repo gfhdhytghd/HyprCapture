@@ -4,6 +4,7 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <string_view>
 #include <opencv2/core.hpp>
 #include <opencv2/core/ocl.hpp>
 #include <sched.h>
@@ -13,6 +14,7 @@ int main(int argc, char **argv) {
   QGuiApplication app(argc, argv);
   cv::setNumThreads(1);
   cv::ocl::setUseOpenCL(false);
+  const bool dynamic = argc > 1 && std::string_view(argv[1]) == "--dynamic";
   constexpr int width = 2560, height = 16384, viewport = 1440, step = 720;
   QImage document(width, height, QImage::Format_ARGB32);
   document.fill(Qt::white);
@@ -35,7 +37,20 @@ int main(int argc, char **argv) {
   std::vector<double> times;
   const auto start = Clock::now();
   for (int offset = 0;; offset = std::min(offset + step, height - viewport)) {
-    const QImage frame = document.copy(0, offset, width, viewport);
+    QImage frame = document.copy(0, offset, width, viewport);
+    if (dynamic) {
+      QImage animation(640, 400, QImage::Format_ARGB32);
+      unsigned seed = unsigned(offset) + 1;
+      for (int y = 0; y < animation.height(); ++y) {
+        auto *row = reinterpret_cast<QRgb *>(animation.scanLine(y));
+        for (int x = 0; x < animation.width(); ++x) {
+          seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+          row[x] = qRgb(seed & 255, (seed >> 8) & 255, (seed >> 16) & 255);
+        }
+      }
+      QPainter p(&frame);
+      p.drawImage(880, 500, animation);
+    }
     const auto t = Clock::now();
     const auto result = stitcher.append(frame);
     const auto preview = stitcher.preview({240, 320});
@@ -56,7 +71,9 @@ int main(int argc, char **argv) {
       std::chrono::duration<double, std::milli>(Clock::now() - t).count();
   const double total =
       std::chrono::duration<double, std::milli>(Clock::now() - start).count();
-  bool exact = result == document;
+  bool exact = dynamic ? result.size() == document.size() &&
+      result.copy(0, 0, 800, height) == document.copy(0, 0, 800, height)
+      : result == document;
   rusage usage{};
   getrusage(RUSAGE_SELF, &usage);
   std::sort(times.begin(), times.end());
@@ -67,7 +84,7 @@ int main(int argc, char **argv) {
             << ",p95_ms=" << times[size_t((times.size() - 1) * .95)]
             << ",max_ms=" << times.back() << ",assemble_ms=" << assemble
             << ",total_ms=" << total << ",maxrss_kib=" << usage.ru_maxrss
-            << ",pixel_exact=" << exact << "\n";
+            << (dynamic ? ",unobscured_pixels_exact=" : ",pixel_exact=") << exact << "\n";
   std::ifstream proc("/proc/self/status");
   std::string line;
   while (std::getline(proc, line))

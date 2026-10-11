@@ -481,7 +481,6 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
   ScrollStitcher::Limits limits;
   if (m_captureHdr) limits.maxPixels = 16LL * 1024 * 1024;
   ScrollStitcher stitcher(limits);
-  QImage candidate;
   bool aligned = false;
   while (!stopToken.stop_requested()) {
     std::optional<Frame> frame;
@@ -504,10 +503,12 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
         painter.end();
         frame->image = std::move(composed);
       }
-      const bool stable = ScrollStitcher::stable(candidate, frame->image);
-      candidate = frame->image;
       // Seed the unscrolled baseline immediately, before input is replayed.
       auto result = stitcher.append(frame->image, original, frame->hdr);
+      // Stability concerns the document's position. GIFs may keep repainting
+      // after scrolling stops. Require consecutive accepted frames so a
+      // relocation after a rejected frame cannot restore annotations early.
+      const bool stable = aligned && result.status == ScrollStitcher::Status::Unchanged;
       aligned = result.status == ScrollStitcher::Status::Started ||
                 result.status == ScrollStitcher::Status::Appended ||
                 result.status == ScrollStitcher::Status::Relocated ||
