@@ -17,7 +17,7 @@ See the [changelog](https://gfhdhytghd.github.io/HyprCapture/) for release histo
 
 ## Open-source acknowledgements
 
-The screenshot annotation interface is inspired by [Omarchy Screenshot](https://github.com/manateelazycat/omarchy-screenshot) by [Andy Stewart (王勇 / 王老板)](https://github.com/manateelazycat), particularly its compact grouped toolbar, color palette, and light/dark appearance. Thank you for sharing the project with the open-source community. Omarchy Screenshot is licensed under [GPL-3.0-only](https://github.com/manateelazycat/omarchy-screenshot/blob/main/LICENSE).
+The screenshot annotation interface is inspired by [Omarchy Screenshot](https://github.com/manateelazycat/omarchy-screenshot) by [Andy Stewart](https://github.com/manateelazycat), particularly its compact grouped toolbar, color palette, and light/dark appearance. Thank you for sharing the project with the open-source community. Omarchy Screenshot is licensed under [GPL-3.0-only](https://github.com/manateelazycat/omarchy-screenshot/blob/main/LICENSE).
 
 ## Features
 
