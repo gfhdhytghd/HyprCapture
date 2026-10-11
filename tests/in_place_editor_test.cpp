@@ -523,6 +523,28 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(editor->resultImage(), original);
     }
 
+    void editorMaskFollowsCanvasBeforeHdrSurfaceIsReady() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        defaults.inPlaceEditToolbar = true;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.show();
+        QTest::qWait(30);
+        selectRegion(overlay, QPoint(200,180), QPoint(349,279));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor && editor->isVisible());
+        editor->setImageDisplayRect(QRect(600,400,150,100));
+        QImage parent(overlay.size(), QImage::Format_ARGB32_Premultiplied);
+        parent.fill(Qt::transparent);
+        QPainter painter(&parent);
+        // Exclude the opaque SDR editor child: this is the mask over native HDR.
+        overlay.render(&painter, QPoint(), QRegion(), QWidget::DrawWindowBackground);
+        painter.end();
+        QCOMPARE(parent.pixelColor(650,450), QColor(17,29,53));
+        QVERIFY(parent.pixelColor(550,450).blue() < 53);
+        QVERIFY(parent.pixelColor(250,220).blue() < 53);
+    }
+
     void regionEditorResizesEveryEdgeAndCorner_data() {
         QTest::addColumn<QPoint>("handle");
         QTest::addColumn<QPoint>("delta");

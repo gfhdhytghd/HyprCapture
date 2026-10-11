@@ -3104,6 +3104,7 @@ void CaptureOverlay::updateHdrEditBackdrop() {
                     self->m_hdrEditBackdrop->setVisible(false);
                     self->m_editor->setExternalImagePresentation(false);
                 }
+                self->update(); // The parent mask must reflect the newly visible HDR preview.
                 if (self->m_hdrEditPreviewDirty) self->updateHdrEditBackdrop();
             }, Qt::QueuedConnection);
         }));
@@ -3194,7 +3195,8 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     QPainterPath dim;
     dim.addRect(rect());
     QPainterPath undimmed;
-    if (m_editing && m_hdrEditBackdrop && m_hdrEditBackdrop->ready() && m_editor)
+    // The mask follows the selection, independently of asynchronous HDR upload.
+    if (m_editing && m_editor)
         undimmed.addRect(m_editor->canvasGeometry());
     else if (m_mode == hyprcapture::CaptureMode::Fullscreen)
         undimmed.addRect(fullscreenCaptureRect());
@@ -4816,7 +4818,10 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
             // Painting/input only capture a snapshot; conversion runs off-thread.
             updateHdrEditBackdrop();
         });
-        connect(m_editor,&AnnotationEditor::imageDisplayGeometryChanged,this,&CaptureOverlay::updateHdrEditBackdrop);
+        connect(m_editor, &AnnotationEditor::imageDisplayGeometryChanged, this, [this] {
+            updateHdrEditBackdrop();
+            update(); // Repaint the mask when the editor moves/resizes its HDR surface.
+        });
         connect(m_editor, &AnnotationEditor::captureRectChangeRequested, this, [this](const QRect& requested) {
             if (!m_editing || m_finishing || m_scrollResult || m_mode != hyprcapture::CaptureMode::Region) return;
             const QRect target = requested.intersected(regionCaptureBounds());
