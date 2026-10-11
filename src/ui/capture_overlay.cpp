@@ -1622,6 +1622,7 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
     m_defaults.screenshotFormat = source.m_defaults.screenshotFormat;
     if (m_sdrButton) m_sdrButton->setChecked(m_defaults.screenshotFormat == "png");
     if (m_hdrButton) m_hdrButton->setChecked(m_defaults.screenshotFormat == "heic");
+    if (m_editor) m_editor->setHdrEnabled(m_defaults.screenshotFormat == "heic");
     m_mode = source.m_mode;
     m_record = source.m_record;
     m_recordError = source.m_recordError;
@@ -1980,7 +1981,13 @@ void CaptureOverlay::buildToolbar() {
         button->setFixedSize(48, 26);
         dynamicRangeGroup->addButton(button);
         dynamicRangeLayout->addWidget(button);
-        connect(button, &QPushButton::clicked, this, [this, format] { m_defaults.screenshotFormat = format; });
+        connect(button, &QPushButton::clicked, this, [this, format] {
+            m_defaults.screenshotFormat = format;
+            if (m_editor) m_editor->setHdrEnabled(m_defaults.screenshotFormat == "heic");
+            m_hdrEditCacheKey = 0;
+            updateHdrEditBackdrop();
+            update();
+        });
         return button;
     };
     m_sdrButton = addDynamicRange("SDR", "screenshotSdr", "png");
@@ -3055,7 +3062,7 @@ void CaptureOverlay::prepareHdrBackdrops() {
     }
 }
 void CaptureOverlay::updateHdrEditBackdrop() {
-    if (!m_editing || m_scrolling || m_scrollResult || !m_editor || m_editHdrBase.isNull() || m_hdrBackdrops.empty()) {
+    if (!m_editing || m_defaults.screenshotFormat != "heic" || m_scrolling || m_scrollResult || !m_editor || m_editHdrBase.isNull() || m_hdrBackdrops.empty()) {
         if(m_hdrEditBackdrop) m_hdrEditBackdrop->setVisible(false);
         if(m_editor) m_editor->setExternalImagePresentation(false);
         return;
@@ -3064,7 +3071,7 @@ void CaptureOverlay::updateHdrEditBackdrop() {
     if(m_hdrEditCacheKey!=m_editHdrBase.cacheKey()) {
         float reference=203;
         for(const auto& artifact:m_monitorArtifacts) if(!artifact.hdrImage.isNull()) {reference=artifact.referenceNits;break;}
-        if(!m_hdrEditBackdrop->setImage(m_editHdrBase,m_editor->canvasGeometry(),reference)) {
+        if(!m_hdrEditBackdrop->setImage(m_editor->previewImageOn(m_editHdrBase),m_editor->canvasGeometry(),reference)) {
             m_hdrEditBackdrop->setVisible(false);
             m_editor->setExternalImagePresentation(false);
             return;
@@ -3073,7 +3080,7 @@ void CaptureOverlay::updateHdrEditBackdrop() {
     }
     m_hdrEditBackdrop->setGeometry(m_editor->canvasGeometry());
     m_hdrEditBackdrop->setVisible(m_overlayActive);
-    m_editor->setExternalImagePresentation(m_hdrEditBackdrop->ready());
+    m_editor->setExternalImagePresentation(m_hdrEditBackdrop->ready(), true);
 }
 
 void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const {
@@ -4774,6 +4781,10 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
     if (!m_editor) {
         m_editor = new AnnotationEditor(this);
         m_editor->setObjectName("inPlaceEditor");
+        connect(m_editor, &AnnotationEditor::previewChanged, this, [this] {
+            m_hdrEditCacheKey = 0;
+            updateHdrEditBackdrop();
+        });
         connect(m_editor,&AnnotationEditor::imageDisplayGeometryChanged,this,&CaptureOverlay::updateHdrEditBackdrop);
         connect(m_editor, &AnnotationEditor::captureRectChangeRequested, this, [this](const QRect& requested) {
             if (!m_editing || m_finishing || m_scrollResult || m_mode != hyprcapture::CaptureMode::Region) return;
@@ -4816,6 +4827,7 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
     m_recordError.clear();
     m_editor->setGeometry(rect());
     m_editor->setRegionResizeBounds(!m_scrollResult && m_mode == hyprcapture::CaptureMode::Region ? regionCaptureBounds() : QRect());
+    m_editor->setHdrEnabled(m_defaults.screenshotFormat == "heic");
     m_editor->setImage(image, false);
     m_editor->setImageDisplayRect(m_editImageRect);
     m_editor->show();

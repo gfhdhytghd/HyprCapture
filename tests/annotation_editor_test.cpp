@@ -610,8 +610,42 @@ class AnnotationEditorTest final : public QObject {
         QTest::keyClick(reopened, Qt::Key_Escape);
     }
 
+    void hdrPreviewIncludesDraftAndSwitchingKeepsGain() {
+        AnnotationEditor editor;
+        initialize(editor, image());
+        QVERIFY(!editor.hdrEnabled());
+        auto* gain = editor.findChild<QSlider*>("annotationHdrGain");
+        QVERIFY(gain && gain->isHidden());
+        editor.setHdrEnabled(true);
+        QVERIFY(!gain->isHidden());
+        gain->setValue(400);
+        selectTool(editor, 5);
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        QImage hdr(image().size(), QImage::Format_RGBA16FPx4);
+        hdr.fill(Qt::transparent);
+        hdr.setColorSpace(QColorSpace::SRgbLinear);
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(30,30)));
+        QTest::mouseMove(canvas, displayed(QPoint(90,70)));
+        QVERIFY(editor.previewImageOn(hdr) != editor.resultImageOn(hdr));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(90,70)));
+        const QImage fullHdr = editor.resultImageOn(hdr);
+        const QImage sdr = editor.resultImage();
+        editor.setHdrEnabled(false);
+        QVERIFY(gain->isHidden());
+        QCOMPARE(gain->value(), 400);
+        QCOMPARE(editor.resultImage(), sdr);
+        QVERIFY(editor.resultImageOn(hdr) != fullHdr);
+        editor.setHdrEnabled(true);
+        QCOMPARE(editor.resultImageOn(hdr), fullHdr);
+        editor.undo();
+        QCOMPARE(editor.resultImage(), image());
+        editor.redo();
+        QCOMPARE(editor.resultImageOn(hdr), fullHdr);
+    }
+
     void hdrGainRampTracksTextColorAndHidesWithPalette() {
         AnnotationEditor editor;
+        editor.setHdrEnabled(true);
         initialize(editor, image());
         selectTool(editor, 7);
         auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
@@ -637,6 +671,7 @@ class AnnotationEditorTest final : public QObject {
 
     void hdrTextGainPreservesSdrAndUndo() {
         AnnotationEditor editor;
+        editor.setHdrEnabled(true);
         const QImage source = image();
         initialize(editor, source);
         selectTool(editor, 7);
@@ -669,6 +704,16 @@ class AnnotationEditorTest final : public QObject {
         textGain->setValue(400);
         QCOMPARE(editor.resultImage(), sdr);
         const float four = maximum(editor.resultImageOn(base));
+        editor.setHdrEnabled(false);
+        QVERIFY(!editor.hdrEnabled());
+        QVERIFY(!textGain->isVisible());
+        QCOMPARE(textGain->value(), 400);
+        const float sdrBrightness = maximum(editor.resultImageOn(base));
+        QVERIFY(std::abs(four / sdrBrightness - 4.0F) < 0.03F);
+        QCOMPARE(editor.resultImage(), sdr);
+        editor.setHdrEnabled(true);
+        QCOMPARE(maximum(editor.resultImageOn(base)), four);
+        QCOMPARE(textGain->value(), 400);
         QVERIFY(twice > 1.0F);
         QVERIFY(std::abs(four / twice - 2.0F) < 0.02F);
         QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(1, 1));

@@ -292,6 +292,16 @@ class InPlaceEditorTest final : public QObject {
         QTest::mouseClick(full, Qt::LeftButton);
         auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
         QTRY_VERIFY(editor && editor->isVisible());
+        QCOMPARE(editor->hdrEnabled(), defaults.screenshotFormat == "heic");
+        if (defaults.screenshotFormat == "heic") {
+            auto* sdr = overlay.findChild<QPushButton*>("screenshotSdr");
+            auto* hdr = overlay.findChild<QPushButton*>("screenshotHdr");
+            QVERIFY(sdr && hdr);
+            sdr->click();
+            QVERIFY(!editor->hdrEnabled());
+            hdr->click();
+            QVERIFY(editor->hdrEnabled());
+        }
         const auto result = editor->resultImage();
         QCOMPARE(result.size(), linear.size());
         const auto expected = hyprcapture::ui::hdrToSdr(linear);

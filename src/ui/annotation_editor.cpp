@@ -612,6 +612,11 @@ class AnnotationCanvas final : public QWidget {
 
     QImage base;
     bool externalImagePresentation = false;
+    bool externalAnnotationPresentation = false;
+    bool hdrEnabled = false;
+    bool previewDirty = true;
+    std::function<void()> previewChanged;
+    void update() { previewDirty = true; QWidget::update(); }
     Tool tool = Tool::Rectangle;
     Variant variant = Variant::Outline;
     QColor color = QColor("#ff5252");
@@ -746,22 +751,25 @@ class AnnotationCanvas final : public QWidget {
         return output;
     }
 
-    QImage resultOn(const QImage& hdrBase) const {
+    QImage resultOn(const QImage& hdrBase, bool preview = false) const {
         if (!hyprcapture::ui::isHdrImage(hdrBase) || hdrBase.size() != base.size()) return {};
         QImage output = hdrBase.convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
         if (output.isNull()) return {};
         QImage layer(base.size(), QImage::Format_ARGB32_Premultiplied);
         if (layer.isNull()) return {};
         QPainter painter(&output);
-        for (const auto& annotation : m_annotations) {
+        const auto draw = [&](const Annotation& annotation) {
             layer.fill(Qt::transparent);
             {
                 QPainter layerPainter(&layer);
                 drawMappedAnnotation(layerPainter, base, annotation, scrollLayout, false);
             }
-            const float gain = annotation.tool == Tool::Mosaic ? 1.0F : static_cast<float>(annotation.hdrGain);
+            const float gain = !hdrEnabled || annotation.tool == Tool::Mosaic ? 1.0F : static_cast<float>(annotation.hdrGain);
             painter.drawImage(QPoint(0, 0), hyprcapture::ui::sdrToHdr(layer, 203.0F * gain));
-        }
+        };
+        for (int i = 0; i < static_cast<int>(m_annotations.size()); ++i)
+            if (!preview || i != m_editingTextIndex) draw(m_annotations[i]);
+        if (preview && m_draft) draw(*m_draft);
         return output;
     }
 
@@ -886,6 +894,10 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void paintEvent(QPaintEvent*) override {
+        if (previewDirty) {
+            previewDirty = false;
+            if (previewChanged) previewChanged();
+        }
         if (base.isNull())
             return;
         QPainter painter(this);
@@ -910,8 +922,8 @@ class AnnotationCanvas final : public QWidget {
         // visible placement fixed until it is hidden, then reveal the new one.
         const auto& displayLayout = fadingLayout ? fadingLayout : scrollLayout;
         for (int i = 0; i < static_cast<int>(m_annotations.size()); ++i)
-            if (i != m_editingTextIndex) drawMappedAnnotation(painter, base, m_annotations[i],displayLayout,liveScroll);
-        if (m_draft)
+            if (!externalAnnotationPresentation && i != m_editingTextIndex) drawMappedAnnotation(painter, base, m_annotations[i],displayLayout,liveScroll);
+        if (m_draft && !externalAnnotationPresentation)
             drawMappedAnnotation(painter, base, *m_draft,displayLayout,liveScroll);
         if (m_selected >= 0 && m_selected != m_editingTextIndex && m_selected < static_cast<int>(m_annotations.size())) {
             QPainterPath selectedPath;
@@ -990,7 +1002,7 @@ class AnnotationCanvas final : public QWidget {
         annotation.tool = tool;
         annotation.variant = variant;
         annotation.color = color;
-        annotation.hdrGain = hdrGain;
+        annotation.hdrGain = hdrEnabled ? hdrGain : 1.0;
         annotation.width = strokeWidth;
         annotation.points.push_back(point);
         if (tool == Tool::Text) {
@@ -1516,6 +1528,7 @@ struct AnnotationEditor::Impl {
     ToolbarFrame* variantPanel = nullptr;
     ToolbarFrame* colorPanel = nullptr;
     HdrGainSlider* hdrGainSlider = nullptr;
+    QPointer<HdrGainSlider> textGainSlider;
     ToolbarFrame* morePanel = nullptr;
     std::vector<StripToolButton*> toolButtons = std::vector<StripToolButton*>(11, nullptr);
     std::vector<Choice> choices;
@@ -1962,6 +1975,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     hsv->addLayout(sliders);
     auto* hdrGain = addHdrGainSlider(sliders, ui.colorPanel, ui.canvas->hdrGain, "annotationHdrGain");
     ui.hdrGainSlider = hdrGain;
+    hdrGain->setVisible(ui.canvas->hdrEnabled);
     hdrGain->setTargetColor(ui.canvas->color);
     connect(hdrGain, &QSlider::valueChanged, this, [this](int value) { m_impl->canvas->hdrGain = value / 100.0; });
     colorRows->addLayout(hsv);
@@ -1995,6 +2009,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     ui.fit = overflow("annotationFit");
     ui.reselect = overflow("annotationReselect");
 
+    ui.canvas->previewChanged = [this] { emit previewChanged(); };
     ui.canvas->changed = [this] {
         m_impl->undo->setEnabled(m_impl->canvas->canUndo());
         m_impl->redo->setEnabled(m_impl->canvas->canRedo());
@@ -2101,6 +2116,8 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         paletteLayout->addLayout(textSliders);
         auto* textGain = addHdrGainSlider(textSliders, textPalette, existing.hdrGain, "annotationTextHdrGain");
         textGain->setTargetColor(existing.color);
+        m_impl->textGainSlider = textGain;
+        textGain->setVisible(m_impl->canvas->hdrEnabled);
         connect(color, &QLineEdit::textChanged, textGain, [textGain](const QString& value) {
             const QColor selected(value); if (selected.isValid()) textGain->setTargetColor(selected);
         });
@@ -2392,7 +2409,26 @@ std::shared_ptr<const AnnotationSnapshot> AnnotationEditor::snapshot() const { r
 void AnnotationEditor::restore(const std::shared_ptr<const AnnotationSnapshot>& state) { m_impl->canvas->restore(state); }
 void AnnotationEditor::setScrollImage(const QImage& image,const hyprcapture::ui::ScrollLayout& layout,bool live) { m_impl->canvas->scrollImage(image,layout,live); }
 void AnnotationEditor::setScrollEnabled(bool enabled) { m_impl->canvas->scrollEnabled=enabled; }
-void AnnotationEditor::setExternalImagePresentation(bool enabled) { if(m_impl->canvas->externalImagePresentation==enabled) return; m_impl->canvas->externalImagePresentation=enabled; m_impl->canvas->update(); }
+void AnnotationEditor::setExternalImagePresentation(bool enabled, bool includesAnnotations) {
+    auto* canvas = m_impl->canvas;
+    const bool annotations = enabled && includesAnnotations;
+    if (canvas->externalImagePresentation == enabled && canvas->externalAnnotationPresentation == annotations) return;
+    canvas->externalImagePresentation = enabled;
+    canvas->externalAnnotationPresentation = annotations;
+    canvas->QWidget::update();
+}
+QImage AnnotationEditor::previewImageOn(const QImage& hdrBase) const { return m_impl->canvas->resultOn(hdrBase, true); }
+void AnnotationEditor::setHdrEnabled(bool enabled) {
+    if (m_impl->canvas->hdrEnabled == enabled) return;
+    m_impl->canvas->hdrEnabled = enabled;
+    m_impl->hdrGainSlider->setVisible(enabled);
+    if (m_impl->textGainSlider) m_impl->textGainSlider->setVisible(enabled);
+    m_impl->positionPopups();
+    if (!enabled) setExternalImagePresentation(false);
+    m_impl->canvas->update();
+}
+bool AnnotationEditor::hdrEnabled() const { return m_impl->canvas->hdrEnabled; }
+
 bool AnnotationEditor::externalImagePresentation() const { return m_impl->canvas->externalImagePresentation; }
 void AnnotationEditor::setAnnotationPresentation(bool ready,qreal opacity,qreal offset) { m_impl->canvas->presentation(ready,opacity,offset); }
 QImage AnnotationEditor::annotatedPreview(const QImage& image,const hyprcapture::ui::ScrollLayout& layout) const { return m_impl->canvas->annotatedPreview(image,layout); }
