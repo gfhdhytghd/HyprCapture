@@ -11,6 +11,7 @@ Implemented paired SDR/HDR scrolling capture and native HDR thumbnails, then aud
 - Preserve native touchpad frame boundaries, including both axis-stop events. Warm fixed-window baselines before scrolling and replay queued gestures at their original cadence. Show the source application immediately when scrolling begins.
 - Synchronize warmed native window padding before anchoring annotations. Take the editor snapshot first so cancel restores the original geometry and history.
 - Recover sparse moving gutters and rounded viewport corners from verified overlaps. Repair SDR, original-alpha and HDR planes together; an almost opaque corner must not leave a colored seam inside the long image.
+- Keep an independent SDR pixmap for Qt drag icons when a native HDR surface takes over card painting; the dragged file still follows the configured HEIC/SDR choice.
 - Make the cancel dispatcher deliver a private control packet to owned capture helpers instead of succeeding without doing anything.
 
 ## Verified results
