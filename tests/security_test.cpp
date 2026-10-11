@@ -37,6 +37,7 @@ void require(bool condition, const char* message) {
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
+    const auto originalMask = umask(0000);
 
     const QString path = hyprcapture::ui::runtimeFile(QStringLiteral("security"), QStringLiteral(".png"));
     require(!path.isEmpty(), "runtime path is not empty");
@@ -52,6 +53,14 @@ int main(int argc, char** argv) {
     require(hyprcapture::ui::isPrivateRuntimeFile(path, 1024 * 1024), "private png is accepted as private runtime file");
 
     QFile::remove(path);
+    char publicDirectory[] = "/tmp/hyprcapture-public-output-XXXXXX";
+    require(mkdtemp(publicDirectory) != nullptr, "public output directory");
+    require(chmod(publicDirectory, 0755) == 0, "traversable output directory");
+    const QString publicPath = QString::fromLocal8Bit(publicDirectory) + "/thumbnail.png";
+    require(hyprcapture::ui::savePrivatePng(image, publicPath), "PNG save in public directory");
+    require(modeFor(publicPath) == 0600, "PNG private even with umask zero");
+    QFile::remove(publicPath);
+    require(rmdir(publicDirectory) == 0, "remove public output directory");
 
     hyprcapture::ui::ClipboardSnapshotData snapshot;
     snapshot.valid = true;
@@ -87,6 +96,7 @@ int main(int argc, char** argv) {
 
     QDir(QFileInfo(info.absolutePath()).absolutePath()).rmdir(QFileInfo(info.absolutePath()).fileName());
 
+    umask(originalMask);
     std::cout << "hyprcapture security tests passed\n";
     return 0;
 }

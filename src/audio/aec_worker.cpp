@@ -19,6 +19,7 @@
 #include <pipewire/impl-module.h>
 #include <dlfcn.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <algorithm>
 #include <chrono>
@@ -161,6 +162,7 @@ int serve(QCoreApplication& app,const QStringList& args){
 }
 }
 int main(int argc,char** argv){
+    umask(0077);
     QCoreApplication app(argc,argv);QCoreApplication::setApplicationName("hyprcapture-aec");
     // No orphan processor after a crashed/killed recording helper.
     const auto parent=getppid();prctl(PR_SET_PDEATHSIG,SIGTERM);if(getppid()!=parent)return 1;

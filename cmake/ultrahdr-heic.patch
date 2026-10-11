@@ -1,31 +1,47 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index a6ed814..6a45c95 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -504,6 +504,7 @@ if(NOT JPEG_FOUND)
-   set(JPEG_LIBRARIES ${JPEG_LIB_PREFIX}${JPEG_LIB})
-   if(EMSCRIPTEN)
-     ExternalProject_Add(${JPEGTURBO_TARGET_NAME}
-+        UPDATE_DISCONNECTED TRUE
-         GIT_REPOSITORY https://github.com/libjpeg-turbo/libjpeg-turbo.git
-         GIT_TAG 3.1.0
-         PREFIX ${JPEGTURBO_PREFIX_DIR}
-@@ -517,6 +518,7 @@ if(NOT JPEG_FOUND)
-     )
-   else()
-     ExternalProject_Add(${JPEGTURBO_TARGET_NAME}
-+        UPDATE_DISCONNECTED TRUE
-         GIT_REPOSITORY https://github.com/libjpeg-turbo/libjpeg-turbo.git
-         GIT_TAG 3.1.0
-         PREFIX ${JPEGTURBO_PREFIX_DIR}
-@@ -689,6 +691,7 @@ if(UHDR_ENABLE_HEIF)
+@@ -641,7 +641,7 @@
+   list(APPEND PRIVATE_LINK_LIBS ${EGL_LIBRARIES} ${OPENGLES3_LIBRARIES})
+ endif()
+ if(UHDR_ENABLE_HEIF)
+-  if(NOT UHDR_BUILD_DEPS)
++  if(NOT UHDR_BUILD_DEPS AND NOT HYPRCAPTURE_BUILD_HEIF)
+     find_package(libheif QUIET)
+     if(LIBHEIF_FOUND AND NOT LIBHEIF_HAS_GAIN_MAP)
+       message(WARNING "System libheif found but lacks ISO 21496-1 gain map API (PR 1503). "
+@@ -649,7 +649,7 @@
+       set(LIBHEIF_FOUND FALSE)
      endif()
- 
+   endif()
+-  if(NOT LIBHEIF_FOUND AND UHDR_BUILD_DEPS)
++  if(NOT LIBHEIF_FOUND AND (UHDR_BUILD_DEPS OR HYPRCAPTURE_BUILD_HEIF))
+     find_package(Git QUIET)
+     set(LIBHEIF_TARGET_NAME libheif)
+     set(LIBHEIF_PREFIX_DIR ${CMAKE_CURRENT_BINARY_DIR}/${LIBHEIF_TARGET_NAME})
+@@ -680,17 +680,14 @@
+     endif()
+     set(LIBHEIF_LIBRARIES ${LIBHEIF_LIB_PREFIX}${LIBHEIF_LIB})
+
+-    if(GIT_FOUND)
+-      set(LIBHEIF_PATCH_CMD ${GIT_EXECUTABLE} checkout 4a3f74bc593ebfc29becc1ed5dd0a61cc66d40e1 -- .
+-                            COMMAND ${GIT_EXECUTABLE} apply --ignore-space-change --whitespace=nowarn ${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/libheif_pr1503.patch)
+-    else()
+-      set(LIBHEIF_PATCH_CMD git checkout 4a3f74bc593ebfc29becc1ed5dd0a61cc66d40e1 -- .
+-                            COMMAND git apply --ignore-space-change --whitespace=nowarn ${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/libheif_pr1503.patch)
++    set(LIBHEIF_PATCH_CMD patch -p1 -i ${CMAKE_CURRENT_SOURCE_DIR}/cmake/patches/libheif_pr1503.patch)
++    if(NOT DEFINED HYPRCAPTURE_LIBHEIF_URL)
++      set(HYPRCAPTURE_LIBHEIF_URL https://codeload.github.com/strukturag/libheif/tar.gz/4a3f74bc593ebfc29becc1ed5dd0a61cc66d40e1)
+     endif()
+
      ExternalProject_Add(${LIBHEIF_TARGET_NAME}
-+        UPDATE_DISCONNECTED TRUE
-         GIT_REPOSITORY https://github.com/strukturag/libheif.git
-         GIT_TAG 4a3f74bc593ebfc29becc1ed5dd0a61cc66d40e1
+-        GIT_REPOSITORY https://github.com/strukturag/libheif.git
+-        GIT_TAG 4a3f74bc593ebfc29becc1ed5dd0a61cc66d40e1
++        URL ${HYPRCAPTURE_LIBHEIF_URL}
++        URL_HASH SHA256=b497316d557b8a5683066b446dc0df500a6d19da36ecf03753f40f22ac4c05d3
          PATCH_COMMAND ${LIBHEIF_PATCH_CMD}
+         PREFIX ${LIBHEIF_PREFIX_DIR}
+         SOURCE_DIR ${LIBHEIF_SOURCE_DIR}
 diff --git a/lib/include/ultrahdr/heifultrahdr.h b/lib/include/ultrahdr/heifultrahdr.h
 index 73b1a93..a0f44f4 100644
 --- a/lib/include/ultrahdr/heifultrahdr.h

@@ -29,6 +29,8 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-optional-aec-') as folder:
     assert result.returncode == 0, result.stderr
     assert 'AEC components pending' in result.stderr
     assert (stage / 'hyprcapture-install-aec').exists()
+    assert (stage / 'hyprcapture-aec-sources.json').read_bytes() == (repo / 'nix/aec-sources.json').read_bytes()
+    assert (stage / 'hyprcapture-prepare-aec-sources.cmake').exists()
     assert not (stage / 'hyprcapture-aec').exists()
 
     worker = stage / 'hyprcapture-aec'

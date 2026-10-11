@@ -800,6 +800,9 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
 } // namespace
 
 int main(int argc, char** argv) {
+    // This standalone helper owns its process policy, before Qt starts threads.
+    // FFmpeg transcodes and every temporary/thumbnail writer inherit it.
+    umask(0077);
     if (argc > 1 && (std::string_view(argv[1]) == "--sound-meter" || std::string_view(argv[1]) == "--sound-list" || std::string_view(argv[1]) == "--sound-capture" || std::string_view(argv[1]) == "--sound-finalize"))
         return hyprcapture::audio::runHelper(argc, argv);
     qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");

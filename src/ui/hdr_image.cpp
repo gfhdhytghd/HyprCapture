@@ -166,7 +166,7 @@ bool saveHdrHeic(const QImage& image, const QString& path, QString* error, const
     const auto* stream = uhdr_get_encoded_stream(encoder.get());
     if (!stream || !stream->data || !stream->data_sz) return fail(QStringLiteral("HEIC encoder returned no data"));
     QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly)) return fail(file.errorString());
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner)) return fail(file.errorString());
     if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) { file.remove(); return fail(file.errorString()); }
     const auto* bytes = static_cast<const char*>(stream->data);
     size_t remaining = stream->data_sz;

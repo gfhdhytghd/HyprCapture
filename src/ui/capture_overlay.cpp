@@ -499,7 +499,7 @@ void applyHdrWatermark(QImage& image, const hyprcapture::CaptureDefaults& defaul
 
 bool savePng(const QImage& image, const QString& path) {
     QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
         return false;
     if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
         file.remove();
@@ -522,7 +522,7 @@ bool writePrivateTextFile(const QString& path, const QByteArray& bytes) {
         return false;
 
     QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
         return false;
     if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
         file.remove();
