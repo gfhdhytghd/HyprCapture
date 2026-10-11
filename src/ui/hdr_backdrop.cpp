@@ -107,6 +107,7 @@ struct HdrBackdrop::Impl {
        rgb30 = false, perceptual = false;
   bool descriptionReady = false, visible = false;
   QRect destination;
+  QRect clippedDestination;
   QSize imageSize;
   QWindow *parent = nullptr;
   static void global(void *data, wl_registry *r, uint32_t id,
@@ -299,9 +300,9 @@ bool HdrBackdrop::setImage(const QImage &image, const QRect &destination,
       m->colorSurface, m->description,
       WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
   m->imageSize = pq.size();
-  setGeometry(destination);
+  m->destination = {};
   m->visible = true;
-  m->attach();
+  setGeometry(destination);
   return true;
 #else
   return false;
@@ -311,9 +312,12 @@ void HdrBackdrop::setGeometry(const QRect &destination) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   if (!m->surface || !destination.isValid())
     return;
-  m->destination = destination;
   const QRect clipped =
       destination.intersected(QRect(QPoint{}, m->parent->size()));
+  if (destination == m->destination && clipped == m->clippedDestination)
+    return;
+  m->destination = destination;
+  m->clippedDestination = clipped;
   if (clipped.isEmpty()) {
     setVisible(false);
     return;
@@ -327,8 +331,10 @@ void HdrBackdrop::setGeometry(const QRect &destination) {
       wl_fixed_from_double(clipped.height() * sy));
   wl_subsurface_set_position(m->subsurface, clipped.x(), clipped.y());
   wp_viewport_set_destination(m->viewport, clipped.width(), clipped.height());
-  wl_surface_commit(m->surface);
-  wl_display_flush(m->display);
+  // Hyprland 0.56 updates the surface size only with a buffer attachment.
+  // A viewport-only commit leaves the old extent and stretches its edges
+  // when the editor changes the image's display rectangle.
+  m->attach();
 #endif
 }
 void HdrBackdrop::setVisible(bool visible) {

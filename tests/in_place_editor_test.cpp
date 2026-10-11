@@ -1292,6 +1292,49 @@ int hdrEditorLive(int argc,char** argv) {
     QTest::keyClick(&overlay,Qt::Key_Return);QTest::qWait(600);
     auto* editor=overlay.findChild<AnnotationEditor*>("inPlaceEditor");
     if(!editor || !editor->isVisible() || !editor->externalImagePresentation()) return 2;
+    if (QString::fromLocal8Bit(argv[1]) == "--hdr-editor-regression") {
+        const QString output = qEnvironmentVariable("HYPRCAPTURE_HDR_EDITOR_METADATA");
+        if (output.isEmpty()) return 3;
+        const auto capture = [&](const QString& suffix) {
+            QProcess process;
+            process.start("grim", {"-o", screen->name(), output + suffix + ".png"});
+            return process.waitForFinished(5000) && process.exitCode() == 0;
+        };
+        editor->setImageDisplayRect(QRect(160, 130, 512, 256));
+        QTest::qWait(300);
+        if (!capture("-large")) return 4;
+        editor->setImageDisplayRect(QRect(160, 130, 256, 128));
+        QTest::qWait(300);
+        if (!capture("-small")) return 4;
+        const QImage smallPreview(output + "-small.png");
+        const qreal captureScale = qreal(smallPreview.width()) / geometry.width();
+        const auto sample = [&](const QImage& image, QPoint point) {
+            return image.pixelColor(QPoint(qRound(point.x() * captureScale), qRound(point.y() * captureScale)));
+        };
+        // The fixture's brightest band ends at x=416. Outside the image,
+        // only the dimmed desktop should remain, including below its bottom.
+        if (smallPreview.isNull() || sample(smallPreview, {400, 194}).red() < 230 ||
+            sample(smallPreview, {436, 194}).red() > 220 ||
+            sample(smallPreview, {380, 262}).red() > 220 ||
+            sample(smallPreview, {geometry.width() / 8 + 4, 350}).red() < 80) return 7;
+        editor->setImageDisplayRect(QRect(240, 180, 384, 192));
+        QTest::qWait(300);
+        auto* canvas = editor->findChild<QWidget*>("annotationCanvas");
+        auto* pen = editor->findChild<QToolButton*>("annotationTool5");
+        if (!canvas || !pen) return 5;
+        const QImage before = editor->resultImage();
+        QTest::mouseClick(pen, Qt::LeftButton);
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(280, 240));
+        QTest::mouseMove(canvas, QPoint(560, 280));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(560, 280));
+        QTest::qWait(300);
+        if (editor->resultImage() == before || !capture("-ink")) return 6;
+        const QImage inkPreview(output + "-ink.png");
+        const QColor ink = sample(inkPreview, {420, 260});
+        if (inkPreview.isNull() || ink.red() < 100 || ink.red() < ink.green() * 1.6) return 8;
+        puts("HDR editor resize, move and annotation fixture completed");
+        return 0;
+    }
     const auto rect=editor->canvasGeometry().translated(geometry.topLeft());
     QFile metadata(qEnvironmentVariable("HYPRCAPTURE_HDR_EDITOR_METADATA"));
     if(!metadata.open(QIODevice::WriteOnly)) return 3;
@@ -1306,7 +1349,7 @@ int hdrEditorLive(int argc,char** argv) {
 }
 
 int main(int argc, char** argv) {
-    if(argc>1 && QString::fromLocal8Bit(argv[1])=="--hdr-editor-live") return hdrEditorLive(argc,argv);
+    if(argc>1 && (QString::fromLocal8Bit(argv[1])=="--hdr-editor-live" || QString::fromLocal8Bit(argv[1])=="--hdr-editor-regression")) return hdrEditorLive(argc,argv);
     if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("--pin-image")) {
         QCoreApplication child(argc, argv);
         const QStringList arguments = child.arguments();
