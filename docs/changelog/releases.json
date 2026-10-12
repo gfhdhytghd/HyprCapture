@@ -4,6 +4,21 @@
   "site_url": "https://gfhdhytghd.github.io/HyprCapture/",
   "releases": [
     {
+      "tag": "v0.4.2-0.56.2",
+      "version": "0.4.2",
+      "hyprland": "0.56.2",
+      "published_at": "2026-10-12T00:00:00Z",
+      "headline": "Window highlights follow Hymission thumbnails",
+      "sections": [
+        {
+          "title": "Fixed",
+          "items": [
+            "In window and fusion modes, hovering a window inside Hymission Overview or Stage now brightens its thumbnail instead of the window's original position, using the same clipped rounded shape as the outline."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.4.1-0.56.2",
       "version": "0.4.1",
       "hyprland": "0.56.2",
