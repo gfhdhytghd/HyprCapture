@@ -791,6 +791,97 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY2(brightness > 70, "Stage outline still uses the native window radius");
     }
 
+    void windowHighlightUsesSelectionGeometry_data() {
+        QTest::addColumn<QString>("preview");
+        QTest::addColumn<bool>("fusion");
+        for (const auto& preview : {QString("desktop"), QString("overview"), QString("stage-scaled"), QString("stage-rendered")}) {
+            QTest::newRow(qPrintable(preview + "-window")) << preview << false;
+            QTest::newRow(qPrintable(preview + "-fusion")) << preview << true;
+        }
+    }
+    void windowHighlightUsesSelectionGeometry() {
+        QFETCH(QString, preview);
+        QFETCH(bool, fusion);
+        QTemporaryDir commands;
+        QFile hyprctl(commands.filePath("hyprctl"));
+        QVERIFY(hyprctl.open(QIODevice::WriteOnly));
+        hyprctl.write("#!/bin/sh\nprintf 'ok\\n'\n");
+        hyprctl.close();
+        QVERIFY(hyprctl.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        const QByteArray oldPath = qgetenv("PATH");
+        qputenv("PATH", commands.path().toUtf8());
+        const auto restorePath = qScopeGuard([&] { qputenv("PATH", oldPath); });
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.fushionMode = fusion;
+        defaults.confirmBeforeCapture = true;
+        const QRect nativeWindow(300, 220, 300, 220);
+        const QRect thumbnail(20, 80, 90, 66);
+        const bool overview = preview != "desktop";
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, true, QSize(800, 600), nativeWindow,
+                                                                 overview ? thumbnail : QRect{}).toStdString());
+        QVERIFY(session);
+        auto& window = session->windows.front();
+        window.zIndex = 1;
+        window.rounding = overview ? 40 : 0;
+        window.stagePreview = preview.startsWith("stage");
+        if (preview == "stage-rendered") {
+            window.rounding = 100;
+            window.selectionRounding = 12;
+        }
+        if (overview)
+            window.selectionClipGeometry->width /= 2;
+        if (overview) {
+            auto other = window;
+            other.address = "0xother";
+            other.focused = false;
+            other.zIndex = 0;
+            other.fullGeometry.x += 400;
+            other.visibleGeometry.x += 400;
+            other.selectionGeometry->x += 120;
+            other.selectionClipGeometry->x += 120;
+            session->windows.push_back(other);
+        }
+        const QRect target = overview ? thumbnail : nativeWindow;
+        session->cursorPosition = hyprcapture::Point{double(target.x() + target.width() / 4), double(target.center().y())};
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        overlay.show();
+        QTest::qWait(30);
+        QImage image = overlay.grab().toImage();
+        const auto colorAt = [&](const QPoint& point) {
+            return image.pixelColor(qRound(point.x() * image.devicePixelRatio()), qRound(point.y() * image.devicePixelRatio()));
+        };
+        const QColor desktop(17, 29, 53);
+        QCOMPARE(colorAt(QPoint(target.x() + target.width() / 4, target.center().y())), desktop);
+        if (overview) {
+            QVERIFY(colorAt(nativeWindow.center()).blue() < desktop.blue());
+            QVERIFY(colorAt(QPoint(thumbnail.right() - 5, thumbnail.center().y())).blue() < desktop.blue());
+            QVERIFY(colorAt(thumbnail.topLeft() + QPoint(2, 2)).blue() < desktop.blue());
+            if (preview.startsWith("stage"))
+                QCOMPARE(colorAt(thumbnail.topLeft() + QPoint(14, 4)), desktop);
+            else
+                QVERIFY(colorAt(thumbnail.topLeft() + QPoint(14, 4)).blue() < desktop.blue());
+            QVERIFY(colorAt(QPoint(thumbnail.right(), thumbnail.center().y())).red() < 70);
+        }
+        QTest::keyClick(&overlay, Qt::Key_Return);
+        QCOMPARE(finishing.count(), 0);
+        QVERIFY(!overlay.findChild<AnnotationEditor*>("inPlaceEditor"));
+        image = overlay.grab().toImage();
+        QCOMPARE(colorAt(QPoint(target.x() + target.width() / 4, target.center().y())), desktop);
+        if (overview) {
+            const QPoint cursor(target.x() + target.width() / 4, target.center().y());
+            QWheelEvent wheel(cursor, overlay.mapToGlobal(cursor), {}, QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+            QApplication::sendEvent(&overlay, &wheel);
+            image = overlay.grab().toImage();
+            QVERIFY(colorAt(cursor).blue() < desktop.blue());
+            QCOMPARE(colorAt(cursor + QPoint(120, 0)), desktop);
+            QVERIFY(colorAt(nativeWindow.center()).blue() < desktop.blue());
+            QVERIFY(colorAt(QPoint(thumbnail.right() + 120, thumbnail.center().y())).red() < 70);
+            QCOMPARE(finishing.count(), 0);
+        }
+    }
+
     void stageWindowOpensCenteredAtNativeResolution_data() {
         QTest::addColumn<bool>("fullscreen");
         QTest::addColumn<bool>("fusion");

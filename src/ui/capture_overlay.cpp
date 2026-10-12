@@ -3161,7 +3161,7 @@ void CaptureOverlay::updateHdrEditBackdrop() {
     m_editor->setExternalImagePresentation(m_hdrEditBackdrop->ready(), true);
 }
 
-void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const {
+void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target, bool preserveClip) const {
     if (!target.isValid())
         return;
 
@@ -3170,7 +3170,7 @@ void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const 
         QRegion rasterRegion(target);
         for(const auto& artifact:m_monitorArtifacts)
             if(hasHdrBackdrop(artifact)) rasterRegion-=QRegion(globalToLocalRect(artifact.logicalGeometry));
-        painter.setClipRegion(rasterRegion);
+        painter.setClipRegion(rasterRegion, preserveClip ? Qt::IntersectClip : Qt::ReplaceClip);
         painter.fillRect(target, QColor(30, 34, 38));
 
         const QRect globalTarget = localToDesktopLogicalRect(target);
@@ -3238,6 +3238,19 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     painter.setOpacity(m_overlayOpacity);
 
     paintDesktop(painter, rect());
+    struct WindowHighlight {
+        QRect target;
+        double radius;
+        QRect clip;
+    };
+    const auto windowHighlight = [this](const WindowArtifact& window, bool outline = false) {
+        const bool overview = hasOverviewSelectionGeometry(window);
+        const QRect geometry = overview || outline ?
+            hyprcapture::ui::selectionOutlineGeometry(window.selectionGeometry.isValid() ? window.selectionGeometry : windowFrameGeometry(window),
+                                                      window.selectionClipGeometry, m_overlayLogicalGeometry) : windowFrameGeometry(window);
+        return WindowHighlight{globalToLocalRect(geometry), windowFrameRadius(window, true),
+                               overview ? globalToLocalRect(window.selectionClipGeometry) : QRect{}};
+    };
     painter.save();
     QPainterPath dim;
     dim.addRect(rect());
@@ -3270,8 +3283,17 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     else if ((m_mode==hyprcapture::CaptureMode::Region || m_defaults.fushionMode) && normalizedSelection().width()>4 && normalizedSelection().height()>4)
         undimmed.addRect(normalizedSelection().intersected(regionCaptureBounds()));
     else if (m_mode==hyprcapture::CaptureMode::Window || m_defaults.fushionMode) {
-        if (const auto* window=hoveredWindow())
-            undimmed=roundedWindowFramePath(globalToLocalRect(windowFrameGeometry(*window)),windowFrameRadius(*window),window->roundingPower);
+        if (const auto* window=hoveredWindow()) {
+            const auto highlight = windowHighlight(*window);
+            if (highlight.target.isValid()) {
+                undimmed = roundedWindowFramePath(highlight.target, highlight.radius, window->roundingPower);
+                if (highlight.clip.isValid()) {
+                    QPainterPath clip;
+                    clip.addRect(highlight.clip);
+                    undimmed = undimmed.intersected(clip);
+                }
+            }
+        }
         else if (m_defaults.fushionMode && !pendingConfirmActive()) {
             const QPoint localCursor = globalToLocalRect(QRect(cursorLogicalPosition(), QSize(1, 1))).topLeft();
             undimmed.addRect(localScreenRectAt(localCursor));
@@ -3330,29 +3352,31 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
         const auto* window = hoveredWindow();
         const auto* selected = selectedWindow();
         if (window) {
-            const QRect target = globalToLocalRect(windowFrameGeometry(*window));
+            const auto highlight = windowHighlight(*window);
             painter.save();
-            painter.setClipPath(roundedWindowFramePath(target, windowFrameRadius(*window), window->roundingPower), Qt::IntersectClip);
-            paintDesktop(painter, target);
+            painter.setClipPath(roundedWindowFramePath(highlight.target, highlight.radius, window->roundingPower), Qt::IntersectClip);
+            if (highlight.clip.isValid())
+                painter.setClipRect(highlight.clip, Qt::IntersectClip);
+            paintDesktop(painter, highlight.target, hasOverviewSelectionGeometry(*window));
             painter.restore();
         }
         for (const auto& candidate : m_windowArtifacts) {
-            const QRect outline =
-                hyprcapture::ui::selectionOutlineGeometry(candidate.selectionGeometry.isValid() ? candidate.selectionGeometry : windowFrameGeometry(candidate),
-                                                          candidate.selectionClipGeometry,
-                                                          m_overlayLogicalGeometry);
-            if (!outline.isValid())
+            const auto highlight = windowHighlight(candidate, true);
+            if (!highlight.target.isValid())
                 continue;
-            const QRect target = globalToLocalRect(outline);
             const bool isSelected = &candidate == selected;
             const bool isHovered = &candidate == window;
             const int penWidth = isSelected ? 3 : (isHovered ? 2 : 1);
             QPen pen(isSelected ? QColor(255, 255, 255, 245) : (isHovered ? QColor(255, 255, 255, 210) : QColor(255, 255, 255, 110)), penWidth);
             pen.setJoinStyle(Qt::RoundJoin);
+            painter.save();
+            if (highlight.clip.isValid())
+                painter.setClipRect(highlight.clip, Qt::IntersectClip);
             painter.setPen(pen);
             painter.setBrush(Qt::NoBrush);
-            const QRectF alignedTarget = QRectF(target).adjusted(0.5, 0.5, -0.5, -0.5);
-            painter.drawPath(roundedWindowFramePath(alignedTarget, windowFrameRadius(candidate), candidate.roundingPower));
+            const QRectF alignedTarget = QRectF(highlight.target).adjusted(0.5, 0.5, -0.5, -0.5);
+            painter.drawPath(roundedWindowFramePath(alignedTarget, highlight.radius, candidate.roundingPower));
+            painter.restore();
         }
     }
 }

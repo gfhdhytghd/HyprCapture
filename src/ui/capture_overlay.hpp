@@ -178,7 +178,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
                    hyprcapture::FilenameMetadata filenameMetadata);
     QImage renderResultImage(bool hdr = false);
     QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect, bool hdr = false) const;
-    void paintDesktop(QPainter& painter, const QRect& target) const;
+    void paintDesktop(QPainter& painter, const QRect& target, bool preserveClip = false) const;
     void paintCursorLayers(QPainter& painter, const QRect& outputRect, const QRect& globalRect, bool hdr = false) const;
     QRect normalizedSelection() const;
     QRect captureRectForMode() const;
