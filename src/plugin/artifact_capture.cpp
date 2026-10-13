@@ -1206,7 +1206,11 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
     }
 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[source]);
-    const auto* mapped = static_cast<const unsigned char*>(glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(state.bytes), GL_MAP_READ_BIT));
+    const unsigned char* mapped = nullptr;
+    {
+        ScopedTiming timing("window.stream.pbo_map");
+        mapped = static_cast<const unsigned char*>(glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(state.bytes), GL_MAP_READ_BIT));
+    }
     std::optional<ReadyWindowStreamPboFrame> newest;
     if (mapped) {
         ScopedTiming mapCopyTiming("window.stream.pbo_map_copy");
@@ -1253,10 +1257,17 @@ bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
     if (!slot || *slot != state.next)
         return false;
     glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[state.next]);
-    glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(state.bytes), nullptr, GL_STREAM_READ);
-    glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    {
+        ScopedTiming timing("window.stream.pbo_allocate");
+        glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(state.bytes), nullptr, GL_STREAM_READ);
+    }
+    {
+        ScopedTiming timing("window.stream.pbo_read_sdr");
+        glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    }
     if (hdrFramebuffer) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebufferId(*hdrFramebuffer));
+        ScopedTiming timing("window.stream.pbo_read_hdr");
         glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_HALF_FLOAT,
                      reinterpret_cast<void*>(size_t(state.width) * state.height * 4));
     }

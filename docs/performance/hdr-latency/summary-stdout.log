@@ -1,0 +1,398 @@
+{
+  "ui": {
+    "2880x1800": {
+      "SDR_memfd_write_seal": {
+        "cold_ms": 5.452,
+        "warm_trials": 4,
+        "median_ms": 5.425000000000001,
+        "min_ms": 5.025,
+        "max_ms": 6.009
+      },
+      "HDR_memfd_write_seal": {
+        "cold_ms": 14.697,
+        "warm_trials": 4,
+        "median_ms": 14.713000000000001,
+        "min_ms": 13.656,
+        "max_ms": 15.207
+      },
+      "HDR_map_planes": {
+        "cold_ms": 0.047,
+        "warm_trials": 4,
+        "median_ms": 0.0275,
+        "min_ms": 0.025,
+        "max_ms": 0.032
+      },
+      "hdrToPq10": {
+        "cold_ms": 34.279,
+        "warm_trials": 4,
+        "median_ms": 32.826,
+        "min_ms": 32.498,
+        "max_ms": 33.79
+      },
+      "hdrToSdr": {
+        "cold_ms": 21.04,
+        "warm_trials": 4,
+        "median_ms": 21.616999999999997,
+        "min_ms": 19.487,
+        "max_ms": 27.194
+      },
+      "FP16_QPainter_base": {
+        "cold_ms": 9.499,
+        "warm_trials": 4,
+        "median_ms": 7.288,
+        "min_ms": 6.929,
+        "max_ms": 10.378
+      },
+      "pq_memfd_copy": {
+        "cold_ms": 10.788,
+        "warm_trials": 4,
+        "median_ms": 8.434999999999999,
+        "min_ms": 7.893,
+        "max_ms": 8.615
+      },
+      "fp16_memfd_copy": {
+        "cold_ms": 21.293,
+        "warm_trials": 4,
+        "median_ms": 16.116500000000002,
+        "min_ms": 16.044,
+        "max_ms": 16.251
+      },
+      "SDR_baseline_append": {
+        "cold_ms": 1.896,
+        "warm_trials": 4,
+        "median_ms": 0.9994999999999999,
+        "min_ms": 0.965,
+        "max_ms": 1.202
+      },
+      "SDR_baseline_previews": {
+        "cold_ms": 1.134,
+        "warm_trials": 4,
+        "median_ms": 1.2405,
+        "min_ms": 1.094,
+        "max_ms": 1.307
+      },
+      "SDR_shifted_append": {
+        "cold_ms": 44.864,
+        "warm_trials": 4,
+        "median_ms": 33.6755,
+        "min_ms": 32.415,
+        "max_ms": 35.851
+      },
+      "SDR_shifted_previews": {
+        "cold_ms": 0.788,
+        "warm_trials": 4,
+        "median_ms": 0.8405,
+        "min_ms": 0.822,
+        "max_ms": 1.073
+      },
+      "HDR_baseline_append": {
+        "cold_ms": 0.966,
+        "warm_trials": 4,
+        "median_ms": 0.836,
+        "min_ms": 0.811,
+        "max_ms": 0.864
+      },
+      "HDR_baseline_previews": {
+        "cold_ms": 1.591,
+        "warm_trials": 4,
+        "median_ms": 2.1135,
+        "min_ms": 2.0,
+        "max_ms": 2.261
+      },
+      "HDR_thumbnail_PQ": {
+        "cold_ms": 3.369,
+        "warm_trials": 4,
+        "median_ms": 3.6695,
+        "min_ms": 3.622,
+        "max_ms": 3.958
+      },
+      "HDR_shifted_append": {
+        "cold_ms": 41.303,
+        "warm_trials": 4,
+        "median_ms": 40.868,
+        "min_ms": 38.593,
+        "max_ms": 43.026
+      },
+      "HDR_shifted_previews": {
+        "cold_ms": 1.994,
+        "warm_trials": 4,
+        "median_ms": 1.9,
+        "min_ms": 1.739,
+        "max_ms": 2.004
+      },
+      "editor_hdr_renderer": {
+        "cold_ms": 2.267,
+        "warm_trials": 4,
+        "median_ms": 2.3295,
+        "min_ms": 1.644,
+        "max_ms": 3.202
+      },
+      "editor_live_install": {
+        "cold_ms": 0.006,
+        "warm_trials": 4,
+        "median_ms": 0.0025,
+        "min_ms": 0.002,
+        "max_ms": 0.005
+      }
+    },
+    "6144x3456": {
+      "SDR_memfd_write_seal": {
+        "cold_ms": 18.897,
+        "warm_trials": 4,
+        "median_ms": 22.154,
+        "min_ms": 21.31,
+        "max_ms": 25.023
+      },
+      "HDR_memfd_write_seal": {
+        "cold_ms": 62.034,
+        "warm_trials": 4,
+        "median_ms": 64.1865,
+        "min_ms": 63.658,
+        "max_ms": 71.881
+      },
+      "hdrToPq10": {
+        "cold_ms": 123.06,
+        "warm_trials": 4,
+        "median_ms": 122.6435,
+        "min_ms": 115.399,
+        "max_ms": 127.077
+      },
+      "hdrToSdr": {
+        "cold_ms": 89.679,
+        "warm_trials": 4,
+        "median_ms": 87.425,
+        "min_ms": 81.886,
+        "max_ms": 88.78
+      },
+      "FP16_QPainter_base": {
+        "cold_ms": 42.433,
+        "warm_trials": 4,
+        "median_ms": 26.468,
+        "min_ms": 25.831,
+        "max_ms": 38.767
+      },
+      "pq_memfd_copy": {
+        "cold_ms": 36.759,
+        "warm_trials": 4,
+        "median_ms": 34.2885,
+        "min_ms": 32.998,
+        "max_ms": 35.488
+      },
+      "fp16_memfd_copy": {
+        "cold_ms": 67.855,
+        "warm_trials": 4,
+        "median_ms": 66.7485,
+        "min_ms": 66.609,
+        "max_ms": 73.57
+      },
+      "SDR_baseline_append": {
+        "cold_ms": 6.616,
+        "warm_trials": 4,
+        "median_ms": 7.1695,
+        "min_ms": 6.548,
+        "max_ms": 11.043
+      },
+      "SDR_baseline_previews": {
+        "cold_ms": 1.512,
+        "warm_trials": 4,
+        "median_ms": 1.2505,
+        "min_ms": 1.084,
+        "max_ms": 1.353
+      },
+      "SDR_shifted_append": {
+        "cold_ms": 144.055,
+        "warm_trials": 4,
+        "median_ms": 147.74099999999999,
+        "min_ms": 144.652,
+        "max_ms": 226.98
+      },
+      "SDR_shifted_previews": {
+        "cold_ms": 1.751,
+        "warm_trials": 4,
+        "median_ms": 1.0685,
+        "min_ms": 0.993,
+        "max_ms": 1.148
+      },
+      "editor_hdr_renderer": {
+        "cold_ms": 11.172,
+        "warm_trials": 4,
+        "median_ms": 13.2365,
+        "min_ms": 11.085,
+        "max_ms": 14.441
+      },
+      "editor_live_install": {
+        "cold_ms": 0.007,
+        "warm_trials": 4,
+        "median_ms": 0.008,
+        "min_ms": 0.007,
+        "max_ms": 0.009
+      }
+    }
+  },
+  "gpu": {
+    "2880x1800": {
+      "texture_storage_allocate": {
+        "cold_ms": 4.641
+      },
+      "FP16_upload": {
+        "cold_ms": 9.972,
+        "warm_trials": 4,
+        "median_ms": 2.3724999999999996,
+        "min_ms": 2.326,
+        "max_ms": 2.391
+      },
+      "FP16_copy_draw": {
+        "cold_ms": 1.892,
+        "warm_trials": 4,
+        "median_ms": 0.4985,
+        "min_ms": 0.49,
+        "max_ms": 1.884
+      },
+      "PQ_draw": {
+        "cold_ms": 2.376,
+        "warm_trials": 4,
+        "median_ms": 0.49450000000000005,
+        "min_ms": 0.452,
+        "max_ms": 1.614
+      },
+      "SDR_resolve_draw": {
+        "cold_ms": 0.532,
+        "warm_trials": 4,
+        "median_ms": 0.4745,
+        "min_ms": 0.429,
+        "max_ms": 1.493
+      },
+      "SDR_PBO_allocate": {
+        "cold_ms": 0.003,
+        "warm_trials": 4,
+        "median_ms": 0.003,
+        "min_ms": 0.002,
+        "max_ms": 0.007
+      },
+      "SDR_PBO_read": {
+        "cold_ms": 9.212,
+        "warm_trials": 4,
+        "median_ms": 0.633,
+        "min_ms": 0.58,
+        "max_ms": 2.229
+      },
+      "SDR_PBO_map_copy": {
+        "cold_ms": 1.108,
+        "warm_trials": 4,
+        "median_ms": 0.881,
+        "min_ms": 0.874,
+        "max_ms": 0.912
+      },
+      "HDR_PBO_allocate": {
+        "cold_ms": 3.771,
+        "warm_trials": 4,
+        "median_ms": 0.001,
+        "min_ms": 0.001,
+        "max_ms": 0.001
+      },
+      "HDR_PBO_read": {
+        "cold_ms": 1.386,
+        "warm_trials": 4,
+        "median_ms": 3.01,
+        "min_ms": 2.087,
+        "max_ms": 4.585
+      },
+      "HDR_PBO_map_copy": {
+        "cold_ms": 4.673,
+        "warm_trials": 4,
+        "median_ms": 2.4459999999999997,
+        "min_ms": 2.382,
+        "max_ms": 4.457
+      },
+      "PQ_readback": {
+        "cold_ms": 1.458,
+        "warm_trials": 4,
+        "median_ms": 1.5235,
+        "min_ms": 1.366,
+        "max_ms": 1.597
+      }
+    },
+    "6144x3456": {
+      "texture_storage_allocate": {
+        "cold_ms": 53.93
+      },
+      "FP16_upload": {
+        "cold_ms": 34.456,
+        "warm_trials": 4,
+        "median_ms": 34.9245,
+        "min_ms": 34.114,
+        "max_ms": 35.746
+      },
+      "FP16_copy_draw": {
+        "cold_ms": 1.56,
+        "warm_trials": 4,
+        "median_ms": 1.5865,
+        "min_ms": 1.496,
+        "max_ms": 4.691
+      },
+      "PQ_draw": {
+        "cold_ms": 1.519,
+        "warm_trials": 4,
+        "median_ms": 2.276,
+        "min_ms": 1.519,
+        "max_ms": 3.447
+      },
+      "SDR_resolve_draw": {
+        "cold_ms": 4.721,
+        "warm_trials": 4,
+        "median_ms": 1.9140000000000001,
+        "min_ms": 1.445,
+        "max_ms": 3.767
+      },
+      "SDR_PBO_allocate": {
+        "cold_ms": 4.65,
+        "warm_trials": 4,
+        "median_ms": 5.730499999999999,
+        "min_ms": 5.707,
+        "max_ms": 8.082
+      },
+      "SDR_PBO_read": {
+        "cold_ms": 2.379,
+        "warm_trials": 4,
+        "median_ms": 3.065,
+        "min_ms": 2.244,
+        "max_ms": 4.637
+      },
+      "SDR_PBO_map_copy": {
+        "cold_ms": 5.567,
+        "warm_trials": 4,
+        "median_ms": 5.3469999999999995,
+        "min_ms": 4.885,
+        "max_ms": 7.328
+      },
+      "HDR_PBO_allocate": {
+        "cold_ms": 14.908,
+        "warm_trials": 4,
+        "median_ms": 14.3315,
+        "min_ms": 13.158,
+        "max_ms": 15.523
+      },
+      "HDR_PBO_read": {
+        "cold_ms": 6.315,
+        "warm_trials": 4,
+        "median_ms": 6.2829999999999995,
+        "min_ms": 5.139,
+        "max_ms": 8.941
+      },
+      "HDR_PBO_map_copy": {
+        "cold_ms": 16.862,
+        "warm_trials": 4,
+        "median_ms": 18.137,
+        "min_ms": 17.398,
+        "max_ms": 18.934
+      },
+      "PQ_readback": {
+        "cold_ms": 12.405,
+        "warm_trials": 4,
+        "median_ms": 13.464,
+        "min_ms": 13.423,
+        "max_ms": 14.718
+      }
+    }
+  }
+}

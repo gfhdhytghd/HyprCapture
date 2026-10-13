@@ -3133,7 +3133,10 @@ void CaptureOverlay::updateHdrEditBackdrop() {
         QPointer<CaptureOverlay> overlay(this);
         m_hdrEditPreviewPool->start(QRunnable::create([overlay, render = std::move(render), baseKey, reference] {
             float peak = 0;
-            const QImage pq = hyprcapture::ui::hdrToPq10(render(), &peak, reference);
+            QImage rendered;
+            { ScopedUiTiming timing("overlay.hdr_edit_render"); rendered = render(); }
+            QImage pq;
+            { ScopedUiTiming timing("overlay.hdr_edit_convert"); pq = hyprcapture::ui::hdrToPq10(rendered, &peak, reference); }
             QMetaObject::invokeMethod(QCoreApplication::instance(), [overlay, pq, peak, baseKey, reference] {
                 if (!overlay) return;
                 auto* self = overlay.data();
@@ -3143,6 +3146,7 @@ void CaptureOverlay::updateHdrEditBackdrop() {
                     self->updateHdrEditBackdrop();
                     return;
                 }
+                ScopedUiTiming uploadTiming("overlay.hdr_edit_upload");
                 if (self->m_hdrEditBackdrop->setPqImage(pq, self->m_editor->canvasGeometry(), peak, reference)) {
                     self->m_hdrEditCacheKey = baseKey;
                     self->m_hdrEditBackdrop->setVisible(self->m_overlayActive);
@@ -4508,6 +4512,7 @@ QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalR
 }
 
 QImage CaptureOverlay::renderResultImage(bool hdr) {
+    ScopedUiTiming timing(QStringLiteral("overlay.render_result hdr=%1").arg(hdr));
     const auto bg = currentWindowBackground();
     if (m_mode == hyprcapture::CaptureMode::Window) {
         auto* windowArtifact = selectedWindow() ? selectedWindow() : hoveredWindow();
@@ -4816,6 +4821,7 @@ QImage CaptureOverlay::renderScrollResultImage(bool hdr) {
 }
 
 void CaptureOverlay::beginScrollCapture() {
+    ScopedUiTiming timing("overlay.scroll_prepare");
     if(m_scrollController || m_scrolling || !m_editing || !m_editor || m_scrollResult || m_scrollSessionVersion<1 || m_hymissionOverviewSession ||
        (selectedWindow() && selectedWindow()->stagePreview)) return;
     auto beforeCapture=std::make_shared<QRect>(m_editImageRect);
@@ -4844,6 +4850,7 @@ void CaptureOverlay::beginScrollCapture() {
     connect(controller,&hyprcapture::ui::ScrollCaptureController::began,this,[this,controller,beforeCapture] {
         *beforeCapture=m_editImageRect;
         const QRect capture=QRect(mapFromGlobal(controller->captureGeometry().topLeft()),controller->captureGeometry().size());
+        traceTiming("overlay.scroll_began");
         m_scrolling=true; m_pendingConfirm=false; m_dragging=false;
         hideOptionPopups(); m_toolbar->hide();
         m_editor->setRegionResizeBounds({}); m_editImageRect=capture;
@@ -4890,6 +4897,8 @@ void CaptureOverlay::beginScrollCapture() {
 }
 
 void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
+    traceTiming("overlay.begin_edit_requested");
+    ScopedUiTiming timing("overlay.begin_edit");
     if (m_editing || m_record || m_recordActive)
         return;
     // Once a window is chosen, toolbar pointer movement must not retarget it.

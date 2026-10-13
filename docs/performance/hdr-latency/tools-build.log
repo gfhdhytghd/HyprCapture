@@ -1,0 +1,9 @@
+[  4%] Building CXX object CMakeFiles/fp16-probe.dir/fp16-probe.cpp.o
+[  4%] Built target ui-benchmark_autogen_timestamp_deps
+[  4%] Built target gpu-benchmark_autogen_timestamp_deps
+[  8%] Built target ui-benchmark_autogen
+[ 12%] Built target gpu-benchmark_autogen
+[ 50%] Built target ui-benchmark
+[ 62%] Built target gpu-benchmark
+[ 66%] Linking CXX executable fp16-probe
+[100%] Built target fp16-probe

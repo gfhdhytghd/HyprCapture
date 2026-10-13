@@ -1,0 +1,13 @@
+Test project /tmp/hyprcapture-hdr-phase1
+    Start 10: in-place-editor
+1/4 Test #10: in-place-editor ..................   Passed    6.39 sec
+    Start 20: scroll-capture
+2/4 Test #20: scroll-capture ...................   Passed    0.11 sec
+    Start 21: scroll-stitcher
+3/4 Test #21: scroll-stitcher ..................   Passed    8.90 sec
+    Start 44: hdr-backdrop
+4/4 Test #44: hdr-backdrop .....................   Passed    0.08 sec
+
+100% tests passed out of 4
+
+Total Test time (real) =  15.48 sec

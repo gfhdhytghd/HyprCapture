@@ -1,0 +1,79 @@
+{
+  "date": "2026-10-13",
+  "repo_head": "dd95992e5de299f715b5513be6cbd41ecd1d383c",
+  "hyprland_version": "Hyprland 0.56.2 built from branch v0.56.2 at commit efb50993780079460b0cbed1363e2166a2de1d9f clean ([gha] Nix: update inputs).\nDate: Wed Aug 5 14:13:21 2026\nTag: v0.56.2, commits: 7661\n\nLibraries:\nHyprgraphics: built against 0.5.1, system has 0.5.1\nHyprutils: built against 0.14.2, system has 0.14.2\nHyprcursor: built against 0.1.13, system has 0.1.13\nHyprlang: built against 0.6.8, system has 0.6.8\nAquamarine: built against 0.15.1, system has 0.15.1\n\nVersion ABI string: efb50993780079460b0cbed1363e2166a2de1d9f_aq_0.15_hu_0.14_hg_0.5_hc_0.1_hlg_0.6\nno flags were set",
+  "monitors": [
+    {
+      "id": 0,
+      "name": "eDP-1",
+      "description": "LG Display 0x0778",
+      "make": "LG Display",
+      "model": "0x0778",
+      "serial": "",
+      "width": 2880,
+      "height": 1800,
+      "physicalWidth": 290,
+      "physicalHeight": 180,
+      "refreshRate": 59.99,
+      "x": 0,
+      "y": 0,
+      "activeWorkspace": {
+        "id": 5,
+        "name": "5"
+      },
+      "specialWorkspace": {
+        "id": 0,
+        "name": ""
+      },
+      "reserved": [
+        0,
+        58,
+        0,
+        0
+      ],
+      "scale": 2,
+      "transform": 0,
+      "focused": true,
+      "dpmsStatus": true,
+      "vrr": false,
+      "solitary": "0",
+      "solitaryBlockedBy": [
+        "WINDOWED",
+        "CANDIDATE"
+      ],
+      "activelyTearing": false,
+      "tearingBlockedBy": [
+        "NOT_TORN",
+        "USER",
+        "CANDIDATE"
+      ],
+      "directScanoutTo": "0",
+      "directScanoutBlockedBy": [
+        "CANDIDATE"
+      ],
+      "disabled": false,
+      "currentFormat": "XRGB2101010",
+      "mirrorOf": "none",
+      "availableModes": [
+        "2880x1800@59.99Hz"
+      ],
+      "colorManagementPreset": "hdr",
+      "sdrBrightness": 1,
+      "sdrSaturation": 1,
+      "sdrMinLuminance": 0,
+      "sdrMaxLuminance": 186,
+      "hardwareCursorsInUse": false
+    }
+  ],
+  "original_plugin": "/tmp/claude-1000/-home-wilf-data-hyprland-plugins/a6543793-e8bf-47a1-8f97-56a68d358a1b/scratchpad/hc-touchpad.so",
+  "original_plugin_sha256": "88c6d02ac2edfdcfcc3f438cbd24fa0dca71af13b991459a7b5aa3d04cf391f1",
+  "active_plugin_handle": "560cf46017c0",
+  "all_identified_module_mappings": [
+    "/home/wilf/data/issue-worktrees/hyprcapture-sticky/build-sticky/libhyprcapture.so",
+    "/tmp/claude-1000/-home-wilf-data-hyprland-plugins/a6543793-e8bf-47a1-8f97-56a68d358a1b/scratchpad/hc-touchpad.so"
+  ],
+  "new_plugin_sha256": "1505490680941c1e7ad7e0f36399ba55fb9f2cbc71997f044619a7bae800b632",
+  "new_helper_sha256": "082705c39bd986574dd13dff65f6ced9dc8689585c82744106e63457e9cd1467",
+  "product_build": "/tmp/hyprcapture-hdr-phase1",
+  "tools_build": "/tmp/hyprcapture-hdr-tools"
+}
