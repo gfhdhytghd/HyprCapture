@@ -39,41 +39,30 @@ struct ScrollSession {
   Time::steady_tp started = Time::steadyNow();
 };
 std::unique_ptr<ScrollSession> g_scrollSession;
-CFunctionHook *g_scrollLayerHook = nullptr;
-using ScrollLayerFn = void (*)(void *, PHLLS, PHLMONITOR,
-                               const Time::steady_tp &, bool, bool);
-ScrollLayerFn g_scrollLayerOriginal = nullptr;
-bool g_scrollRendering = false;
-void hkScrollLayer(void *renderer, PHLLS layer, PHLMONITOR monitor,
-                   const Time::steady_tp &time, bool popups, bool lockscreen) {
-  if (sessionLocked()) {
-    if (g_scrollLayerOriginal)
-      g_scrollLayerOriginal(renderer, layer, monitor, time, popups, lockscreen);
-    return;
+// Only the synchronous offscreen pass sees the filtered lists. Do not unmap
+// surfaces or change animated alpha: that would affect input and presentation.
+class ScrollLayerExclusion {
+public:
+  ScrollLayerExclusion(const PHLMONITOR &monitor, pid_t owner)
+      : m_monitor(monitor), m_layers(monitor->m_layerSurfaceLayers) {
+    for (auto &layers : m_layers)
+      std::erase_if(layers, [owner](const auto &ref) {
+        const auto layer = ref.lock();
+        return layer && layer->getPID() == owner &&
+               layer->m_namespace.starts_with("hyprcapture-");
+      });
+    m_monitor->m_layerSurfaceLayers.swap(m_layers);
   }
-  if (g_scrollRendering && g_scrollSession && layer &&
-      layer->getPID() == g_scrollSession->owner &&
-      layer->m_namespace.starts_with("hyprcapture-"))
-    return;
-  if (g_scrollLayerOriginal)
-    g_scrollLayerOriginal(renderer, layer, monitor, time, popups, lockscreen);
-}
-bool ensureScrollLayerHook() {
-  if (g_scrollLayerHook)
-    return true;
-  auto source = findFunctionByDemangledName("renderLayer", "::renderLayer(");
-  if (!source)
-    return false;
-  g_scrollLayerHook = HyprlandAPI::createFunctionHook(
-      g_pluginHandle, source, reinterpret_cast<void *>(&hkScrollLayer));
-  if (!g_scrollLayerHook || !g_scrollLayerHook->hook()) {
-    removeRealBackgroundHook(g_scrollLayerHook);
-    return false;
+  ~ScrollLayerExclusion() {
+    m_monitor->m_layerSurfaceLayers.swap(m_layers);
   }
-  g_scrollLayerOriginal =
-      reinterpret_cast<ScrollLayerFn>(g_scrollLayerHook->m_original);
-  return g_scrollLayerOriginal;
-}
+  ScrollLayerExclusion(const ScrollLayerExclusion &) = delete;
+  ScrollLayerExclusion &operator=(const ScrollLayerExclusion &) = delete;
+
+private:
+  PHLMONITOR m_monitor;
+  decltype(m_monitor->m_layerSurfaceLayers) m_layers;
+};
 void scrollNotify(ScrollSession &s, const Json &event) {
   const std::string data = event.dump() + "\n";
   if (s.control < 0 ||
@@ -416,7 +405,6 @@ void scrollTick(SP<CEventLoopTimer> timer) {
   int width = 0, height = 0, cropX = 0, cropTop = 0;
   Rect geometry = s->target;
   CBox artifact;
-  g_scrollRendering = true;
   if (s->window) {
     const auto native = windowCaptureGeometry(
         renderedWindowBox(s->window, s->window->getFullWindowBoundingBox()),
@@ -424,11 +412,10 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     width = native.pixelWidth;
     height = native.pixelHeight;
     if (uint64_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4) > 128ULL * 1024 * 1024) {
-      g_scrollRendering = false; restore(); s->failed = true; return;
+      restore(); s->failed = true; return;
     }
     if (!ensureWindowStreamPboReadback(pbo, width, height,
                                        size_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4))) {
-      g_scrollRendering = false;
       restore();
       s->failed = true;
       return;
@@ -443,6 +430,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     cropTop = info.cropTopY;
     geometry = toRect(artifact);
   } else {
+    ScrollLayerExclusion excludeLayers(s->monitor, s->owner);
     const auto mon = monitorRect(s->monitor);
     width = std::lround(s->target.width * s->scale);
     height = std::lround(s->target.height * s->scale);
@@ -455,11 +443,10 @@ void scrollTick(SP<CEventLoopTimer> timer) {
       cropX = cropTop = 0;
     }
     if (uint64_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4) > 128ULL * 1024 * 1024) {
-      g_scrollRendering = false; restore(); s->failed = true; return;
+      restore(); s->failed = true; return;
     }
     if (!ensureWindowStreamPboReadback(pbo, width, height,
                                        size_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4))) {
-      g_scrollRendering = false;
       restore();
       s->failed = true;
       return;
@@ -468,7 +455,6 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                           nullptr, &pbo.framebuffer, true);
     artifact = {geometry.x, geometry.y, geometry.width, geometry.height};
   }
-  g_scrollRendering = false;
   if (!pbo.framebuffer || width < 1 || height < 1) {
     restore();
     s->failed = true;
@@ -573,8 +559,6 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
         cred.uid != getuid())
       throw std::runtime_error("owner");
     s->owner = cred.pid;
-    if (!ensureScrollLayerHook())
-      throw std::runtime_error("layer exclusion");
     s->sender = std::make_unique<WindowStreamSender>(
         WindowStreamSenderConfig{.socketPath = frames});
     s->timer = makeShared<CEventLoopTimer>(
