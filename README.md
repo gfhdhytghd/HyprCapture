@@ -13,7 +13,7 @@ See the [changelog](https://gfhdhytghd.github.io/HyprCapture/) for release histo
 > Hyprland plugins run inside the compositor process and with high permission. Install plugins only from sources you trust.
 
 > [!WARNING]
-> This software is 99% vibe coded with OpenAI CodeX, but have been manual audited, warn in case you mind it.
+> This software is vibe coded: 2% human, 20% Claude, 78% OpenAI Codex. It has been manually audited; warning in case you mind it.
 
 ## Open-source acknowledgements
 
