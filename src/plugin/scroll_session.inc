@@ -127,8 +127,6 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     s.failed = true;
     return;
   }
-  const auto previousFocus = g_pSeatManager->m_state.pointerFocus;
-  const auto previousLocal = g_pSeatManager->m_lastLocalCoords;
   s.inputRoot = window->wlSurface()->resource();
   s.inputSurface = surface;
   const bool positionPointer = !input.native || g_pSeatManager->m_state.pointerFocus != surface;
@@ -146,7 +144,8 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
     const bool layer = g_pInputManager->m_lastFocusOnLS;
     g_pInputManager->m_lastFocusOnLS = false;
     g_pInputManager->onMouseWheel(input.event, input.pointer);
-    // Restoring focus below flushes the target frame before leaving it.
+    // Live events already have a device frame boundary. Flushing here splits
+    // the two axis-stop events of a touchpad gesture and breaks Chrome's fling.
     g_pInputManager->m_lastFocusOnLS = layer;
     s.replaying = false;
   } else {
@@ -156,12 +155,9 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
         input.event.source, input.event.relativeDirection);
     g_pSeatManager->sendPointerFrame();
   }
-  // Never leave ordinary window focus installed between events: a lock can
-  // arrive before another motion/button event restores overlay hit testing.
-  if (positionPointer && !sessionLocked()) {
-    g_pSeatManager->m_lastLocalCoords = previousLocal;
-    g_pSeatManager->setPointerFocus(previousFocus.lock(), previousLocal);
-  }
+  // Keep pointer focus through a touchpad gesture: restoring the overlay after
+  // every event splits the gesture. Clicks and motion outside the capture
+  // restore overlay hit testing, and a session lock stops the scroll session.
 }
 void scrollInput(ScrollSession &s, ScrollInput input) {
   if (sessionLocked() || s.failed || s.paused)
