@@ -4795,8 +4795,6 @@ void cleanupCompositorArtifacts(const CaptureSession& session) {
 
 void shutdownArtifactCapture() {
     stopScrollSession();
-    removeRealBackgroundHook(g_scrollLayerHook);
-    g_scrollLayerOriginal=nullptr;
     shutdownExportPipeWriters();
     stopWindowStreamSession();
     if (g_pHyprOpenGL)
