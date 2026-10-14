@@ -69,6 +69,7 @@ struct Annotation {
     int number = 1;
     int documentY = 0;
     bool scrollAnchored = false;
+    std::optional<hyprcapture::ui::ScrollLayout> anchorLayout;
     mutable QImage mosaicCache;
     mutable QRect mosaicBounds;
     mutable int mosaicBlock = 0;
@@ -100,17 +101,62 @@ using hyprcapture::ui::ScrollLayout;
 // and one undo action, including when the document grows above the first frame.
 struct AnnotationPiece { QRectF clip; int dy; };
 std::vector<AnnotationPiece> annotationPieces(const Annotation& a,const ScrollLayout& l,bool live) {
-    const QRect c=l.content; const int w=l.frameSize.width(),h=l.frameSize.height();
+    const QRect c=l.content, initial=l.initialContent.isEmpty()?c:l.initialContent;
+    const int w=l.frameSize.width(),h=l.frameSize.height();
     const int growth=l.maximumY-l.minimumY;
     std::vector<AnnotationPiece> result{{QRectF(0,0,w,c.y()),0},
-        {QRectF(0,c.bottom()+1,w,h-c.bottom()-1),live?0:growth},
-        {QRectF(c),a.documentY-(live?l.viewportY:l.minimumY)}};
-    const auto side=[&](int x,int width,int seam) {
+        {QRectF(0,c.bottom()+1,w,h-c.bottom()-1),live?0:growth}};
+    const auto applies=[&](const ScrollLayout::Panel& panel) {
+        if(panel.active || a.documentY<=panel.maximumY) return true;
+        if(a.anchorLayout) for(const auto& old:a.anchorLayout->panels)
+            if(old.active && old.rect==panel.rect && old.documentY==panel.documentY) return true;
+        return false;
+    };
+    std::vector<QRect> body{c};
+    for(const auto& panel:l.panels) if(applies(panel)) {
+        std::vector<QRect> next;
+        for(const auto& rect:body) {
+            if(!rect.intersects(panel.rect)) {next.push_back(rect);continue;}
+            if(rect.left()<panel.rect.left()) next.push_back(QRect(rect.left(),rect.top(),panel.rect.left()-rect.left(),rect.height()));
+            if(rect.right()>panel.rect.right()) next.push_back(QRect(panel.rect.right()+1,rect.top(),rect.right()-panel.rect.right(),rect.height()));
+        }
+        body=std::move(next);
+    }
+    for(auto rect:body) {
+        if(a.anchorLayout) rect.setTop(rect.top()+a.anchorLayout->topOcclusion);
+        result.push_back({QRectF(rect),a.documentY-(live?l.viewportY:l.minimumY)});
+    }
+    const auto fixedSide=[&](int x,int width,int seam) {
         if(live || seam<0) { result.push_back({QRectF(x,c.y(),width,c.height()),0}); return; }
         result.push_back({QRectF(x,c.y(),width,seam-c.y()),0});
         result.push_back({QRectF(x,seam,width,c.bottom()+1-seam),growth});
     };
-    side(0,c.x(),l.leftSeam); side(c.right()+1,w-c.right()-1,l.rightSeam);
+    fixedSide(0,initial.x(),l.leftSeam);
+    fixedSide(initial.right()+1,w-initial.right()-1,l.rightSeam);
+    for(const auto& panel:l.panels) {
+        if(!applies(panel)) continue;
+        int anchor=a.documentY;
+        if(a.anchorLayout) for(const auto& old:a.anchorLayout->panels)
+            if(old.active && old.rect==panel.rect && old.documentY==panel.documentY)
+                anchor=old.documentY;
+        // Annotation coordinates remain in their creation viewport. Split at
+        // the same document/panel boundaries as the compositor's prefix and
+        // expand(), including annotations drawn before the column pinned.
+        const int first=panel.documentY+panel.sourceTop;
+        const int seam=panel.seam<0?panel.sourceHeight:panel.seam;
+        const int end=first+panel.sourceHeight;
+        const int extra=panel.maximumY-panel.documentY;
+        const int base=anchor-(live?(panel.active?panel.documentY:l.viewportY):l.minimumY);
+        const auto piece=[&](int from,int to,int shift) {
+            const int visibleTop=c.y()+(a.anchorLayout?a.anchorLayout->topOcclusion:0);
+            const int top=std::max(visibleTop,c.y()+from-anchor);
+            const int bottom=std::min(c.bottom()+1,c.y()+to-anchor);
+            if(top<bottom) result.push_back({QRectF(panel.rect.x(),top,panel.rect.width(),bottom-top),base+shift});
+        };
+        piece(l.minimumY,first,0);
+        piece(first,first+seam,0);
+        piece(first+seam,end,live?0:extra);
+    }
     return result;
 }
 
@@ -644,7 +690,7 @@ class AnnotationCanvas final : public QWidget {
     void scrollImage(const QImage& image,const ScrollLayout& layout,bool live) {
         if(image.isNull()) return;
         if(!scrollLayout) {
-            auto anchor=[](Annotation& a) { a.scrollAnchored=true; a.documentY=0; };
+            auto anchor=[&](Annotation& a) { a.scrollAnchored=true; a.documentY=0; a.anchorLayout=layout; };
             for(auto& a:m_annotations) anchor(a);
             for(auto& e:m_history) { anchor(e.before); anchor(e.after); for(auto& a:e.all) anchor(a); }
         }
@@ -1018,6 +1064,7 @@ class AnnotationCanvas final : public QWidget {
         Annotation annotation;
         annotation.scrollAnchored=scrollLayout.has_value() && liveScroll;
         annotation.documentY=scrollLayout?scrollLayout->viewportY:0;
+        annotation.anchorLayout=scrollLayout;
         annotation.tool = tool;
         annotation.variant = variant;
         annotation.color = color;

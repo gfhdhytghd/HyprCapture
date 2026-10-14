@@ -26,7 +26,6 @@ QImage texture(int width, int height, unsigned seed = 42) {
 }
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
-    cv::setNumThreads(1);
     // A changing image and an interior fixed panel must not become the page's
     // motion model. Exercise forward, reverse, idle and recovery transitions.
     const auto dynamicDocument = texture(640, 2400, 730);

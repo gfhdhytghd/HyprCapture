@@ -467,7 +467,7 @@ cv::Mat crop(const cv::Mat &image, const QRect &rect) {
   return image(cv::Rect(rect.x(), rect.y(), rect.width(), rect.height()));
 }
 struct ColumnEvidence {
-  bool stationary = false, changed = false;
+  bool stationary = false, changed = false, translating = false;
 };
 // Compare zero motion with the already registered document translation at
 // native resolution. Flat/repeating pixels cannot vote for either layer.
@@ -485,10 +485,15 @@ std::vector<ColumnEvidence> columnEvidence(const QImage &a, const QImage &b,
                      std::abs(qBlue(x) - qBlue(y)),
                      std::abs(qAlpha(x) - qAlpha(y))});
   };
-  struct Counts { int changed = 0, stationary = 0, first, last; };
-  std::vector<Counts> counts(a.width(), {0, 0, bottom, top});
+  struct Counts { int changed = 0, stationary = 0, translating = 0, first, last; };
+  std::vector<Counts> counts(a.width(), {0, 0, 0, bottom, top});
   // Walk scanlines contiguously; touchpad captures run this for many frames.
-  for (int y = top; y < bottom; ++y) {
+  // At most 256 distributed scanlines: decisions need spatial support, not
+  // a full image traversal. Retain native pixels for tiny touchpad movement.
+  const int rowStep=std::max(1,(bottom-top+255)/256);
+  for (int sample=0,begin=top;begin<bottom;begin+=rowStep,++sample) {
+    // Rotate the phase so repeated rules/glyph edges cannot alias the stride.
+    const int y=std::min(bottom-1,begin+sample%rowStep);
     const auto *current = reinterpret_cast<const QRgb *>(b.constScanLine(y));
     const auto *next = reinterpret_cast<const QRgb *>(b.constScanLine(std::min(y+1,b.height()-1)));
     const auto *screen = reinterpret_cast<const QRgb *>(a.constScanLine(y));
@@ -499,6 +504,7 @@ std::vector<ColumnEvidence> columnEvidence(const QImage &a, const QImage &b,
       const bool detail = difference(current[x],next[x]) > 8 ||
           difference(current[x],current[std::min(x+1,content.right())]) > 8;
       count.changed += detail && screenError > 6;
+      count.translating += detail && screenError > 6 && difference(current[x], translated[x]) <= 3;
       if (detail && screenError <= 3 && difference(current[x], translated[x]) > 8) {
         ++count.stationary;
         count.first = std::min(count.first, y);
@@ -508,9 +514,9 @@ std::vector<ColumnEvidence> columnEvidence(const QImage &a, const QImage &b,
   }
   for (int x = content.left(); x <= content.right(); ++x) {
     const auto &count = counts[x];
-    result[x] = {count.changed <= std::max(2, (bottom - top) / 200) &&
+    result[x] = {count.changed <= std::max(2, (bottom - top) / rowStep / 200) &&
                      count.stationary >= 8 && count.last - count.first >= (bottom - top) / 5,
-                 count.changed > 2};
+                 count.changed > 2, count.translating >= 8 && count.translating >= count.changed * .9 && count.stationary < count.translating / 4};
   }
   return result;
 }
@@ -534,6 +540,16 @@ Match registerBody(const QImage &a, const QImage &b, QRect rect) {
 } // namespace
 ScrollStitcher::ScrollStitcher() = default;
 ScrollStitcher::ScrollStitcher(Limits limits) : m_limits(limits) {}
+ScrollLayout ScrollStitcher::layout() const {
+  auto result=m_layout;
+  result.initialContent=m_layoutLocked?m_initialContent:m_layout.content;
+  result.topOcclusion=m_topOcclusion;
+  result.panels=m_releasedPanels;
+  for (const auto &side:m_pinnedSides)
+    result.panels.push_back({side.rect,side.documentY,side.sourceTop,
+                            side.image[0].height(),side.seam,m_layout.maximumY,true});
+  return result;
+}
 void ScrollStitcher::updateColumns(const QImage &frame, const QImage &original,
                                    const QImage &hdr, int displacement) {
   const auto old = m_layout.content;
@@ -541,14 +557,65 @@ void ScrollStitcher::updateColumns(const QImage &frame, const QImage &original,
   // blank document gutters. Keep edge chrome out of side-motion history even
   // before its row mask has accumulated enough stationary observations.
   const int inset = std::max(m_topOcclusion, std::min(64, old.height()/4));
-  const auto evidence = columnEvidence(m_previous, frame, old.adjusted(0, inset, 0, 0), displacement);
+  const auto evidenceRect = m_initialContent.adjusted(0, inset, 0, 0);
+  const auto evidence = columnEvidence(m_previous, frame, evidenceRect, displacement);
+  // Only forward growth can release a section panel. Revisiting old, pre-pin
+  // captures must not reinterpret their motion as a new unsticky section.
+  if (m_layout.viewportY + displacement > m_layout.maximumY) {
+    QRect widened = old;
+    std::vector<QRect> released;
+    for (const auto &side : m_pinnedSides) {
+      int translating = 0, changed = 0;
+      for (int x=side.rect.left(); x<=side.rect.right(); ++x) {
+        translating += evidence[x].translating;
+        changed += evidence[x].changed;
+      }
+      if (translating >= 8 && translating >= changed * .8) {
+        widened = widened.united(side.rect);
+        released.push_back(side.rect);
+        m_releasedPanels.push_back({side.rect,side.documentY,side.sourceTop,
+                                   side.image[0].height(),side.seam,m_layout.maximumY,false});
+      }
+    }
+    if (widened != old) {
+      // Materialize the composed history before releasing its overlay. This
+      // retains the prefix and single pinned panel in all native planes.
+      const std::array<QImage,3> history{image(),originalImage(),hdrImage()};
+      const std::array<QImage,3> incoming{frame,original.convertToFormat(QImage::Format_ARGB32),hdr};
+      const std::array<std::vector<Strip>*,3> strips{&m_strips,&m_originalStrips,&m_hdrStrips};
+      for (int plane=0;plane<3;++plane) {
+        if (strips[plane]->empty()) continue;
+        QImage body = history[plane].copy(widened.x(),old.y(),widened.width(),
+                          old.height()+m_layout.maximumY-m_layout.minimumY);
+        QPainter p(&body); p.setCompositionMode(QPainter::CompositionMode_Source);
+        const int position=m_layout.viewportY+displacement;
+        for (const auto &rect : released)
+          p.drawImage(rect.x()-widened.x(),position-m_layout.minimumY,
+                      incoming[plane].copy(rect));
+        p.end();
+        // Keep source-row provenance for native corner recovery. A single
+        // document-height strip would mislabel interior rows as viewport edges.
+        for (auto &strip : *strips[plane])
+          strip.image=body.copy(0,strip.y-m_layout.minimumY,widened.width(),strip.image.height());
+      }
+      std::erase_if(m_pinnedSides,[&](const PinnedSide& side) {
+        return std::find(released.begin(),released.end(),side.rect)!=released.end();
+      });
+      m_layout.content = widened;
+      for (const auto &rect : released)
+        for (int x=rect.left();x<=rect.right();++x) m_columns[x] = {};
+      return;
+    }
+  }
   if (m_columns.empty()) m_columns.resize(frame.width());
   int firstMoving = old.right() + 1, lastMoving = old.left() - 1;
   for (int x = old.left(); x <= old.right(); ++x) {
     auto &column = m_columns[x];
     // Observed screen changes distinguish a newly pinned panel from an
     // always-stationary backdrop beneath scrolling translucent foreground.
-    column.changed |= evidence[x].changed;
+    column.changeAge = evidence[x].changed ? 0 : std::min(65,column.changeAge+1);
+    column.changed = column.changeAge <= std::max(6,64/std::max(1,std::abs(displacement)));
+    column.translated |= evidence[x].translating;
     if (evidence[x].stationary) {
       if (!column.stationaryFrames) column.stationaryStart = m_layout.viewportY;
       ++column.stationaryFrames;
@@ -571,11 +638,17 @@ void ScrollStitcher::updateColumns(const QImage &frame, const QImage &original,
     }
   }
   if (firstMoving > lastMoving || lastMoving - firstMoving + 1 < 64) return;
+  cv::Mat frameGray;
   const auto pinned = [&](int from, int to, bool left) {
     int votes = 0, edge = left ? from - 1 : to;
     for (int x = from; x < to; ++x) {
       const auto &column = m_columns[x];
-      if (column.changed && column.stationaryFrames >= 3 && column.stationaryTravel >= 6) {
+      if (!(column.changed && column.stationaryFrames >= 3 && column.stationaryTravel >= 6)) continue;
+      if (!column.translated) {
+        if (frameGray.empty()) frameGray=gray(frame);
+        if (texturedBackdrop(frameGray,QRect(std::max(from,std::min(x,to-4)),old.y()+inset,std::min(4,to-from),old.height()-inset))) continue;
+      }
+      {
         ++votes;
         edge = left ? std::max(edge,x) : std::min(edge,x);
       }
@@ -659,6 +732,10 @@ void ScrollStitcher::updateColumns(const QImage &frame, const QImage &original,
       // Missing/ambiguous side motion must never discard the captured top
       // items. Keep the earliest complete observed sidebar as a safe source.
       side.documentY = side.sourceTop = 0;
+      // The initial viewport starts at zero; negative captured rows precede it.
+      for (int plane=0;plane<3;++plane)
+        if (!history[plane].isNull() && m_layout.minimumY<0)
+          side.prefix[plane]=history[plane].copy(0,0,newlyPinned.width(),-m_layout.minimumY);
       const std::array<QImage, 3> initial{m_initial, m_originalInitial, m_hdrInitial};
       for (int plane = 0; plane < 3; ++plane)
         if (!initial[plane].isNull()) side.image[plane] = initial[plane].copy(newlyPinned);
@@ -704,6 +781,23 @@ void ScrollStitcher::updateColumns(const QImage &frame, const QImage &original,
 }
 void ScrollStitcher::updateTop(const QImage &frame, int d) {
   const auto c = m_layout.content;
+  if (d > 0 && m_topOcclusion && d < c.height()-m_topOcclusion) {
+    int moving=0, translated=0;
+    for(int y=c.top();y<c.top()+m_topOcclusion;++y) {
+      const auto *a=reinterpret_cast<const QRgb*>(m_previous.constScanLine(y));
+      const auto *shifted=reinterpret_cast<const QRgb*>(m_previous.constScanLine(y+d));
+      const auto *b=reinterpret_cast<const QRgb*>(frame.constScanLine(y));
+      for(int x=c.left();x<=c.right();++x) {
+        const auto error=[](QRgb a,QRgb b) {return std::max({std::abs(qRed(a)-qRed(b)),std::abs(qGreen(a)-qGreen(b)),std::abs(qBlue(a)-qBlue(b))});};
+        moving += error(a[x],b[x])>6;
+        translated += error(a[x],b[x])>6 && error(shifted[x],b[x])<=3;
+      }
+    }
+    if(moving>c.width()*m_topOcclusion/20 && translated>=moving*.6) {
+      m_topOcclusion=0;
+      for(auto& row:m_rows) row={};
+    }
+  }
   if (d < 0 && m_topOcclusion && m_layout.viewportY + d < m_topPinnedAt) {
     int changed = 0;
     for (int y=c.top();y<c.top()+m_topOcclusion;++y) {
@@ -722,36 +816,43 @@ void ScrollStitcher::updateTop(const QImage &frame, int d) {
   }
   if (d <= 0) return;
   if (m_rows.empty()) m_rows.resize(frame.height());
+  const int columnStep=std::max(1,(c.width()+511)/512);
+  const int samples=(c.width()+columnStep-1)/columnStep;
   const int bottom = std::min(c.top() + c.height() / 4, c.bottom() + 1 - d);
   int fixedRows = 0, lastFixed = c.top() - 1, firstMoving = bottom;
   for (int y = c.top(); y < bottom; ++y) {
     const auto *a = reinterpret_cast<const QRgb *>(m_previous.constScanLine(y));
     const auto *shifted = reinterpret_cast<const QRgb *>(m_previous.constScanLine(y + d));
     const auto *b = reinterpret_cast<const QRgb *>(frame.constScanLine(y));
-    int changed = 0, stationary = 0, first = c.right(), last = c.left();
+    int changed = 0, stationary = 0, translating = 0, first = c.right(), last = c.left();
     const auto error = [](QRgb a, QRgb b) {
       return std::max({std::abs(qRed(a)-qRed(b)), std::abs(qGreen(a)-qGreen(b)),
                        std::abs(qBlue(a)-qBlue(b)), std::abs(qAlpha(a)-qAlpha(b))});
     };
-    for (int x = c.left(); x <= c.right(); ++x) {
+    for (int sample=0,begin=c.left();begin<=c.right();begin+=columnStep,++sample) {
+      const int x=std::min(c.right(),begin+sample%columnStep);
       const int screenError = error(a[x], b[x]);
       changed += screenError > 6;
       // Smooth wallpaper/illumination is not stationary *document* detail.
       const bool detail = error(b[x], b[std::min(x+1,c.right())]) > 8;
+      translating += detail && screenError>6 && error(shifted[x],b[x])<=3;
       if (detail && screenError <= 3 && error(shifted[x], b[x]) > 8) {
         ++stationary; first = std::min(first, x); last = x;
       }
     }
     auto &row = m_rows[y];
-    row.changed |= changed > std::max(2, c.width() / 100);
-    if (changed <= std::max(2, c.width() / 100) && stationary >= 8 &&
+    row.changeAge=changed>std::max(2,samples/100)?0:std::min(65,row.changeAge+1);
+    row.changed=row.changeAge<=std::max(6,64/d);
+    row.translated |= translating>=8 && translating>=changed*.9;
+    if (changed <= std::max(2, samples / 100) && stationary >= 8 &&
         last - first >= c.width() / 3) {
       if (!row.stationaryFrames) row.stationaryStart=m_layout.viewportY;
       ++row.stationaryFrames; row.stationaryTravel += d;
     } else row.stationaryFrames = row.stationaryTravel = 0;
-    if (changed > std::max(2, c.width() / 100) && y >= c.top() + m_topOcclusion)
+    if (changed > std::max(2, samples / 100) && y >= c.top() + m_topOcclusion)
       firstMoving = std::min(firstMoving, y);
-    if (y < firstMoving && row.changed && row.stationaryFrames >= 3 && row.stationaryTravel >= 6) {
+    if (y < firstMoving && row.changed && row.stationaryFrames >= 3 && row.stationaryTravel >= 6 &&
+        (row.translated || stationary<samples*.7)) {
       ++fixedRows; lastFixed = y;
     }
     // A moving body row is a barrier: an interior stationary widget cannot
@@ -805,7 +906,9 @@ bool ScrollStitcher::stable(const QImage &a, const QImage &b) {
          static_cast<size_t>(cv::countNonZero(diff.reshape(1) > 12)) <=
              diff.total() / 1000;
 }
-ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage &original, const QImage &hdr) {
+ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage &sourceOriginal, const QImage &sourceHdr) {
+  QImage original=sourceOriginal, hdr=sourceHdr;
+  original.setDevicePixelRatio(1); hdr.setDevicePixelRatio(1);
   if ((!hdr.isNull() && (hdr.size() != source.size() || hdr.format() != QImage::Format_RGBA16FPx4_Premultiplied)) ||
       (!empty() && hdr.isNull() != m_hdrInitial.isNull())) return {Status::InvalidFrame};
   if ((!original.isNull() && original.size() != source.size()) ||
@@ -817,7 +920,8 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (source.height() > m_limits.maxHeight ||
       qint64(source.width()) * source.height() > m_limits.maxPixels)
     return {Status::LimitReached};
-  const auto frame = source.convertToFormat(QImage::Format_ARGB32);
+  auto frame = source.convertToFormat(QImage::Format_ARGB32);
+  frame.setDevicePixelRatio(1);
   if (empty()) {
     m_initial = m_previous = frame;
     m_originalInitial = original.convertToFormat(QImage::Format_ARGB32);
@@ -937,7 +1041,7 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     position = m_layout.minimumY + alignment.position - m_topOcclusion;
     // Relocation may only land wholly within retained history. A lost gap
     // must not create an unobserved interval in the output.
-    if (position < m_layout.minimumY || position > m_layout.maximumY)
+    if (position + m_topOcclusion < m_layout.minimumY || position > m_layout.maximumY)
       alignment.found = false;
     if (alignment.found && !consensus) {
       const auto retained = body.copy(0, alignment.position,
@@ -1000,7 +1104,7 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     if (const int edge = translatedSide(0, content.left(), true); edge >= 0) content.setLeft(edge);
     if (const int edge = translatedSide(content.right()+1, frame.width()-content.right()-1, false); edge >= 0) content.setRight(edge);
   }
-  int minY = std::min(m_layout.minimumY, position);
+  int minY = std::min(m_layout.minimumY, position + m_topOcclusion);
   const int maxY = std::max(m_layout.maximumY, position);
   int added = (maxY - minY) - (m_layout.maximumY - m_layout.minimumY);
   const qint64 height = frame.height() + maxY - minY;
@@ -1120,11 +1224,13 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
           const int oldEdge=std::min(raw.sourceTop+storedY,frame.height()-1-raw.sourceTop-storedY);
           const int newEdge=std::min(sourceY,frame.height()-1-sourceY);
           const bool recoverCorner=oldEdge<64 && newEdge>=64 && qAlpha(sourceRaw[x])>=qAlpha(storedRaw[x]);
-          // A new opaque sticky bar at a viewport edge is not a better alpha
-          // sample of the document underneath. Wait for an interior source,
-          // just as native-corner recovery already does.
-          if (!recoverCorner && (qAlpha(sourceRaw[x])<=qAlpha(storedRaw[x])+2 || newEdge<64 ||
-                                  sourceY<content.y()+std::max(64,content.height()/4))) continue;
+          if (!recoverCorner) {
+            if (qAlpha(sourceRaw[x])<=qAlpha(storedRaw[x])+2) continue;
+            // Byte-exact document motion proves that an edge sample belongs
+            // to the page too. For uncertain translucent alignment, retain
+            // the edge guard until stationary chrome has earned its mask.
+            if (!exactMotion && (newEdge<64 || sourceY<content.y()+std::max(64,content.height()/4))) continue;
+          }
           raw.image.setPixel(x,storedY,sourceRaw[x]);
           // setPixel may detach the original plane; refresh its read pointer.
           storedRaw=reinterpret_cast<const QRgb*>(raw.image.constScanLine(storedY));

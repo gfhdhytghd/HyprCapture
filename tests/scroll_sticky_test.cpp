@@ -24,9 +24,11 @@ QImage texture(int width, int height, unsigned seed = 42) {
     }
     return image;
 }
+#include "scroll_review_cases.hpp"
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
-    cv::setNumThreads(1);
+    reviewCases(argc>1 ? argv[1] : "");
+    if(argc>1) return 0;
     const auto floatPlane=[](const QImage& sdr) {
         QImage hdr(sdr.size(),QImage::Format_RGBA16FPx4_Premultiplied);
         for(int y=0;y<hdr.height();++y) {
@@ -87,9 +89,13 @@ int main(int argc, char** argv) {
                           << " displacement=" << result.displacement << '\n';
             require(sticky.layout().viewportY == offset,
                     "sticky sidebar cannot change the measured document offset");
-            if (offset >= pin + std::max(6, 3 * step))
+            if (offset >= pin + std::max(6, 3 * step)) {
+                if(sticky.layout().content!=QRect(mainX,header,240,viewport))
+                    std::cerr<<"pin classification quiet="<<quiet<<" left="<<left<<" step="<<step<<" offset="<<offset
+                        <<" x="<<sticky.layout().content.x()<<" width="<<sticky.layout().content.width()<<'\n';
                 require(sticky.layout().content == QRect(mainX, header, 240, viewport),
                         "sticky column is reclassified after sustained stationary motion");
+            }
         }
         require(sticky.layout().content == QRect(mainX, header, 240, viewport),
                 "column that pins mid-capture is excluded from the locked content");

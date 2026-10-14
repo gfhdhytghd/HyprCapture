@@ -9,11 +9,21 @@ namespace hyprcapture::ui {
 // Native pixel coordinates: the first viewport is document Y zero. Prepending
 // changes minimumY, never the coordinates attached to an annotation.
 struct ScrollLayout {
+  struct Panel {
+    QRect rect;
+    int documentY = 0, sourceTop = 0, sourceHeight = 0, seam = -1;
+    int maximumY = 0; // Frozen when released; active panels use current maximumY.
+    bool active = true;
+    bool operator==(const Panel &) const = default;
+  };
   QRect content;
   QSize frameSize;
   int minimumY = 0, maximumY = 0, viewportY = 0;
   int leftSeam = -1, rightSeam = -1;
   bool leftTiled = false, rightTiled = false;
+  QRect initialContent;
+  int topOcclusion = 0;
+  std::vector<Panel> panels;
   QRect viewportInImage() const {
     return {content.x(), content.y() + viewportY - minimumY, content.width(),
             content.height()};
@@ -57,7 +67,7 @@ public:
   }
   int frameCount() const { return m_frames; }
   bool empty() const { return m_initial.isNull(); }
-  ScrollLayout layout() const { return m_layout; }
+  ScrollLayout layout() const;
   static bool stable(const QImage &a, const QImage &b);
 
 private:
@@ -74,7 +84,8 @@ private:
   struct ColumnMotion {
     int stationaryFrames = 0, stationaryTravel = 0;
     int stationaryStart = 0;
-    bool changed = false;
+    bool changed = false, translated = false;
+    int changeAge = 65;
   };
   struct PinnedSide {
     QRect rect;
@@ -88,6 +99,7 @@ private:
   std::vector<ColumnMotion> m_columns;
   std::vector<ColumnMotion> m_rows;
   std::vector<PinnedSide> m_pinnedSides;
+  std::vector<ScrollLayout::Panel> m_releasedPanels;
   QRect m_initialContent;
   int m_topOcclusion = 0; // Registration/source mask, not a document rebase.
   int m_topPinnedAt = 0;
