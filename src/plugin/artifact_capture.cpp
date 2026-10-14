@@ -9,6 +9,7 @@
 #include "plugin/window_stream_control.hpp"
 #include "plugin/window_stream_extent.hpp"
 #include "plugin/window_capture_geometry.hpp"
+#include "plugin/offscreen_render_scope.hpp"
 #include "plugin/window_stream_cadence.hpp"
 #include "plugin/window_gpu_export.hpp"
 #include "plugin/window_gpu_sender.hpp"
@@ -2427,6 +2428,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
         g_pHyprOpenGL->makeEGLCurrent();
         WindowLocalProjectionScope projection(monitor);
+        OffscreenRenderScope offscreen(g_pHyprRenderer->m_renderData.renderModif);
         g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
         setCaptureImageDescription(targetFramebuffer, monitor);
         if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
@@ -2434,6 +2436,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             return false;
         }
         projection.apply(framebufferWidth, framebufferHeight);
+        offscreen.activate();
 
         g_pHyprRenderer->m_bRenderingSnapshot = true;
         FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
@@ -2469,6 +2472,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
             g_pHyprOpenGL->makeEGLCurrent();
             WindowLocalProjectionScope projection(monitor);
+            OffscreenRenderScope offscreen(g_pHyprRenderer->m_renderData.renderModif);
             g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
             setCaptureImageDescription(matteFramebuffer, monitor);
             if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, matteFramebuffer)) {
@@ -2477,6 +2481,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             }
 
             projection.apply(framebufferWidth, framebufferHeight);
+            offscreen.activate();
             g_pHyprRenderer->m_bRenderingSnapshot = true;
             FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
             g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});

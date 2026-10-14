@@ -229,6 +229,11 @@ install(PROGRAMS scripts/install-aec.sh DESTINATION ${CMAKE_INSTALL_BINDIR} RENA
 install(FILES resources/aec/DTLN-LICENSE.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/hyprcapture)
 
 if(BUILD_TESTING)
+  add_executable(hyprcapture-offscreen-render-scope-test tests/offscreen_render_scope_test.cpp)
+  target_include_directories(hyprcapture-offscreen-render-scope-test PRIVATE src ${HYPR_DEPS_INCLUDE_DIRS})
+  target_link_directories(hyprcapture-offscreen-render-scope-test PRIVATE ${HYPR_DEPS_LIBRARY_DIRS})
+  target_link_libraries(hyprcapture-offscreen-render-scope-test PRIVATE hyprutils)
+  add_test(NAME offscreen-render-scope COMMAND hyprcapture-offscreen-render-scope-test)
   add_executable(hyprcapture-session-lock-test tests/session_lock_test.cpp)
   target_include_directories(hyprcapture-session-lock-test PRIVATE src)
   add_test(NAME session-lock COMMAND hyprcapture-session-lock-test)
