@@ -323,6 +323,12 @@ if(BUILD_TESTING)
   add_test(NAME scroll-stitcher COMMAND hyprcapture-scroll-stitcher-test)
   set_tests_properties(scroll-stitcher PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
 
+  add_executable(hyprcapture-scroll-sticky-test tests/scroll_sticky_test.cpp src/ui/scroll_stitcher.cpp)
+  target_include_directories(hyprcapture-scroll-sticky-test PRIVATE src)
+  target_link_libraries(hyprcapture-scroll-sticky-test PRIVATE ${OpenCV_LIBS} Qt6::Gui)
+  add_test(NAME scroll-sticky COMMAND hyprcapture-scroll-sticky-test)
+  set_tests_properties(scroll-sticky PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 30)
+
   add_executable(hyprcapture-mapped-image-test tests/mapped_image_test.cpp)
   target_include_directories(hyprcapture-mapped-image-test PRIVATE src)
   target_link_libraries(hyprcapture-mapped-image-test PRIVATE Qt6::Gui)

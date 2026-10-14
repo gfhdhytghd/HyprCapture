@@ -180,6 +180,73 @@ class AnnotationEditorTest final : public QObject {
         editor.undo(); QCOMPARE(editor.resultImage(),output); editor.redo(); QCOMPARE(editor.resultImage(),result);
         editor.restore(snapshot); QCOMPARE(editor.resultImage(),before);
     }
+    void annotationsFollowPinnedPanelPrefixAndSeam() {
+        using hyprcapture::ui::ScrollLayout;
+        // Model the actual compositor: prefix [-40,30), then viewport at
+        // document 30, with its lower part shifted by maximumY-documentY.
+        for(bool afterPin : {false,true}) for(int row : {20,60,130}) {
+            AnnotationEditor editor;
+            auto source=image({240,160},Qt::white); initialize(editor,source);
+            ScrollLayout layout{source.rect(),source.size()};
+            layout.initialContent=source.rect(); layout.minimumY=-40;
+            if(afterPin) {
+                layout.content=QRect(0,0,160,160); layout.viewportY=120; layout.maximumY=120;
+                layout.panels.push_back({QRect(160,0,80,160),30,0,160,100,120,true});
+            }
+            editor.setScrollImage(source,layout,true);
+            selectTool(editor,5); drag(editor,{180,row},{220,row});
+            layout.content=QRect(0,0,160,160); layout.viewportY=180;layout.maximumY=180;
+            layout.panels={{QRect(160,0,80,160),30,0,160,100,180,true}};
+            auto output=image({240,380},Qt::white);
+            editor.setScrollImage(output,layout,false);editor.setImageDisplayRect({});
+            const int doc=row+(afterPin?30:0);
+            const int expected=doc+40+(doc>=130?150:0);
+            const auto result=editor.resultImage();
+            QCOMPARE(result.pixelColor(200,expected),QColor("#ff5252"));
+            auto linear=output.convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
+            linear.setColorSpace(QColorSpace::SRgbLinear);editor.setHdrEnabled(true);
+            const auto hdr=editor.resultImageOn(linear);
+            QVERIFY(!hdr.isNull());QVERIFY(hdr.pixelColor(200,expected).greenF()<.4F);
+            QCOMPARE(editor.previewRendererOn(linear)(),hdr);
+            editor.undo();QCOMPARE(editor.resultImage(),output);QCOMPARE(editor.resultImageOn(linear),linear);
+            editor.redo();QCOMPARE(editor.resultImage(),result);QCOMPARE(editor.resultImageOn(linear),hdr);
+            QCOMPARE(editor.annotatedPreview(output,layout),result);
+        }
+    }
+    void releasedPanelInkKeepsItsFrozenSeam() {
+        using hyprcapture::ui::ScrollLayout;
+        for(bool afterRelease : {false,true}) {
+            AnnotationEditor editor;auto source=image({240,160},Qt::white);initialize(editor,source);
+            ScrollLayout layout{QRect(0,0,160,160),source.size()};
+            layout.initialContent=source.rect();layout.minimumY=-40;layout.viewportY=afterRelease?240:120;
+            layout.maximumY=layout.viewportY;
+            layout.panels={{QRect(160,0,80,160),30,0,160,100,afterRelease?180:120,!afterRelease}};
+            if(afterRelease) layout.content=source.rect();
+            editor.setScrollImage(source,layout,true);selectTool(editor,5);drag(editor,{180,130},{220,130});
+            layout.content=source.rect();layout.viewportY=300;layout.maximumY=300;
+            layout.panels[0].active=false;layout.panels[0].maximumY=180;
+            auto output=image({240,500},Qt::white);editor.setScrollImage(output,layout,false);editor.setImageDisplayRect({});
+            const auto result=editor.resultImage();
+            QCOMPARE(result.pixelColor(200,afterRelease?410:350),QColor("#ff5252"));
+            QCOMPARE(result.pixelColor(200,afterRelease?350:290),QColor(Qt::white));
+            QCOMPARE(editor.annotatedPreview(output,layout),result);
+        }
+    }
+    void annotationsOnOccludingTitleDoNotBecomeSidebarPrefixInk() {
+        using hyprcapture::ui::ScrollLayout;
+        for(int row : {10,30,130}) {
+            AnnotationEditor editor;auto source=image({240,160},Qt::white);initialize(editor,source);
+            ScrollLayout layout{QRect(0,0,160,160),source.size()};layout.initialContent=source.rect();
+            layout.minimumY=-40;layout.viewportY=layout.maximumY=120;layout.topOcclusion=20;
+            layout.panels={{QRect(160,0,80,160),30,20,140,100,120,true}};
+            editor.setScrollImage(source,layout,true);selectTool(editor,5);drag(editor,{180,row},{220,row});
+            layout.viewportY=layout.maximumY=180;layout.panels[0].maximumY=180;
+            auto output=image({240,380},Qt::white);editor.setScrollImage(output,layout,false);editor.setImageDisplayRect({});
+            const auto result=editor.resultImage();
+            if(row==10) QCOMPARE(result,output);
+            else QCOMPARE(result.pixelColor(200,row+70+(row>=120?150:0)),QColor("#ff5252"));
+        }
+    }
     void scrollingInkStaysPutWhileFadingThenRelocates() {
         AnnotationEditor editor;
         const auto source = image({240,160}, Qt::white);

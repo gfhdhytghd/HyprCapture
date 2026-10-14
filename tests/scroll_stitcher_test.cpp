@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <opencv2/core.hpp>
 
 using hyprcapture::ui::ScrollStitcher;
 using Status = ScrollStitcher::Status;
