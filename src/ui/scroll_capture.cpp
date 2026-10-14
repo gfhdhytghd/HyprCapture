@@ -1,4 +1,5 @@
 #include "ui/scroll_capture.hpp"
+#include "ui/timing.hpp"
 #include "ui/thumbnail_style.hpp"
 #include "plugin/window_stream.hpp"
 #include "shared/protocol.hpp"
@@ -195,6 +196,8 @@ void ScrollCaptureController::updateTarget(const QRect &capture) {
 void ScrollCaptureController::start() {
   if (!m_screen || m_done || m_exchange)
     return;
+  traceTiming(QStringLiteral("scroll.start hdr=%1").arg(m_captureHdr));
+  ScopedUiTiming startTiming("scroll.start_setup");
   m_id = QString::fromStdString(makeSessionId());
   m_exchange =
       std::make_unique<QTemporaryDir>(runtimeFile("scroll", "-XXXXXX"));
@@ -306,6 +309,8 @@ void ScrollCaptureController::readFrames() {
       }
     const auto metadata = decodeWindowStreamFrameHeader(header, bytes);
     QImage frame, hdr;
+    traceTiming(QStringLiteral("scroll.receive_begin seq=%1").arg(metadata ? metadata->sequence : 0));
+    ScopedUiTiming receiveTiming(QStringLiteral("scroll.receive seq=%1").arg(metadata ? metadata->sequence : 0));
     if (metadata && descriptors.size() == 1 &&
         !(message.msg_flags & (MSG_TRUNC | MSG_CTRUNC)) &&
         metadata->sequence > m_sequence &&
@@ -412,6 +417,8 @@ void ScrollCaptureController::readControl() {
     m_controlBytes.remove(0, i + 1);
     const auto event = j["event"].toString();
     if (event == "begin" && !m_active) {
+      traceTiming("scroll.begin_received");
+      ScopedUiTiming beginTiming("scroll.begin_install");
       m_active = true;
       m_watchdog.start(5000);
       if (m_editor)
@@ -504,7 +511,12 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
         frame->image = std::move(composed);
       }
       // Seed the unscrolled baseline immediately, before input is replayed.
-      auto result = stitcher.append(frame->image, original, frame->hdr);
+      traceTiming(QStringLiteral("scroll.worker_begin seq=%1").arg(frame->sequence));
+      ScrollStitcher::Result result;
+      {
+        ScopedUiTiming appendTiming(QStringLiteral("scroll.append seq=%1").arg(frame->sequence));
+        result = stitcher.append(frame->image, original, frame->hdr);
+      }
       // Stability concerns the document's position. GIFs may keep repainting
       // after scrolling stops. Require consecutive accepted frames so a
       // relocation after a rejected frame cannot restore annotations early.
@@ -513,8 +525,13 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
                 result.status == ScrollStitcher::Status::Appended ||
                 result.status == ScrollStitcher::Status::Relocated ||
                 result.status == ScrollStitcher::Status::Unchanged;
-      auto preview = stitcher.preview({thumbnail::kThumbnailMaxWidth * 4, thumbnail::kThumbnailMaxHeight * 4});
-      const auto hdrPreview = stitcher.preview({thumbnail::kThumbnailMaxWidth * 4, thumbnail::kThumbnailMaxHeight * 4}, true);
+      QImage preview, hdrPreview;
+      {
+        ScopedUiTiming previewTiming(QStringLiteral("scroll.previews seq=%1").arg(frame->sequence));
+        preview = stitcher.preview({thumbnail::kThumbnailMaxWidth * 4, thumbnail::kThumbnailMaxHeight * 4});
+        hdrPreview = stitcher.preview({thumbnail::kThumbnailMaxWidth * 4, thumbnail::kThumbnailMaxHeight * 4}, true);
+      }
+      traceTiming(QStringLiteral("scroll.present_queued seq=%1").arg(frame->sequence));
       const auto layout = stitcher.layout();
       const int captures = stitcher.frameCount();
       QMetaObject::invokeMethod(
@@ -562,6 +579,8 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
                                       quint64 sequence, quint64 timeNs) {
   if (m_done)
     return;
+  traceTiming(QStringLiteral("scroll.present_begin seq=%1 active=%2").arg(sequence).arg(m_active));
+  ScopedUiTiming presentTiming(QStringLiteral("scroll.present seq=%1 active=%2").arg(sequence).arg(m_active));
   const bool aligned = result.status == ScrollStitcher::Status::Started ||
                        result.status == ScrollStitcher::Status::Appended ||
                        result.status == ScrollStitcher::Status::Relocated ||
@@ -569,8 +588,10 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
   m_latestAligned = aligned;
   m_latestStable = stable;
   m_latestCaptureNs = timeNs;
-  if (result.status == ScrollStitcher::Status::Started)
+  if (result.status == ScrollStitcher::Status::Started) {
+    traceTiming(QStringLiteral("scroll.baseline_ready seq=%1").arg(sequence));
     command({{"command", "baseline"}});
+  }
   if (!m_active) {
     m_layout = layout;
     m_warmFrame = frame;
@@ -604,6 +625,7 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
     m_preview->setFixedSize(pixmap.deviceIndependentSize().toSize());
     relayoutPreview();
     if (m_hdrPreviewEnabled && !hdrPreview.isNull()) {
+      ScopedUiTiming hdrThumbnailTiming(QStringLiteral("scroll.hdr_thumbnail_convert_upload seq=%1").arg(sequence));
       if (m_editor) hdrPreview = m_editor->annotatedPreview(hdrPreview, layout);
       QPainter mark(&hdrPreview);
       mark.setPen(QPen(QColor::fromRgbF(0.19, 0.42, 0.8), 2));
@@ -611,7 +633,8 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
       mark.end();
       QWidget* top = window(); top->winId();
       if (!m_hdrPreviewBackdrop) m_hdrPreviewBackdrop = std::make_unique<HdrBackdrop>(top->windowHandle(), true);
-      if (m_hdrPreviewBackdrop->setImage(hdrPreview, QRect(m_preview->mapTo(top, QPoint{}), m_preview->size()), 203)) m_preview->clear();
+      m_hdrPreviewBackdrop->setReadyCallback([this](bool ready) { if (ready) m_preview->clear(); });
+      if (m_hdrPreviewBackdrop->setImage(hdrPreview, QRect(m_preview->mapTo(top, QPoint{}), m_preview->size()), 203) && m_hdrPreviewBackdrop->ready()) m_preview->clear();
     }
     emit progress(QSize(layout.frameSize.width(), layout.outputHeight()),
                   captures);
@@ -716,6 +739,10 @@ void ScrollCaptureController::closeEvent(QCloseEvent *event) {
   event->accept();
 }
 bool ScrollCaptureController::eventFilter(QObject *object, QEvent *event) {
+  if (m_active && event->type() == QEvent::Paint && object->objectName() == "annotationCanvas")
+    traceTiming(QStringLiteral("scroll.editor_paint_begin seq=%1").arg(m_lastAcceptedSequence));
+  if (object == m_preview && event->type() == QEvent::Paint && m_active && m_lastAcceptedSequence > 0)
+    traceTiming(QStringLiteral("scroll.thumbnail_paint_begin seq=%1").arg(m_lastAcceptedSequence));
   auto *widget = qobject_cast<QWidget *>(object);
   if (m_editor && widget &&
       (widget == m_editor || m_editor->isAncestorOf(widget)) &&

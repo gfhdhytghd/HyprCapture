@@ -4,6 +4,8 @@
 #include "ui/clipboard_utils.hpp"
 #include "ui/i18n.hpp"
 #include "ui/hdr_image.hpp"
+#include "ui/hdr_gpu.hpp"
+#include "ui/hdr_backdrop.hpp"
 #include "ui/hdr_thumbnail.hpp"
 #include <QtCore/qfloat16.h>
 #include <QColorSpace>
@@ -22,8 +24,10 @@
 #include <QStandardPaths>
 #include <QScopeGuard>
 #include <QSemaphore>
+#include <QElapsedTimer>
 #include <QThreadPool>
 #include <QWindow>
+#include <QTimer>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QToolButton>
@@ -124,6 +128,26 @@ QPushButton* modeButton(CaptureOverlay& overlay, const QString& mode) {
     return nullptr;
 }
 
+QString hdrSessionJson(const hyprcapture::CaptureDefaults& defaults, bool active) {
+    auto session = hyprcapture::decodeSessionJson(sessionJson(defaults, false).toStdString());
+    if (!session) return {};
+    auto& monitor = session->monitors.front();
+    QFile::remove(QString::fromStdString(monitor.artifactPath));
+    QImage linear(64, 64, QImage::Format_RGBA16FPx4);
+    linear.fill(Qt::white);
+    const QString path = hyprcapture::ui::runtimeFile("hdr-session-test", ".rgba");
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
+        !file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner) ||
+        file.write(reinterpret_cast<const char*>(linear.constBits()), linear.sizeInBytes()) != linear.sizeInBytes()) return {};
+    file.close();
+    monitor.hdrActive = active;
+    monitor.artifactPath = path.toStdString();
+    monitor.artifactWidth = linear.width(); monitor.artifactHeight = linear.height();
+    monitor.artifactFormat = "rgba16f-linear-srgb";
+    return QString::fromStdString(hyprcapture::encodeSessionJson(*session));
+}
+
 bool chooseBackground(CaptureOverlay& overlay, const QString& value) {
     auto* select = overlay.findChild<QWidget*>(QStringLiteral("windowBackground"));
     auto* trigger = select ? select->findChild<QPushButton*>() : nullptr;
@@ -191,6 +215,335 @@ class InPlaceEditorTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void hdrBaseDoesNotBlockEditorAndDiscardsStaleWork() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::White;
+        defaults.inPlaceEditToolbar = true;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.m_hasHdrScreen = true;
+        overlay.m_defaults.screenshotFormat = "heic";
+        QVERIFY(!overlay.m_windowArtifacts.empty());
+        auto& window = overlay.m_windowArtifacts.front();
+        window.hdrImage = hyprcapture::ui::sdrToHdr(window.image);
+        overlay.m_selectedWindowIndex = 0;
+        const auto frozenRender = overlay.hdrResultRenderer();
+        const auto expectedFrozen = frozenRender();
+        QVERIFY(!expectedFrozen.isNull());
+
+        auto* pool = QThreadPool::globalInstance();
+        pool->waitForDone();
+        const int oldMax = pool->maxThreadCount();
+        pool->setMaxThreadCount(1);
+        QSemaphore entered, release;
+        pool->start(QRunnable::create([&] { entered.release(); release.acquire(); }));
+        QVERIFY(entered.tryAcquire(1, 2000));
+        const auto unblock = qScopeGuard([&] { release.release(); pool->waitForDone(); pool->setMaxThreadCount(oldMax); });
+        overlay.beginInPlaceEdit();
+        QVERIFY(overlay.m_editor && !overlay.m_editor->isHidden());
+        QVERIFY(overlay.m_hdrBasePending);
+        QVERIFY(overlay.m_editHdrBase.isNull()); // editor appeared with worker unable to run
+        const auto generation = overlay.m_hdrBaseGeneration;
+        const auto cancelled = overlay.m_hdrBaseCancelled;
+        window.hdrImage.fill(QColor(255, 0, 0)); // QImage detaches, queued pixels stay frozen
+        QCOMPARE(frozenRender(), expectedFrozen);
+        const auto expectedNew = overlay.hdrResultRenderer()();
+        QVERIFY(expectedNew != expectedFrozen);
+        overlay.refreshInPlaceImage();
+        QVERIFY(cancelled->load());
+        QVERIFY(overlay.m_hdrBaseGeneration > generation);
+        release.release();
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrBasePending, 5000);
+        QCOMPARE(overlay.m_editHdrBase, expectedNew);
+        overlay.leaveInPlaceEdit();
+        QVERIFY(overlay.m_editHdrBase.isNull());
+        QVERIFY(!overlay.m_hdrBasePending);
+    }
+
+    void sdrSessionDoesNotInitializeNativeHdr() {
+        const auto globals = hyprcapture::ui::HdrBackdrop::globalsRequestsForTest();
+        const bool gpu = hyprcapture::ui::HdrUpload::rendererStartedForTest();
+        hyprcapture::CaptureDefaults defaults;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.show();
+        QCoreApplication::processEvents();
+        QCOMPARE(hyprcapture::ui::HdrBackdrop::globalsRequestsForTest(), globals);
+        QCOMPARE(hyprcapture::ui::HdrUpload::rendererStartedForTest(), gpu);
+        QVERIFY(overlay.m_hdrBackdrops.empty());
+        QVERIFY(qApp->findChildren<QTimer*>("hyprcaptureHdrDrain").empty());
+        // A dormant linear snapshot on an SDR output must not start EGL either.
+        CaptureOverlay dormant(defaults, false, false, false, hdrSessionJson(defaults, false));
+        QCOMPARE(hyprcapture::ui::HdrUpload::rendererStartedForTest(), gpu);
+        QCOMPARE(hyprcapture::ui::HdrBackdrop::globalsRequestsForTest(), globals);
+    }
+
+    void hdrSessionPrewarmsGpuWithoutNativeGlobals() {
+        if (!hyprcapture::ui::HdrUpload::gpuSupportedForTest()) QSKIP("Build without dmabuf GPU support");
+        const auto globals = hyprcapture::ui::HdrBackdrop::globalsRequestsForTest();
+        hyprcapture::CaptureDefaults defaults;
+        CaptureOverlay overlay(defaults, false, false, false, hdrSessionJson(defaults, true));
+        QVERIFY(hyprcapture::ui::HdrUpload::rendererStartedForTest());
+        QCOMPARE(hyprcapture::ui::HdrBackdrop::globalsRequestsForTest(), globals);
+        QVERIFY(qApp->findChildren<QTimer*>("hyprcaptureHdrDrain").empty());
+    }
+
+    void nativeDesktopRetentionRequiresMatchingWindowContent() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::Real;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.beginInPlaceEdit();
+        overlay.m_selectedWindowIndex = 0;
+        auto backdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(nullptr);
+        backdrop->setReadyForTest(true);
+        overlay.m_hdrBackdrops.push_back({overlay.m_monitorArtifacts.front().logicalGeometry, std::move(backdrop)});
+        QVERIFY(overlay.canKeepHdrDesktopInEditor());
+        overlay.m_windowBackground = nullptr; // use the frozen defaults without the selector
+        for (auto background : {hyprcapture::WindowBackground::FollowSystem, hyprcapture::WindowBackground::Black}) {
+            overlay.m_defaults.windowBackground = background;
+            QVERIFY(!overlay.canKeepHdrDesktopInEditor());
+        }
+        overlay.m_defaults.windowBackground = hyprcapture::WindowBackground::Real;
+        auto occluder = overlay.m_windowArtifacts.front();
+        overlay.m_windowArtifacts.front().zIndex = 1;
+        occluder.zIndex = 0;
+        overlay.m_windowArtifacts.push_back(occluder);
+        QVERIFY(!overlay.canKeepHdrDesktopInEditor());
+        overlay.m_windowArtifacts.back().zIndex = 2;
+        QVERIFY(overlay.canKeepHdrDesktopInEditor());
+        overlay.m_mode = hyprcapture::CaptureMode::Region;
+        QVERIFY(overlay.canKeepHdrDesktopInEditor());
+        overlay.m_defaults.screenshotFormat = "heic";
+        overlay.m_editor->setExternalImagePresentation(true);
+        overlay.m_hdrBasePending = true;
+        overlay.m_hdrBaseLatest = [] { return QImage{}; }; // failed composition
+        overlay.startHdrEditBase();
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrBasePending, 5000);
+        QVERIFY(overlay.m_editHdrBase.isNull());
+        QVERIFY(!overlay.canKeepHdrDesktopInEditor());
+        QVERIFY(!overlay.m_editor->externalImagePresentation());
+    }
+
+    void hdrResizeCoalescesLatestSnapshot() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults, false));
+        overlay.m_hasHdrScreen = true;
+        overlay.m_monitorArtifacts.front().hdrImage = hyprcapture::ui::sdrToHdr(overlay.m_monitorArtifacts.front().image);
+        overlay.m_dragStart = {20, 20}; overlay.m_dragEnd = {200, 200};
+        overlay.beginInPlaceEdit();
+        overlay.m_defaults.screenshotFormat = "heic";
+        auto* pool = QThreadPool::globalInstance();
+        pool->waitForDone();
+        const int oldMax = pool->maxThreadCount();
+        pool->setMaxThreadCount(1);
+        QSemaphore entered, release;
+        pool->start(QRunnable::create([&] { entered.release(); release.acquire(); }));
+        QVERIFY(entered.tryAcquire(1, 2000));
+        const auto unblock = qScopeGuard([&] { release.release(); pool->waitForDone(); pool->setMaxThreadCount(oldMax); });
+        overlay.queueHdrEditBase();
+        const auto first = overlay.m_hdrBaseCancelled;
+        for (int i = 0; i < 30; ++i) {
+            overlay.m_dragEnd = {220 + i, 230 + i};
+            overlay.queueHdrEditBase();
+            QCOMPARE(overlay.m_hdrBaseCancelled, first); // no second submitted task
+        }
+        QVERIFY(first->load());
+        QVERIFY(overlay.m_hdrBaseRunning && overlay.m_hdrBaseLatest);
+        const auto expected = overlay.hdrResultRenderer()();
+        QVERIFY(!expected.isNull());
+        release.release();
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrBasePending, 5000);
+        QCOMPARE(overlay.m_editHdrBase, expected);
+        QVERIFY(!overlay.m_hdrBaseRunning && !overlay.m_hdrBaseLatest);
+    }
+
+    void deferredHdrExportFreezesInputAndOptions() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::White;
+        defaults.save = false; defaults.clipboard = false;
+        defaults.showThumbnail = false; defaults.screenshotNotification = false;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.beginInPlaceEdit();
+        overlay.m_defaults.screenshotFormat = "heic";
+        auto* pool = QThreadPool::globalInstance();
+        pool->waitForDone();
+        const int oldMax = pool->maxThreadCount();
+        pool->setMaxThreadCount(1);
+        QSemaphore entered, release;
+        pool->start(QRunnable::create([&] { entered.release(); release.acquire(); }));
+        QVERIFY(entered.tryAcquire(1, 2000));
+        const auto unblock = qScopeGuard([&] { release.release(); pool->waitForDone(); pool->setMaxThreadCount(oldMax); });
+        overlay.m_hasHdrScreen = true;
+        overlay.m_windowArtifacts.front().hdrImage = hyprcapture::ui::sdrToHdr(overlay.m_windowArtifacts.front().image);
+        overlay.queueHdrEditBase();
+        overlay.queueHdrEditBase(); // a latest snapshot is waiting behind the cancelled task
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        overlay.exportInPlaceImage();
+        QVERIFY(overlay.m_hdrExportPending);
+        QVERIFY(!overlay.m_editor->isEnabled());
+        QVERIFY(!overlay.m_toolbar->isEnabled());
+        const auto generation = overlay.m_hdrBaseGeneration;
+        const auto image = overlay.m_editor->resultImage();
+        overlay.refreshInPlaceImage();
+        overlay.queueHdrEditBase();
+        QCOMPARE(overlay.m_hdrBaseGeneration, generation);
+        QVERIFY(overlay.m_hdrExportPending);
+        QCOMPARE(overlay.m_editor->resultImage(), image);
+        overlay.m_sdrButton->click(); // even a programmatic late signal is ignored
+        QCOMPARE(overlay.m_defaults.screenshotFormat, std::string("heic"));
+        release.release();
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrExportPending, 5000);
+        QVERIFY(!overlay.m_editedOutput.isNull());
+        QVERIFY(!overlay.m_editedHdrOutput.isNull());
+        QCOMPARE(overlay.m_editedOutput, image);
+        // Let the output worker's queued callback run before scope destruction.
+        QTRY_VERIFY_WITH_TIMEOUT(finishing.count() > 0, 5000);
+    }
+
+    void sdrEditorDoesNotBuildUnusedHdrBase() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::White;
+        defaults.inPlaceEditToolbar = true;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.m_hasHdrScreen = true;
+        overlay.m_windowArtifacts.front().hdrImage = hyprcapture::ui::sdrToHdr(overlay.m_windowArtifacts.front().image);
+        overlay.beginInPlaceEdit();
+        QVERIFY(overlay.m_editor && !overlay.m_editor->isHidden());
+        QVERIFY(!overlay.m_hdrBasePending);
+        QVERIFY(overlay.m_editHdrBase.isNull());
+        overlay.m_defaults.screenshotFormat = "heic";
+        overlay.queueHdrEditBase();
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrBasePending, 5000);
+        QVERIFY(!overlay.m_editHdrBase.isNull());
+    }
+
+    void hdrExportWaitsAndCloseDoesNotJoinBaseWorker() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::White;
+        defaults.inPlaceEditToolbar = true;
+        auto overlay = std::make_unique<CaptureOverlay>(defaults, false, false, false, sessionJson(defaults));
+        auto* pool = QThreadPool::globalInstance();
+        pool->waitForDone();
+        const int oldMax = pool->maxThreadCount();
+        pool->setMaxThreadCount(1);
+        QSemaphore entered, release;
+        pool->start(QRunnable::create([&] { entered.release(); release.acquire(); }));
+        QVERIFY(entered.tryAcquire(1, 2000));
+        const auto unblock = qScopeGuard([&] { release.release(); pool->waitForDone(); pool->setMaxThreadCount(oldMax); });
+        overlay->m_defaults.screenshotFormat = "heic";
+        overlay->beginInPlaceEdit();
+        overlay->m_defaults.screenshotFormat = "heic"; // test waiting independent of optional encoder
+        overlay->exportInPlaceImage();
+        QVERIFY(overlay->m_hdrExportPending);
+        QVERIFY(!overlay->m_finishing);
+        QVERIFY(overlay->m_editedOutput.isNull());
+        const auto cancelled = overlay->m_hdrBaseCancelled;
+        QElapsedTimer clock; clock.start(); overlay.reset();
+        QVERIFY(clock.elapsed() < 100);
+        QVERIFY(cancelled->load());
+        release.release(); pool->waitForDone(); QCoreApplication::processEvents();
+    }
+
+    void hdrWindowCompositionPreservesNativeBackgroundAndWideGamut() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::Real;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        auto& window = overlay.m_windowArtifacts.front();
+        window.visibleGeometry = window.fullGeometry;
+        window.rounding = 0;
+        overlay.m_selectedWindowIndex = 0;
+        window.hdrImage = QImage(window.image.size(), QImage::Format_RGBA16FPx4);
+        window.hdrRealBackground = QImage(window.image.size(), QImage::Format_RGBA16FPx4);
+        for (int y=0; y<window.image.height(); ++y) {
+            auto* fg = reinterpret_cast<qfloat16*>(window.hdrImage.scanLine(y));
+            auto* bg = reinterpret_cast<qfloat16*>(window.hdrRealBackground.scanLine(y));
+            for (int x=0; x<window.image.width(); ++x) {
+                fg[x*4]=qfloat16(12.5F); fg[x*4+1]=qfloat16(-0.25F); fg[x*4+2]=qfloat16(3.0F);
+                fg[x*4+3]=qfloat16(x<100?1.0F:x<200?0.0F:0.5F);
+                bg[x*4]=qfloat16(20.0F); bg[x*4+1]=qfloat16(4.0F); bg[x*4+2]=qfloat16(3.0F); bg[x*4+3]=qfloat16(1.0F);
+            }
+        }
+        window.image = hyprcapture::ui::hdrToSdr(window.hdrImage);
+        window.realBackground = hyprcapture::ui::hdrToSdr(window.hdrRealBackground);
+        const auto rendered = overlay.renderResultImage(true).convertToFormat(QImage::Format_RGBA16FPx4);
+        QVERIFY(!rendered.isNull());
+        const auto* row = reinterpret_cast<const qfloat16*>(rendered.constScanLine(100));
+        QCOMPARE(float(row[50*4]),12.5F); QCOMPARE(float(row[50*4+1]),-0.25F);
+        QCOMPARE(float(row[150*4]),20.0F); QCOMPARE(float(row[150*4+1]),4.0F);
+        QCOMPARE(float(row[250*4]),16.25F); QCOMPARE(float(row[250*4+1]),1.875F);
+        QCOMPARE(float(row[250*4+3]),1.0F);
+    }
+
+    void hdrEditorCompositionBenchmark() {
+        if (!qEnvironmentVariableIsSet("HYPRCAPTURE_EDITOR_BENCHMARK")) QSKIP("Explicit diagnostic benchmark only");
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::Real;
+        defaults.inPlaceEditToolbar = true;
+        const QRect geometry(100, 30, 1193, 828); // 2386x1656 at scale 2
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults, true, QSize(1440, 900), geometry));
+        auto& window = overlay.m_windowArtifacts.front();
+        window.hdrImage = hyprcapture::ui::sdrToHdr(window.image);
+        window.realBackground = QImage(window.image.size(), QImage::Format_RGBA8888);
+        window.realBackground.fill(QColor(17, 29, 53));
+        window.hdrRealBackground = hyprcapture::ui::sdrToHdr(window.realBackground);
+        window.realBackgroundAttempted = true;
+        overlay.m_hasHdrScreen = true;
+        overlay.m_defaults.screenshotFormat = "heic";
+        overlay.m_selectedWindowIndex = 0;
+        printf("trial,sdr_render_ms,hdr_render_ms,editor_begin_ms\n");
+        for (int trial=0; trial<5; ++trial) {
+            QElapsedTimer clock; clock.start();
+            const auto sdr = overlay.renderResultImage(); const double sdrMs=clock.nsecsElapsed()/1e6;
+            clock.restart(); const auto hdr = overlay.renderResultImage(true); const double hdrMs=clock.nsecsElapsed()/1e6;
+            QVERIFY(!sdr.isNull() && !hdr.isNull());
+            clock.restart(); overlay.beginInPlaceEdit(); const double beginMs=clock.nsecsElapsed()/1e6;
+            printf("%d,%.3f,%.3f,%.3f\n",trial,sdrMs,hdrMs,beginMs);
+            QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrBasePending, 5000);
+            QCOMPARE(overlay.m_editHdrBase, hdr);
+            overlay.leaveInPlaceEdit();
+        }
+    }
+
+    void hdrFirstFrameDeadlineAndCapabilityFallback_data() {
+        QTest::addColumn<bool>("pending");
+        QTest::newRow("capability-unavailable") << false;
+        QTest::newRow("driver-missed-deadline") << true;
+    }
+    void hdrFirstFrameDeadlineAndCapabilityFallback() {
+        QFETCH(bool, pending);
+        hyprcapture::CaptureDefaults defaults; defaults.mode=hyprcapture::CaptureMode::Region;
+        CaptureOverlay overlay(defaults,false,false,false,sessionJson(defaults));
+        QVERIFY(!overlay.m_monitorArtifacts.empty());
+        auto& artifact=overlay.m_monitorArtifacts.front();
+        artifact.hdrImage=hyprcapture::ui::sdrToHdr(artifact.image);
+        if(pending)artifact.hdrUpload=hyprcapture::ui::HdrUpload::pendingForTest(artifact.hdrImage);
+        overlay.m_hdrStartupDeadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(2);
+        QElapsedTimer elapsed;elapsed.start();overlay.show();QTest::qWait(20);
+        QCOMPARE(overlay.property("hdrFirstFrameMode").toString(),pending?QString("deadline_fallback"):QString("capability_fallback"));
+        QVERIFY(elapsed.elapsed()<250); // a stalled job cannot hold first paint indefinitely
+        const QImage visible=overlay.grab().toImage();
+        QVERIFY(!visible.isNull());
+        QVERIFY(visible.pixelColor(visible.width()/2,visible.height()/2).alpha()>0);
+        if(pending)artifact.hdrUpload->failForTest();
+    }
+    void hdrCloseBeforeDriverCompletes() {
+        hyprcapture::CaptureDefaults defaults;
+        auto overlay=std::make_unique<CaptureOverlay>(defaults,false,false,false,sessionJson(defaults));
+        QVERIFY(!overlay->m_monitorArtifacts.empty());
+        auto pending=hyprcapture::ui::HdrUpload::pendingForTest(overlay->m_monitorArtifacts.front().image);
+        overlay->m_monitorArtifacts.front().hdrUpload=pending;
+        QElapsedTimer elapsed;elapsed.start();overlay.reset();
+        QVERIFY(elapsed.elapsed()<100);
+        pending->failForTest(); // late completion holds no widgets or artifact files
+        QCoreApplication::processEvents();
+        QCOMPARE(pending->state(),hyprcapture::ui::HdrUpload::State::Failed);
+    }
     void hdrStartupSurvivesCloseDuringConversion() {
         const QString timingPath = hyprcapture::ui::runtimeFile("hdr-startup-timing", ".log");
         QFile timing(timingPath);
@@ -1652,8 +2005,11 @@ int main(int argc, char** argv) {
     }
     // Use an isolated trusted HOME for the clipboard backend double. /tmp
     // is intentionally rejected by the production executable trust policy.
-    QTemporaryDir clipboardHome(QDir::homePath() + QStringLiteral("/.hyprcapture-test-XXXXXX"));
-    if (!clipboardHome.isValid()) return 1;
+    QTemporaryDir clipboardHome(qEnvironmentVariable("HYPRCAPTURE_TEST_HOME", QDir::homePath()) + QStringLiteral("/.hyprcapture-test-XXXXXX"));
+    if (!clipboardHome.isValid()) {
+        fputs("Cannot create clipboard fixture under the test home. Set HYPRCAPTURE_TEST_HOME to a writable directory; clipboard doubles require trusted ancestors.\n", stderr);
+        return 1;
+    }
     const QString bin = clipboardHome.filePath(QStringLiteral(".nix-profile/bin"));
     if (!QDir().mkpath(bin)) return 1;
     const QString clipboardPath = clipboardHome.filePath(QStringLiteral("copied.png"));

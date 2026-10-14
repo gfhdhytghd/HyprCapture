@@ -163,6 +163,7 @@ void scrollInput(ScrollSession &s, ScrollInput input) {
   if (sessionLocked() || s.failed || s.paused)
     return;
   if (!s.active) {
+    traceTiming("scroll.input_begin");
     s.active = true;
     s.started = Time::steadyNow();
     scrollNotify(s, {{"event", "begin"}});
@@ -220,6 +221,7 @@ int scrollControlReadable(int fd, uint32_t mask, void *data) {
       if (type == "baseline") {
         if (!s.baseline || s.released)
           continue;
+        traceTiming("scroll.baseline_ack");
         s.released = true;
         if (!s.pending.empty()) {
           s.draining = true;
@@ -356,6 +358,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     glPixelStorei(GL_PACK_ALIGNMENT, previousAlignment);
   };
   LinearCaptureScope linearCapture;
+  ScopedTiming tickTiming("scroll.tick");
   auto &pbo = s->pbo;
   if (auto ready = takeReadyWindowStreamPboFrames(pbo)) {
     auto &f = ready->frame;
@@ -386,6 +389,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
       f.metadata.stride = raw.width * 4;
       f.metadata.payloadBytes = f.rgba.size();
     }
+    traceTiming(std::format("scroll.submit seq={} hdr={} bytes={}", f.metadata.sequence, s->hdr, f.metadata.payloadBytes));
     if (s->sender->submit(f.metadata, std::move(f.rgba)))
       s->baseline = true;
   }
@@ -394,6 +398,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     restore();
     return;
   }
+  traceTiming(std::format("scroll.capture_begin seq={} hdr={}", s->sequence + 1, s->hdr));
   const auto timeNs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           Time::steadyNow().time_since_epoch())
@@ -483,6 +488,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                                  .stride = uint32_t(width * 4),
                                  .format = hdr ? WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR : WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN,
                                  .payloadBytes = uint64_t(width) * height * (hdr ? 12 : 4)};
+  traceTiming(std::format("scroll.readback_issue seq={} hdr={} bytes={}", meta.sequence, hdr, meta.payloadBytes));
   if (pbo.bytes != meta.payloadBytes || !issueWindowStreamPboReadback(pbo, meta, s->id, *readFramebuffer, cropX,
                                     cropTop, artifact, artifact, hdr ? pbo.framebuffer.get() : nullptr))
     s->failed = true;
@@ -491,6 +497,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
 } // namespace
 
 LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
+  ScopedTiming timing("scroll.request_setup");
   if (sessionLocked()) return {.success = false, .error = "session locked"};
   const auto raw = readPrivateRequestFile(path);
   if (!raw || g_scrollSession || !g_pEventLoopManager || !g_pSeatManager)

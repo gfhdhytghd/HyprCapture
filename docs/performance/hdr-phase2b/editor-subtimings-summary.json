@@ -1,0 +1,68 @@
+{
+  "overlay.render.foreground_prepare hdr=1": {
+    "n": 10,
+    "median_ms": 0.0,
+    "min_ms": 0.0,
+    "max_ms": 0.001
+  },
+  "overlay.render.background_clip hdr=1": {
+    "n": 10,
+    "median_ms": 9.9995,
+    "min_ms": 7.728,
+    "max_ms": 11.113
+  },
+  "overlay.render.background_sdr_to_hdr": {
+    "n": 10,
+    "median_ms": 0.1625,
+    "min_ms": 0.003,
+    "max_ms": 0.395
+  },
+  "overlay.render.real_background_compose": {
+    "n": 10,
+    "median_ms": 19.749000000000002,
+    "min_ms": 17.856,
+    "max_ms": 20.775
+  },
+  "overlay.render.foreground_compose hdr=1": {
+    "n": 10,
+    "median_ms": 5.0395,
+    "min_ms": 4.959,
+    "max_ms": 5.518
+  },
+  "overlay.render.cursor hdr=1": {
+    "n": 10,
+    "median_ms": 0.0,
+    "min_ms": 0.0,
+    "max_ms": 0.001
+  },
+  "overlay.render.compose hdr=1": {
+    "n": 10,
+    "median_ms": 51.0135,
+    "min_ms": 46.144,
+    "max_ms": 55.863
+  },
+  "overlay.render_result_snapshot hdr=1": {
+    "n": 10,
+    "median_ms": 51.126999999999995,
+    "min_ms": 46.22,
+    "max_ms": 55.916
+  },
+  "overlay.render_result hdr=1": {
+    "n": 5,
+    "median_ms": 48.313,
+    "min_ms": 46.29,
+    "max_ms": 55.979
+  },
+  "overlay.begin_edit": {
+    "n": 5,
+    "median_ms": 38.389,
+    "min_ms": 37.972,
+    "max_ms": 51.689
+  },
+  "overlay.hdr_base_build": {
+    "n": 5,
+    "median_ms": 51.208,
+    "min_ms": 50.611,
+    "max_ms": 54.381
+  }
+}

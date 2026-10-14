@@ -1,0 +1,11 @@
+trial,operation,ms
+0,fp16_complete,215.51
+0,cpu_pq,373.214
+1,fp16_complete,139.098
+1,cpu_pq,384.43
+2,fp16_complete,10.6396
+2,cpu_pq,346.165
+3,fp16_complete,9.69606
+3,cpu_pq,351.98
+4,fp16_complete,10.8499
+4,cpu_pq,354.923

@@ -9,6 +9,7 @@
 #include "ui/hdr_thumbnail.hpp"
 #include "ui/i18n.hpp"
 #include "ui/pinned_image.hpp"
+#include "ui/hdr_backdrop.hpp"
 #include "ui/session_lock_guard.hpp"
 
 #include <LayerShellQt/Shell>
