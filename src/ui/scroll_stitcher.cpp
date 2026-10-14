@@ -406,6 +406,32 @@ QRect detectContent(const cv::Mat &a, const cv::Mat &b) {
     top = 0;
   if (!meaningful({0, bottom, a.cols, a.rows - bottom}))
     bottom = a.rows;
+  const auto background=[&](cv::Rect r) {
+    if(r.area()==0) return -1;
+    std::array<int,256> counts{};
+    for(int y=r.y;y<r.y+r.height;++y) for(int x=r.x;x<r.x+r.width;++x)
+      ++counts[a.at<uchar>(y,x)];
+    const auto mode=std::max_element(counts.begin(),counts.end());
+    return *mode>=r.area()/2?int(mode-counts.begin()):-1;
+  };
+  const auto sameBackground=[&](cv::Rect side,cv::Rect body) {
+    const int value=background(side);
+    return value>=0 && value==background(body);
+  };
+  const auto detail=[&](cv::Rect r) {
+    cv::Scalar mean,dev;cv::meanStdDev(a(r),mean,dev);return dev[0]>4;
+  };
+  const auto distributedBand=[&](int y,int height) {
+    int bands=0;
+    const bool gutter=sameBackground({0,y,a.cols,height},{0,top,a.cols,bottom-top});
+    for(int i=0;i<3;++i) {
+      const int x=a.cols*i/3,end=a.cols*(i+1)/3;
+      bands+=gutter?detail({x,y,end-x,height}):meaningful({x,y,end-x,height});
+    }
+    return bands>=2;
+  };
+  if(top && !distributedBand(0,top)) top=0;
+  if(bottom<a.rows && !distributedBand(bottom,a.rows-bottom)) bottom=a.rows;
   while (left < a.cols / 3 &&
          cv::countNonZero(changed(cv::Rect(left, top, 1, bottom - top))) < 2)
     ++left;
@@ -417,6 +443,20 @@ QRect detectContent(const cv::Mat &a, const cv::Mat &b) {
     left = 0;
   if (!meaningful({right, top, a.cols - right, bottom - top}))
     right = a.cols;
+  // A compact fixed widget in an otherwise white gutter is not a sidebar.
+  // Require stationary side appearance in multiple vertical bands before
+  // freezing an edge on the first translation (before column history exists).
+  const auto distributedSide=[&](int x,int width) {
+    int bands=0;
+    const bool gutter=sameBackground({x,top,width,bottom-top},{left,top,right-left,bottom-top});
+    for(int i=0;i<3;++i) {
+      const int y=top+(bottom-top)*i/3, end=top+(bottom-top)*(i+1)/3;
+      bands+=gutter?detail({x,y,width,end-y}):meaningful({x,y,width,end-y});
+    }
+    return bands>=2;
+  };
+  if(left && !distributedSide(0,left)) left=0;
+  if(right<a.cols && !distributedSide(right,a.cols-right)) right=a.cols;
   return {left, top, right - left, bottom - top};
 }
 // Insert only into a quiet band: never through text, icons, or a footer.
@@ -544,6 +584,7 @@ ScrollLayout ScrollStitcher::layout() const {
   auto result=m_layout;
   result.initialContent=m_layoutLocked?m_initialContent:m_layout.content;
   result.topOcclusion=m_topOcclusion;
+  result.bottomOcclusion=m_bottomOcclusion;
   result.panels=m_releasedPanels;
   for (const auto &side:m_pinnedSides)
     result.panels.push_back({side.rect,side.documentY,side.sourceTop,
@@ -890,6 +931,96 @@ void ScrollStitcher::updateTop(const QImage &frame, int d) {
     }
   }
 }
+// Small screen-fixed occluders need source masks, not column classification.
+// In translated coordinates the residual contains the object and its shifted
+// ghost. Screen-fixed detail identifies the real component; moving document
+// detail agrees with the translation and cannot qualify. No shape assumptions.
+void ScrollStitcher::updateFloating(const QImage &frame, const QImage &original, int d) {
+  if (d <= 0) return;
+  const auto c=m_layout.content;
+  if (d>=c.height()-96) return;
+  const auto error=[](QRgb a,QRgb b) {
+    return std::max({std::abs(qRed(a)-qRed(b)),std::abs(qGreen(a)-qGreen(b)),
+                     std::abs(qBlue(a)-qBlue(b)),std::abs(qAlpha(a)-qAlpha(b))});
+  };
+  // Prefer native uncomposited pixels: backdrop illumination cannot provide
+  // evidence for a document occluder. Without them, require a clean SDR body.
+  QImage first=original.isNull()?m_previous:m_originalPrevious;
+  QImage second=original.isNull()?frame:original;
+  const auto clean=[&]() {
+    int changed=0,samples=0;
+    const int stride=std::max(1,c.width()/512);
+    for(int y=c.top();y<=c.bottom()-d;++y) {
+      const auto *a=reinterpret_cast<const QRgb*>(first.constScanLine(y+d));
+      const auto *b=reinterpret_cast<const QRgb*>(second.constScanLine(y));
+      for(int x=c.left();x<=c.right();x+=stride) {
+        if(!m_columns.empty() && m_columns[x].stationaryFrames) continue;
+        ++samples;changed+=error(a[x],b[x])>3;
+      }
+    }
+    return samples && changed<=samples*.08;
+  };
+  if(!clean()) {m_floatingCandidates.clear();return;}
+  std::vector<FloatingCandidate> candidates;
+  for(bool top : {false,true}) {
+    const int begin=top?c.top():c.top()+c.height()/3;
+    const int end=top?c.top()+c.height()/4:c.bottom()+1;
+    cv::Mat residual(end-begin,c.width(),CV_8U,cv::Scalar(0));
+    cv::Mat fixed(residual.size(),CV_8U,cv::Scalar(0));
+    for(int y=begin;y<end;++y) {
+      const int shiftedY=top?y+d:y-d;
+      if(shiftedY<c.top() || shiftedY>c.bottom()) continue;
+      const auto *a=reinterpret_cast<const QRgb*>(first.constScanLine(y));
+      const auto *b=reinterpret_cast<const QRgb*>(second.constScanLine(y));
+      const auto *shifted=reinterpret_cast<const QRgb*>(
+          (top?first:second).constScanLine(shiftedY));
+      for(int x=c.left();x<=c.right();++x) {
+        // Find contrast support first; padding below covers antialiasing and
+        // soft shadows without making wallpaper noise an occluder.
+        const bool mismatch=error(top?b[x]:a[x],shifted[x])>6;
+        residual.at<uchar>(y-begin,x-c.left())=mismatch?255:0;
+        const bool detail=error(a[x],a[std::min(x+1,c.right())])>8 ||
+            error(a[x],first.pixel(x,std::min(y+1,c.bottom())))>8;
+        fixed.at<uchar>(y-begin,x-c.left())=mismatch && detail && error(a[x],b[x])<=3?255:0;
+      }
+    }
+    // Join antialiased edges/icon fragments, without making sparse detail a
+    // full-height sidebar. Padding keeps soft shadows out of strip sources.
+    cv::Mat joined,labels,stats,centers;
+    cv::dilate(residual,joined,cv::getStructuringElement(cv::MORPH_RECT,{5,5}));
+    const int count=cv::connectedComponentsWithStats(joined,labels,stats,centers);
+    for(int id=1;id<count;++id) {
+      QRect r(c.x()+stats.at<int>(id,cv::CC_STAT_LEFT),begin+stats.at<int>(id,cv::CC_STAT_TOP),
+              stats.at<int>(id,cv::CC_STAT_WIDTH),stats.at<int>(id,cv::CC_STAT_HEIGHT));
+      if(r.width()<16 || r.height()<16 || r.width()>c.width()/3 || r.height()>c.height()/3+d) continue;
+      int columnSupport=0;
+      for(int x=r.left();x<=r.right();++x)
+        columnSupport+=!m_columns.empty() && m_columns[x].stationaryFrames>0;
+      // Independently distributed side evidence belongs to the panel layer,
+      // even while it is still accumulating its three-frame pin threshold.
+      if(columnSupport>=8) continue;
+      int support=0;
+      for(int y=r.top();y<=r.bottom();++y) for(int x=r.left();x<=r.right();++x)
+        support+=labels.at<int>(y-begin,x-c.left())==id && fixed.at<uchar>(y-begin,x-c.left());
+      int observations=1;
+      for(const auto& previous:m_floatingCandidates)
+        if(previous.top==top && std::abs(previous.rect.left()-r.left())<=2 &&
+           std::abs(previous.rect.right()-r.right())<=2 && std::abs(previous.rect.top()-r.top())<=2 &&
+           std::abs(previous.rect.bottom()-r.bottom())<=2)
+          observations=std::max(observations,previous.observations+1);
+      candidates.push_back({r,top,observations});
+      // An animated fill may have no invariant pixels. Require its compact
+      // residual to recur at the same screen bounds on independent scrolls.
+      if(support<8 && observations<2) continue;
+      if(top) {
+        m_topOcclusion=std::max(m_topOcclusion,std::min(c.height()/4,r.bottom()+7-c.top()));
+      } else {
+        m_bottomOcclusion=std::max(m_bottomOcclusion,c.bottom()+1-std::max(c.top(),r.top()-6));
+      }
+    }
+  }
+  m_floatingCandidates=std::move(candidates);
+}
 bool ScrollStitcher::stable(const QImage &a, const QImage &b) {
   if (a.isNull() || a.size() != b.size())
     return false;
@@ -922,9 +1053,13 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     return {Status::LimitReached};
   auto frame = source.convertToFormat(QImage::Format_ARGB32);
   frame.setDevicePixelRatio(1);
+  // Window captures without a backdrop often share the exact source image.
+  // Normalize that storage once and retain the identity for geometry checks.
+  original = !original.isNull() && sourceOriginal.cacheKey()==source.cacheKey()
+      ? frame : original.convertToFormat(QImage::Format_ARGB32);
   if (empty()) {
     m_initial = m_previous = frame;
-    m_originalInitial = original.convertToFormat(QImage::Format_ARGB32);
+    m_originalPrevious = m_originalInitial = original;
     m_hdrInitial = hdr;
     m_layout = {frame.rect(), frame.size()};
     m_frames = 1;
@@ -935,8 +1070,14 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (stable(m_previous, frame))
     return {Status::Unchanged};
   const auto previous = gray(m_previous), current = gray(frame);
-  QRect content =
-      m_layoutLocked ? m_layout.content.adjusted(0, m_topOcclusion, 0, 0) : detectContent(previous, current);
+  // Uncomposited geometry keeps screen-fixed backdrop gradients from making
+  // translucent document gutters look like fixed sidebars or footers.
+  QRect content = m_layoutLocked
+      ? m_layout.content.adjusted(0, m_topOcclusion, 0, -m_bottomOcclusion)
+      : original.isNull() || (m_originalInitial.cacheKey()==m_previous.cacheKey() &&
+                              original.cacheKey()==frame.cacheKey())
+          ? detectContent(previous, current)
+          : detectContent(gray(m_originalInitial), gray(original));
   if (content.width() < 64 || content.height() < 96)
     return {Status::NoOverlap};
   const auto previousCompact = compact(crop(previous, content));
@@ -995,11 +1136,14 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   }
   if (!alignment.found || alignment.position == 0 || sparseMotion) {
     // The very first frame of newly appearing chrome is not stationary yet.
-    // Two broad interior bodies exclude top chrome and one side edge. Require
-    // independently verified translations; conflicting bodies remain ambiguous.
+    // Broad interior bodies exclude top chrome, one side, or bottom chrome.
+    // Require independently verified translations; conflicts stay ambiguous.
     std::set<int> translations;
     for (const auto rect : {content.adjusted(0, content.height()/4, -content.width()/3, 0),
-                            content.adjusted(content.width()/3, content.height()/4, 0, 0)}) {
+                            content.adjusted(content.width()/3, content.height()/4, 0, 0),
+                            content.adjusted(0, content.height()/4, 0, -content.height()/4),
+                            content.adjusted(0, 0, -content.width()/3, -content.height()/4),
+                            content.adjusted(content.width()/3, 0, 0, -content.height()/4)}) {
       if (rect.width() < 64 || rect.height() < 96) continue;
       const auto candidate = registerBody(m_previous, frame, rect);
       if (candidate.found && candidate.position) translations.insert(candidate.position);
@@ -1144,10 +1288,13 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   // Only accepted, overlapping motion contributes evidence. Rejects, idle
   // frames and lost-overlap history jumps cannot change sidebar sources.
   const int displacement = position - m_layout.viewportY;
+  const int oldBottomOcclusion=m_bottomOcclusion;
   content = m_layout.content;
   if (displacement && std::abs(displacement) <= content.height() - 96) {
     updateTop(frame, displacement);
     updateColumns(frame, original, hdr, displacement);
+    if (!exactMotion) updateFloating(frame, original, displacement);
+    else m_floatingCandidates.clear();
     content = m_layout.content;
   }
   minY = std::min(m_layout.minimumY, position + m_topOcclusion);
@@ -1170,10 +1317,20 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     }
   }
   int prependTo = m_layout.minimumY;
-  int appendFrom = m_layout.maximumY + content.height();
+  int appendFrom = m_layout.maximumY + content.height() - m_bottomOcclusion;
+  if(m_bottomOcclusion>oldBottomOcclusion && maxY>m_layout.maximumY)
+    appendFrom=std::min(appendFrom,position+m_topOcclusion);
+  if (m_bottomOcclusion && maxY > m_layout.maximumY) {
+    const auto trimTail=[&](std::vector<Strip>& strips) {
+      std::erase_if(strips,[&](const Strip& s){return s.y>=appendFrom;});
+      for(auto& s:strips) if(s.y+s.image.height()>appendFrom)
+        s.image=s.image.copy(0,0,s.image.width(),appendFrom-s.y);
+    };
+    trimTail(m_strips); trimTail(m_originalStrips); trimTail(m_hdrStrips);
+  }
   if (consensusMotion && added) {
     const int from = std::max(position + m_topOcclusion, m_layout.minimumY);
-    const int to = std::min(position + content.height(), appendFrom);
+    const int to = std::min(position + content.height() - m_bottomOcclusion, appendFrom);
     QImage retained(content.width(), to - from, QImage::Format_ARGB32);
     for (const auto &strip : m_strips)
       for (int y = std::max(from, strip.y);
@@ -1217,7 +1374,7 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       const int from = std::max(raw.y,position), to = std::min(raw.y+raw.image.height(),position+content.height());
       for (int documentY=from; documentY<to; ++documentY) {
         const int storedY=documentY-raw.y, sourceY=content.y()+documentY-position;
-        if (sourceY < content.y() + m_topOcclusion) continue;
+        if (sourceY < content.y() + m_topOcclusion || sourceY > content.bottom()-m_bottomOcclusion) continue;
         const auto* sourceRaw=reinterpret_cast<const QRgb*>(incoming.constScanLine(sourceY))+content.x();
         const auto* storedRaw=reinterpret_cast<const QRgb*>(raw.image.constScanLine(storedY));
         for (int x=0;x<content.width();++x) {
@@ -1246,9 +1403,9 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
         {minY, frame.copy(content.x(), content.y() + minY - position, content.width(),
                           prependTo - minY)});
   if (maxY > m_layout.maximumY) {
-    const int count = position + content.height() - appendFrom;
+    const int count = position + content.height() - m_bottomOcclusion - appendFrom;
     m_strips.push_back({appendFrom,
-                        frame.copy(content.x(), content.bottom() + 1 - count,
+                        frame.copy(content.x(), content.bottom() + 1 - m_bottomOcclusion - count,
                                    content.width(), count)});
   }
   // Retain uncomposited pixels using the same accepted alignment. This avoids
@@ -1258,26 +1415,31 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       m_originalStrips.push_back({minY, original.copy(content.x(), content.y() + minY - position,
           content.width(), prependTo - minY).convertToFormat(QImage::Format_ARGB32), content.y()});
     if (maxY > m_layout.maximumY) {
-      const int count = position + content.height() - appendFrom;
+      const int count = position + content.height() - m_bottomOcclusion - appendFrom;
       m_originalStrips.push_back({appendFrom,
-          original.copy(content.x(), content.bottom() + 1 - count,
-                        content.width(), count).convertToFormat(QImage::Format_ARGB32), content.bottom()+1-count});
+          original.copy(content.x(), content.bottom() + 1 - m_bottomOcclusion - count,
+                        content.width(), count).convertToFormat(QImage::Format_ARGB32), content.bottom()+1-m_bottomOcclusion-count});
     }
   }
   if (!hdr.isNull()) {
     if (minY < m_layout.minimumY)
       m_hdrStrips.push_back({minY, hdr.copy(content.x(), content.y() + minY - position, content.width(), prependTo - minY)});
     if (maxY > m_layout.maximumY) {
-      const int count = position + content.height() - appendFrom;
+      const int count = position + content.height() - m_bottomOcclusion - appendFrom;
       m_hdrStrips.push_back({appendFrom,
-          hdr.copy(content.x(), content.bottom() + 1 - count, content.width(), count)});
+          hdr.copy(content.x(), content.bottom() + 1 - m_bottomOcclusion - count, content.width(), count)});
     }
+  }
+  if (m_bottomOcclusion && position >= m_layout.maximumY) {
+    const QRect tail(content.x(),content.bottom()+1-m_bottomOcclusion,content.width(),m_bottomOcclusion);
+    m_bottomTail={frame.copy(tail),original.convertToFormat(QImage::Format_ARGB32).copy(tail),hdr.copy(tail)};
   }
   const int delta = position - m_layout.viewportY;
   m_layout.minimumY = minY;
   m_layout.maximumY = maxY;
   m_layout.viewportY = position;
   m_previous = frame;
+  m_originalPrevious = original;
   if (added)
     ++m_frames;
   return {added ? Status::Appended : Status::Relocated, added, delta};
@@ -1369,6 +1531,8 @@ void ScrollStitcher::paint(QPainter &p, int plane) const {
               QRect(0,c.bottom()+1,initial.width(),footer));
   for (const auto &strip : strips)
     p.drawImage(c.x(),c.y()+strip.y-m_layout.minimumY,strip.image);
+  if(m_bottomOcclusion)
+    p.drawImage(c.x(),c.y()+c.height()+growth-m_bottomOcclusion,m_bottomTail[channel]);
 }
 QImage ScrollStitcher::image() const {
   if (empty())

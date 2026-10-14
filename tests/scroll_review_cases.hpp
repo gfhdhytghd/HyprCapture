@@ -25,6 +25,166 @@ void reviewExact(const ScrollStitcher& s,const QImage& expected,const char* labe
 }
 void reviewCases(const std::string& which) {
     const auto run=[&](const char* name){return which.empty() || which==name;};
+    if(which=="fab-translucent") for(int step : {3,120}) {
+        constexpr int width=480,height=600,end=360;
+        QImage page(width,1600,QImage::Format_ARGB32);page.fill(QColor(248,249,251));
+        {QPainter p(&page);p.setFont(QFont("sans-serif",11));p.setPen(Qt::black);
+         for(int y=24,n=0;y<1600;y+=37,++n)
+             p.drawText(8,y,QString("Comment %1: code.value = %2; capture pixel geometry").arg(n).arg(n*7919));}
+        for(int y=0;y<page.height();++y) for(int x=0;x<width;++x)
+            page.setPixel(x,y,(page.pixel(x,y)&0xffffff)|0xd9000000);
+        const auto frame=[&](int offset) {
+            auto raw=page.copy(0,offset,width,height);
+            {QPainter p(&raw);p.drawImage(400,544,texture(56,56,71));}
+            QImage sdr(width,height,QImage::Format_ARGB32);
+            for(int y=0;y<height;++y) {
+                const int value=180+int(60*std::sin(y/55.));
+                const QRgb color=qRgb(value,value,std::min(255,value+8));
+                auto* row=reinterpret_cast<QRgb*>(sdr.scanLine(y));std::fill(row,row+width,color);
+            }
+            {QPainter p(&sdr);p.drawImage(0,0,raw);}
+            return std::pair{sdr,raw};
+        };
+        ScrollStitcher s;
+        for(int offset=0;offset<=end;offset+=step) {
+            const auto [sdr,raw]=frame(offset);const auto r=s.append(sdr,raw,reviewFloat(raw));
+            require(r.status==(offset?Status::Appended:Status::Started) && s.layout().viewportY==offset,
+                    "fixed button over translucent comments cannot stall");
+        }
+        auto expected=page.copy(0,0,width,height+end);
+        {QPainter p(&expected);p.drawImage(400,544+end,texture(56,56,71));}
+        // Alpha round trips have the same two-level tolerance as the existing
+        // GitHub/translucent-card fixtures; floating HDR remains lossless.
+        const auto original=s.originalImage();
+        for(int y=0;y<expected.height();++y) for(int x=0;x<width;++x) {
+            const auto a=original.pixelColor(x,y),b=expected.pixelColor(x,y);
+            const bool equal=a.alpha()==b.alpha() && std::max({std::abs(a.red()-b.red()),std::abs(a.green()-b.green()),std::abs(a.blue()-b.blue())})<=2;
+            if(!equal) std::cerr<<"FAB translucent step="<<step<<" bottom="<<s.layout().bottomOcclusion<<" rect="<<s.layout().content.x()<<","<<s.layout().content.y()<<","<<s.layout().content.width()<<","<<s.layout().content.height()<<" x="<<x<<" y="<<y<<" a="<<a.red()<<","<<a.green()<<","<<a.blue()<<","<<a.alpha()<<" b="<<b.red()<<","<<b.green()<<","<<b.blue()<<","<<b.alpha()<<'\n';
+            require(equal,"translucent original has one button and exact glyph locations");
+        }
+        require(s.hdrImage()==reviewFloat(expected),"translucent HDR document exact under fixed button");
+        const auto [last,raw]=frame(end);
+        require(s.image().copy(0,end+544,width,56)==last.copy(0,544,width,56),"translucent bottom band uses final SDR viewport");
+    }
+    if(which=="fab-sidebar") for(int step : {3,120}) {
+        const int end=step==3?150:600;
+        const auto page=texture(240,1400,817);
+        QImage side(120,500,QImage::Format_ARGB32);side.fill(QColor(221,226,235));
+        {QPainter p(&side);for(int y : {50,110,170,350})p.drawImage(0,y,texture(120,12,unsigned(y)));}
+        const auto frame=[&](int offset) {
+            QImage f(360,408,QImage::Format_ARGB32);f.fill(Qt::blue);
+            QPainter p(&f);p.fillRect(0,384,360,24,Qt::green);
+            p.drawImage(0,24,page.copy(0,offset,240,360));
+            p.drawImage(240,24,side.copy(0,std::min(offset,30),120,360));
+            p.drawImage(178,328,texture(56,56,73));return f;
+        };
+        ScrollStitcher s;
+        for(int offset=0;offset<=end;offset+=step) {
+            const auto f=frame(offset);const auto r=s.append(f,f.rgbSwapped(),reviewFloat(f));
+            if(r.status!=(offset?Status::Appended:Status::Started) || s.layout().viewportY!=offset)
+                std::cerr<<"FAB sidebar step="<<step<<" offset="<<offset<<" status="<<int(r.status)<<" viewport="<<s.layout().viewportY<<" bottom="<<s.layout().bottomOcclusion<<" width="<<s.layout().content.width()<<'\n';
+            require(r.status==(offset?Status::Appended:Status::Started) && s.layout().viewportY==offset,
+                    "bottom widget does not block real sidebar registration");
+        }
+        require(s.layout().content==QRect(0,24,240,360),"ball columns stay in main document beside pinned sidebar");
+        QImage expected(360,408+end,QImage::Format_ARGB32);expected.fill(Qt::blue);
+        {QPainter p(&expected);p.fillRect(0,384+end,360,24,Qt::green);
+         p.drawImage(0,24,page.copy(0,0,240,360+end));p.drawImage(178,328+end,texture(56,56,73));
+         p.drawImage(240,24,side.copy(0,0,120,250));
+         p.fillRect(240,274,120,end-30,QColor(221,226,235));
+         p.drawImage(240,244+end,side.copy(0,250,120,140));}
+        reviewExact(s,expected,"sidebar keeps every label and bottom rows beside one final overlay");
+        for(int offset : {end-step,0,end}) {
+            const auto f=frame(offset);
+            require(s.append(f,f.rgbSwapped(),reviewFloat(f)).status==Status::Relocated,
+                    "masked bottom supports historical relocation");
+            reviewExact(s,expected,"relocation preserves the last growing viewport tail");
+        }
+    }
+    if(which=="fab-stall") {
+        // Sparse glyphs leave few informative verification tiles. A fixed
+        // bottom object can consume most of them, despite real page motion.
+        QImage page(480,1600,QImage::Format_ARGB32);page.fill(Qt::white);
+        {QPainter p(&page);p.setFont(QFont("sans-serif",11));p.setPen(Qt::black);
+         for(int y=80,n=0;y<1600;y+=67,++n)
+             p.drawText(180,y,QString("Row %1: %2").arg(n).arg(n*7919));}
+        ScrollStitcher s;
+        for(int offset : {0,3,6,9,12,24,48,72,120,240,360}) {
+            auto f=page.copy(0,offset,480,600);
+            {QPainter p(&f);p.drawImage(215,528,texture(72,72,937));}
+            const auto r=s.append(f,f.rgbSwapped(),reviewFloat(f));
+            if(r.status!=(offset?Status::Appended:Status::Started))
+                std::cerr<<"FAB stall offset="<<offset<<" status="<<int(r.status)<<" displacement="<<r.displacement<<'\n';
+            require(r.status==(offset?Status::Appended:Status::Started) && s.layout().viewportY==offset,
+                    "sparse page keeps registering beyond fixed bottom detail");
+        }
+        auto expected=page.copy(0,0,480,960);
+        {QPainter p(&expected);p.drawImage(215,888,texture(72,72,937));}
+        reviewExact(s,expected,"sparse document is complete with one final bottom widget");
+    }
+    if(which=="fab" || which=="fab-motion" || which=="fab-bottom" || which=="fab-top" || which=="fab-geometry" || which=="fab-animation") {
+        // A bottom-attached button in the real report is copied by every strip.
+        // Use native coordinates, including a final short touchpad step.
+        for(int diameter : {32,56,72}) for(int position : {0,1,2,3})
+        for(int style : {0,1,2,3}) for(int step : {3,120}) {
+            if(which=="fab-bottom" && (diameter!=32 || position!=0 || style!=0 || step!=3)) continue;
+            if(which=="fab-top" && (diameter!=32 || position!=3 || style!=0 || step!=3)) continue;
+            if(which=="fab-animation" && (diameter!=32 || position!=0 || style!=3 || step!=3)) continue;
+            if(which=="fab-geometry" && (diameter!=32 || position!=0 || style!=1 || step!=3)) continue;
+            constexpr int width=480,height=600;
+            const int end=step==3?48:360;
+            const bool dark=style==2;
+            auto page=texture(width,1600,823);
+            if(style!=0) {
+                page.fill(dark?QColor(22,25,29):QColor(248,249,251));
+                QPainter p(&page);p.setFont(QFont("sans-serif",11));
+                for(int y=22,n=0;y<page.height();y+=31,++n) {
+                    p.setPen(dark?Qt::white:Qt::black);
+                    p.drawText(12,y,QString("Row %1: code.value = %2; // capture").arg(n).arg(n*7919));
+                    if(n%5==0) p.drawImage(270,y-15,texture(120,24,unsigned(n+1)));
+                }
+            }
+            const int x=position==2?(width-diameter)/2:position==3?12:width-diameter-12;
+            const int y=position==1?height/2:position==3?12:height-diameter;
+            const auto drawBall=[&](QImage& f,int tick) {
+                QPainter p(&f);p.setRenderHint(QPainter::Antialiasing,style!=3);
+                if(style==1) for(int r=6;r>0;--r) {
+                    p.setPen(Qt::NoPen);p.setBrush(QColor(0,0,0,8));
+                    p.drawEllipse(QRectF(x-r,y-r,diameter+2*r,diameter+2*r));
+                }
+                const int pulse=style>=2?tick%3:0;
+                p.setPen(Qt::NoPen);p.setBrush(QColor(20+pulse*35,150,245,style==1?160:255));
+                if(style==3) {p.drawRect(QRect(x+pulse,y+pulse,diameter-2*pulse-1,diameter-2*pulse-1));return;}
+                p.drawEllipse(QRectF(x+pulse,y+pulse,diameter-2*pulse,diameter-2*pulse));
+                // Stable icon detail also covers animated fill and translucency.
+                p.setPen(QPen(Qt::white,2));p.drawLine(x+diameter/3,y+diameter/2,x+2*diameter/3,y+diameter/2);
+                p.drawLine(x+diameter/2,y+diameter/3,x+diameter/2,y+2*diameter/3);
+            };
+            const auto frame=[&](int offset,int tick) {auto f=page.copy(0,offset,width,height);drawBall(f,tick);return f;};
+            ScrollStitcher s;
+            int tick=0;
+            for(int offset=0;offset<=end;offset+=step,++tick) {
+                auto f=frame(offset,tick);
+                f.setDevicePixelRatio(2); // The report came from a HiDPI browser.
+                const auto r=s.append(f,f.rgbSwapped(),reviewFloat(f));
+                if(r.status!=(offset?Status::Appended:Status::Started) || s.layout().viewportY!=offset)
+                    std::cerr<<"FAB size="<<diameter<<" position="<<position<<" style="<<style<<" step="<<step<<" offset="<<offset<<" status="<<int(r.status)<<" displacement="<<r.displacement<<'\n';
+                require(r.status==(offset?Status::Appended:Status::Started) && s.layout().viewportY==offset,"floating overlay cannot stall or change document motion");
+                if(s.layout().content!=QRect(0,0,width,height)) std::cerr<<"FAB layout size="<<diameter<<" position="<<position<<" style="<<style<<" step="<<step<<" offset="<<offset<<" rect="<<s.layout().content.x()<<","<<s.layout().content.y()<<","<<s.layout().content.width()<<","<<s.layout().content.height()<<'\n';
+                require(s.layout().content==QRect(0,0,width,height) && s.layout().panels.empty(),"small floating overlay cannot pin a side column or full-width footer");
+            }
+            if(which=="fab-motion") continue;
+            auto expected=page.copy(0,0,width,height+end);
+            // Small top overlays follow the existing first-header convention;
+            // lower overlays belong to the last viewport, like a fixed footer.
+            auto last=frame(end,tick-1);
+            {QPainter p(&expected);const int band=position==3?diameter+24:height-y+(style==1?6:0);
+             if(position==3) p.drawImage(0,0,frame(0,0).copy(0,0,width,band));
+             else p.drawImage(0,end+height-band,last.copy(0,height-band,width,band));}
+            if(s.image()!=expected) std::cerr<<"FAB exact size="<<diameter<<" position="<<position<<" style="<<style<<" step="<<step<<'\n';
+            reviewExact(s,expected,"floating overlay is retained once and all observed document pixels are exact");
+        }
+    }
     if(run("wallpaper")) {
         const auto page=texture(240,1600,819), wallpaper=texture(120,360,732);
         const auto frame=[&](int offset) {

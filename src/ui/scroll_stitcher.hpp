@@ -22,7 +22,7 @@ struct ScrollLayout {
   int leftSeam = -1, rightSeam = -1;
   bool leftTiled = false, rightTiled = false;
   QRect initialContent;
-  int topOcclusion = 0;
+  int topOcclusion = 0, bottomOcclusion = 0;
   std::vector<Panel> panels;
   QRect viewportInImage() const {
     return {content.x(), content.y() + viewportY - minimumY, content.width(),
@@ -81,6 +81,7 @@ private:
   void updateColumns(const QImage &frame, const QImage &original,
                      const QImage &hdr, int displacement);
   void updateTop(const QImage &frame, int displacement);
+  void updateFloating(const QImage &frame, const QImage &original, int displacement);
   struct ColumnMotion {
     int stationaryFrames = 0, stationaryTravel = 0;
     int stationaryStart = 0;
@@ -93,7 +94,7 @@ private:
     std::array<QImage, 3> image, prefix, fill, underlay;
   };
   Limits m_limits;
-  QImage m_initial, m_previous, m_originalInitial, m_hdrInitial;
+  QImage m_initial, m_previous, m_originalInitial, m_originalPrevious, m_hdrInitial;
   ScrollLayout m_layout;
   std::vector<Strip> m_strips, m_originalStrips, m_hdrStrips;
   std::vector<ColumnMotion> m_columns;
@@ -103,6 +104,10 @@ private:
   QRect m_initialContent;
   int m_topOcclusion = 0; // Registration/source mask, not a document rebase.
   int m_topPinnedAt = 0;
+  int m_bottomOcclusion = 0;
+  std::array<QImage, 3> m_bottomTail;
+  struct FloatingCandidate { QRect rect; bool top; int observations; };
+  std::vector<FloatingCandidate> m_floatingCandidates;
   int m_frames = 0;
   bool m_layoutLocked = false;
 };
