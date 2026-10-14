@@ -26,7 +26,7 @@ find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 set(CMAKE_AUTOMOC ON)
 set(repo "${CMAKE_CURRENT_SOURCE_DIR}/../..")
 add_executable(ui-benchmark ui-benchmark.cpp
-  ${repo}/src/ui/hdr_backdrop.cpp ${repo}/src/ui/hdr_image.cpp
+  ${repo}/src/ui/hdr_backdrop.cpp ${repo}/src/ui/hdr_gpu.cpp ${repo}/src/ui/hdr_image.cpp
   ${repo}/src/ui/scroll_stitcher.cpp ${repo}/src/ui/annotation_editor.cpp
   ${repo}/src/shared/config.cpp ${repo}/src/shared/protocol.cpp)
 target_include_directories(ui-benchmark PRIVATE ${repo}/src ${OpenCV_INCLUDE_DIRS})
@@ -34,3 +34,6 @@ target_link_libraries(ui-benchmark PRIVATE Qt6::Widgets Qt6::Svg ${OpenCV_LIBS})
 add_executable(gpu-benchmark gpu-benchmark.cpp)
 target_include_directories(gpu-benchmark PRIVATE ${repo}/src)
 target_link_libraries(gpu-benchmark PRIVATE PkgConfig::WL)
+add_executable(editor-background-benchmark editor-background-benchmark.cpp ${repo}/src/ui/hdr_image.cpp)
+target_include_directories(editor-background-benchmark PRIVATE ${repo}/src)
+target_link_libraries(editor-background-benchmark PRIVATE Qt6::Gui)

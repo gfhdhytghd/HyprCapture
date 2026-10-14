@@ -1,0 +1,209 @@
+2026-10-13T21:19:54.740Z pid=2573647 parse_session monotonic_us=92948148668 elapsed_ms=21
+2026-10-13T21:19:54.740Z pid=2573647 prepare_desktop monotonic_us=92948148799 elapsed_ms=0
+2026-10-13T21:19:54.796Z pid=2573647 build_toolbar monotonic_us=92948204523 elapsed_ms=55
+2026-10-13T21:19:54.796Z pid=2573647 overlay_construct monotonic_us=92948204804 elapsed_ms=77
+2026-10-13T21:19:55.801Z pid=2573647 overlay.render.hydrate monotonic_us=92949209535 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.813Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92949221682 elapsed_ms=0 elapsed_us=3
+2026-10-13T21:19:55.857Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92949265434 elapsed_ms=10 elapsed_us=10971
+2026-10-13T21:19:55.861Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92949269349 elapsed_ms=1 elapsed_us=1820
+2026-10-13T21:19:55.861Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92949269491 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.861Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92949269533 elapsed_ms=24 elapsed_us=24765
+2026-10-13T21:19:55.862Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92949270394 elapsed_ms=48 elapsed_us=48718
+2026-10-13T21:19:55.862Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92949270451 elapsed_ms=60 elapsed_us=60925
+2026-10-13T21:19:55.862Z pid=2573647 overlay.render.hydrate monotonic_us=92949270496 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.862Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92949270530 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.887Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92949295722 elapsed_ms=9 elapsed_us=9552
+2026-10-13T21:19:55.887Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92949295921 elapsed_ms=0 elapsed_us=47
+2026-10-13T21:19:55.907Z pid=2573647 overlay.render.real_background_compose monotonic_us=92949315337 elapsed_ms=19 elapsed_us=19373
+2026-10-13T21:19:55.917Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92949326220 elapsed_ms=4 elapsed_us=4984
+2026-10-13T21:19:55.918Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92949326377 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.918Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92949326418 elapsed_ms=55 elapsed_us=55863
+2026-10-13T21:19:55.918Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92949326445 elapsed_ms=55 elapsed_us=55916
+2026-10-13T21:19:55.918Z pid=2573647 overlay.render_result hdr=1 monotonic_us=92949326470 elapsed_ms=55 elapsed_us=55979
+2026-10-13T21:19:55.918Z pid=2573647 overlay.begin_edit_requested monotonic_us=92949326522
+2026-10-13T21:19:55.918Z pid=2573647 overlay.render.hydrate monotonic_us=92949326554 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.918Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92949326585 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.954Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92949362710 elapsed_ms=9 elapsed_us=9509
+2026-10-13T21:19:55.958Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92949366636 elapsed_ms=1 elapsed_us=1820
+2026-10-13T21:19:55.958Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92949366787 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.958Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92949366827 elapsed_ms=24 elapsed_us=24404
+2026-10-13T21:19:55.958Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92949366854 elapsed_ms=40 elapsed_us=40270
+2026-10-13T21:19:55.958Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92949366880 elapsed_ms=40 elapsed_us=40331
+2026-10-13T21:19:55.969Z pid=2573647 overlay.editor_ready monotonic_us=92949377555
+2026-10-13T21:19:55.969Z pid=2573647 overlay.hdr_base_queued generation=2 monotonic_us=92949377817
+2026-10-13T21:19:55.969Z pid=2573647 overlay.scroll_prepare monotonic_us=92949378173 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:55.970Z pid=2573647 overlay.begin_edit monotonic_us=92949378237 elapsed_ms=51 elapsed_us=51689
+2026-10-13T21:19:55.970Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92949378394 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:55.995Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92949403359 elapsed_ms=9 elapsed_us=9437
+2026-10-13T21:19:55.995Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92949403823 elapsed_ms=0 elapsed_us=302
+2026-10-13T21:19:56.013Z pid=2573647 overlay.render.real_background_compose monotonic_us=92949421925 elapsed_ms=18 elapsed_us=18034
+2026-10-13T21:19:56.024Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92949432504 elapsed_ms=5 elapsed_us=5045
+2026-10-13T21:19:56.024Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92949432644 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.024Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92949432696 elapsed_ms=54 elapsed_us=54173
+2026-10-13T21:19:56.024Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92949432736 elapsed_ms=54 elapsed_us=54346
+2026-10-13T21:19:56.024Z pid=2573647 overlay.hdr_base_build monotonic_us=92949432765 elapsed_ms=54 elapsed_us=54381
+2026-10-13T21:19:56.033Z pid=2573647 overlay.hdr_base_ready generation=2 monotonic_us=92949441678
+2026-10-13T21:19:56.079Z pid=2573647 overlay.render.hydrate monotonic_us=92949487370 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.079Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92949487517 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.113Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92949521296 elapsed_ms=8 elapsed_us=8150
+2026-10-13T21:19:56.116Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92949524540 elapsed_ms=1 elapsed_us=1731
+2026-10-13T21:19:56.116Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92949524677 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.116Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92949524717 elapsed_ms=19 elapsed_us=19199
+2026-10-13T21:19:56.116Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92949524747 elapsed_ms=37 elapsed_us=37231
+2026-10-13T21:19:56.116Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92949524775 elapsed_ms=37 elapsed_us=37412
+2026-10-13T21:19:56.116Z pid=2573647 overlay.render.hydrate monotonic_us=92949524812 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.116Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92949524847 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.136Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92949544421 elapsed_ms=10 elapsed_us=10521
+2026-10-13T21:19:56.136Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92949544587 elapsed_ms=0 elapsed_us=25
+2026-10-13T21:19:56.156Z pid=2573647 overlay.render.real_background_compose monotonic_us=92949564761 elapsed_ms=20 elapsed_us=20125
+2026-10-13T21:19:56.168Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92949576689 elapsed_ms=5 elapsed_us=5346
+2026-10-13T21:19:56.168Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92949576857 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.168Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92949576903 elapsed_ms=52 elapsed_us=52029
+2026-10-13T21:19:56.168Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92949576933 elapsed_ms=52 elapsed_us=52087
+2026-10-13T21:19:56.168Z pid=2573647 overlay.render_result hdr=1 monotonic_us=92949576961 elapsed_ms=52 elapsed_us=52157
+2026-10-13T21:19:56.168Z pid=2573647 overlay.begin_edit_requested monotonic_us=92949576990
+2026-10-13T21:19:56.168Z pid=2573647 overlay.render.hydrate monotonic_us=92949577035 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.168Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92949577069 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.203Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92949611405 elapsed_ms=10 elapsed_us=10212
+2026-10-13T21:19:56.206Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92949614319 elapsed_ms=1 elapsed_us=1443
+2026-10-13T21:19:56.206Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92949614499 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.206Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92949614551 elapsed_ms=20 elapsed_us=20885
+2026-10-13T21:19:56.206Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92949614581 elapsed_ms=37 elapsed_us=37513
+2026-10-13T21:19:56.206Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92949614608 elapsed_ms=37 elapsed_us=37576
+2026-10-13T21:19:56.207Z pid=2573647 overlay.editor_ready monotonic_us=92949615273
+2026-10-13T21:19:56.207Z pid=2573647 overlay.hdr_base_queued generation=5 monotonic_us=92949615343
+2026-10-13T21:19:56.207Z pid=2573647 overlay.scroll_prepare monotonic_us=92949615384 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.207Z pid=2573647 overlay.begin_edit monotonic_us=92949615415 elapsed_ms=38 elapsed_us=38389
+2026-10-13T21:19:56.207Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92949615404 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.226Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92949635021 elapsed_ms=10 elapsed_us=10110
+2026-10-13T21:19:56.227Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92949635603 elapsed_ms=0 elapsed_us=395
+2026-10-13T21:19:56.248Z pid=2573647 overlay.render.real_background_compose monotonic_us=92949656488 elapsed_ms=20 elapsed_us=20775
+2026-10-13T21:19:56.259Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92949667963 elapsed_ms=5 elapsed_us=5456
+2026-10-13T21:19:56.259Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92949668150 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.259Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92949668196 elapsed_ms=52 elapsed_us=52701
+2026-10-13T21:19:56.259Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92949668226 elapsed_ms=52 elapsed_us=52823
+2026-10-13T21:19:56.260Z pid=2573647 overlay.hdr_base_build monotonic_us=92949668254 elapsed_ms=52 elapsed_us=52855
+2026-10-13T21:19:56.267Z pid=2573647 overlay.hdr_base_ready generation=5 monotonic_us=92949676186
+2026-10-13T21:19:56.313Z pid=2573647 overlay.render.hydrate monotonic_us=92949722042 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.313Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92949722193 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.347Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92949755596 elapsed_ms=10 elapsed_us=10221
+2026-10-13T21:19:56.350Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92949759132 elapsed_ms=1 elapsed_us=1725
+2026-10-13T21:19:56.351Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92949759333 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.351Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92949759385 elapsed_ms=21 elapsed_us=21149
+2026-10-13T21:19:56.351Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92949759420 elapsed_ms=37 elapsed_us=37230
+2026-10-13T21:19:56.351Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92949759456 elapsed_ms=37 elapsed_us=37418
+2026-10-13T21:19:56.351Z pid=2573647 overlay.render.hydrate monotonic_us=92949759502 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.351Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92949759542 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.369Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92949777827 elapsed_ms=9 elapsed_us=9005
+2026-10-13T21:19:56.369Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92949778064 elapsed_ms=0 elapsed_us=4
+2026-10-13T21:19:56.387Z pid=2573647 overlay.render.real_background_compose monotonic_us=92949795972 elapsed_ms=17 elapsed_us=17856
+2026-10-13T21:19:56.398Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92949807183 elapsed_ms=5 elapsed_us=5518
+2026-10-13T21:19:56.399Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92949807338 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.399Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92949807382 elapsed_ms=47 elapsed_us=47808
+2026-10-13T21:19:56.399Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92949807411 elapsed_ms=47 elapsed_us=47871
+2026-10-13T21:19:56.399Z pid=2573647 overlay.render_result hdr=1 monotonic_us=92949807460 elapsed_ms=47 elapsed_us=47970
+2026-10-13T21:19:56.399Z pid=2573647 overlay.begin_edit_requested monotonic_us=92949807493
+2026-10-13T21:19:56.399Z pid=2573647 overlay.render.hydrate monotonic_us=92949807530 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.399Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92949807563 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.432Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92949840326 elapsed_ms=8 elapsed_us=8183
+2026-10-13T21:19:56.435Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92949843949 elapsed_ms=1 elapsed_us=1824
+2026-10-13T21:19:56.435Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92949844139 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.435Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92949844186 elapsed_ms=18 elapsed_us=18380
+2026-10-13T21:19:56.435Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92949844216 elapsed_ms=36 elapsed_us=36654
+2026-10-13T21:19:56.436Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92949844244 elapsed_ms=36 elapsed_us=36719
+2026-10-13T21:19:56.437Z pid=2573647 overlay.editor_ready monotonic_us=92949845749
+2026-10-13T21:19:56.437Z pid=2573647 overlay.hdr_base_queued generation=8 monotonic_us=92949845823
+2026-10-13T21:19:56.437Z pid=2573647 overlay.scroll_prepare monotonic_us=92949845861 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.437Z pid=2573647 overlay.begin_edit monotonic_us=92949845890 elapsed_ms=38 elapsed_us=38372
+2026-10-13T21:19:56.437Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92949845879 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.456Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92949864668 elapsed_ms=10 elapsed_us=10429
+2026-10-13T21:19:56.456Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92949865216 elapsed_ms=0 elapsed_us=333
+2026-10-13T21:19:56.477Z pid=2573647 overlay.render.real_background_compose monotonic_us=92949885477 elapsed_ms=20 elapsed_us=20200
+2026-10-13T21:19:56.488Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92949896730 elapsed_ms=5 elapsed_us=5034
+2026-10-13T21:19:56.488Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92949896885 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.488Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92949896927 elapsed_ms=50 elapsed_us=50961
+2026-10-13T21:19:56.488Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92949896954 elapsed_ms=51 elapsed_us=51077
+2026-10-13T21:19:56.488Z pid=2573647 overlay.hdr_base_build monotonic_us=92949896981 elapsed_ms=51 elapsed_us=51107
+2026-10-13T21:19:56.498Z pid=2573647 overlay.hdr_base_ready generation=8 monotonic_us=92949906758
+2026-10-13T21:19:56.544Z pid=2573647 overlay.render.hydrate monotonic_us=92949952472 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.544Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92949952581 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.583Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92949992210 elapsed_ms=10 elapsed_us=10459
+2026-10-13T21:19:56.587Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92949995919 elapsed_ms=1 elapsed_us=1653
+2026-10-13T21:19:56.587Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92949996094 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.587Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92949996137 elapsed_ms=23 elapsed_us=23728
+2026-10-13T21:19:56.587Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92949996165 elapsed_ms=43 elapsed_us=43585
+2026-10-13T21:19:56.587Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92949996193 elapsed_ms=43 elapsed_us=43725
+2026-10-13T21:19:56.587Z pid=2573647 overlay.render.hydrate monotonic_us=92949996232 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.588Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92949996266 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.607Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92950015828 elapsed_ms=11 elapsed_us=11113
+2026-10-13T21:19:56.607Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92950016078 elapsed_ms=0 elapsed_us=53
+2026-10-13T21:19:56.626Z pid=2573647 overlay.render.real_background_compose monotonic_us=92950034277 elapsed_ms=18 elapsed_us=18148
+2026-10-13T21:19:56.636Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92950044253 elapsed_ms=4 elapsed_us=4979
+2026-10-13T21:19:56.636Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92950044431 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.636Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92950044476 elapsed_ms=48 elapsed_us=48166
+2026-10-13T21:19:56.636Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92950044506 elapsed_ms=48 elapsed_us=48242
+2026-10-13T21:19:56.636Z pid=2573647 overlay.render_result hdr=1 monotonic_us=92950044534 elapsed_ms=48 elapsed_us=48313
+2026-10-13T21:19:56.636Z pid=2573647 overlay.begin_edit_requested monotonic_us=92950044564
+2026-10-13T21:19:56.636Z pid=2573647 overlay.render.hydrate monotonic_us=92950044601 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.636Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92950044634 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.671Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92950080108 elapsed_ms=10 elapsed_us=10281
+2026-10-13T21:19:56.675Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92950084011 elapsed_ms=1 elapsed_us=1771
+2026-10-13T21:19:56.675Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92950084165 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.675Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92950084207 elapsed_ms=22 elapsed_us=22771
+2026-10-13T21:19:56.676Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92950084236 elapsed_ms=39 elapsed_us=39603
+2026-10-13T21:19:56.676Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92950084263 elapsed_ms=39 elapsed_us=39666
+2026-10-13T21:19:56.676Z pid=2573647 overlay.editor_ready monotonic_us=92950084885
+2026-10-13T21:19:56.676Z pid=2573647 overlay.hdr_base_queued generation=11 monotonic_us=92950084950
+2026-10-13T21:19:56.676Z pid=2573647 overlay.scroll_prepare monotonic_us=92950084989 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.676Z pid=2573647 overlay.begin_edit monotonic_us=92950085028 elapsed_ms=40 elapsed_us=40438
+2026-10-13T21:19:56.676Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92950085022 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.696Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92950104539 elapsed_ms=10 elapsed_us=10703
+2026-10-13T21:19:56.696Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92950104968 elapsed_ms=0 elapsed_us=272
+2026-10-13T21:19:56.717Z pid=2573647 overlay.render.real_background_compose monotonic_us=92950125380 elapsed_ms=20 elapsed_us=20345
+2026-10-13T21:19:56.727Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92950135936 elapsed_ms=5 elapsed_us=5012
+2026-10-13T21:19:56.727Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92950136123 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.727Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92950136168 elapsed_ms=51 elapsed_us=51066
+2026-10-13T21:19:56.727Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92950136197 elapsed_ms=51 elapsed_us=51177
+2026-10-13T21:19:56.727Z pid=2573647 overlay.hdr_base_build monotonic_us=92950136224 elapsed_ms=51 elapsed_us=51208
+2026-10-13T21:19:56.737Z pid=2573647 overlay.hdr_base_ready generation=11 monotonic_us=92950145923
+2026-10-13T21:19:56.784Z pid=2573647 overlay.render.hydrate monotonic_us=92950192976 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.784Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92950193159 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.821Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92950229723 elapsed_ms=8 elapsed_us=8555
+2026-10-13T21:19:56.824Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92950232714 elapsed_ms=1 elapsed_us=1583
+2026-10-13T21:19:56.824Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92950232832 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.824Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92950232868 elapsed_ms=20 elapsed_us=20480
+2026-10-13T21:19:56.824Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92950232897 elapsed_ms=39 elapsed_us=39740
+2026-10-13T21:19:56.824Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92950232925 elapsed_ms=39 elapsed_us=39955
+2026-10-13T21:19:56.824Z pid=2573647 overlay.render.hydrate monotonic_us=92950232962 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.824Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92950232996 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.840Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92950248702 elapsed_ms=7 elapsed_us=7728
+2026-10-13T21:19:56.840Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92950248840 elapsed_ms=0 elapsed_us=3
+2026-10-13T21:19:56.859Z pid=2573647 overlay.render.real_background_compose monotonic_us=92950268023 elapsed_ms=19 elapsed_us=19143
+2026-10-13T21:19:56.870Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92950278944 elapsed_ms=5 elapsed_us=5262
+2026-10-13T21:19:56.870Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92950279137 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.870Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92950279184 elapsed_ms=46 elapsed_us=46144
+2026-10-13T21:19:56.870Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92950279214 elapsed_ms=46 elapsed_us=46220
+2026-10-13T21:19:56.871Z pid=2573647 overlay.render_result hdr=1 monotonic_us=92950279243 elapsed_ms=46 elapsed_us=46290
+2026-10-13T21:19:56.871Z pid=2573647 overlay.begin_edit_requested monotonic_us=92950279273
+2026-10-13T21:19:56.871Z pid=2573647 overlay.render.hydrate monotonic_us=92950279310 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.871Z pid=2573647 overlay.render.foreground_prepare hdr=0 monotonic_us=92950279342 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.902Z pid=2573647 overlay.render.background_clip hdr=0 monotonic_us=92950311177 elapsed_ms=7 elapsed_us=7842
+2026-10-13T21:19:56.906Z pid=2573647 overlay.render.foreground_compose hdr=0 monotonic_us=92950314925 elapsed_ms=1 elapsed_us=1634
+2026-10-13T21:19:56.906Z pid=2573647 overlay.render.cursor hdr=0 monotonic_us=92950315094 elapsed_ms=0 elapsed_us=1
+2026-10-13T21:19:56.906Z pid=2573647 overlay.render.compose hdr=0 monotonic_us=92950315135 elapsed_ms=18 elapsed_us=18626
+2026-10-13T21:19:56.906Z pid=2573647 overlay.render_result_snapshot hdr=0 monotonic_us=92950315166 elapsed_ms=35 elapsed_us=35825
+2026-10-13T21:19:56.906Z pid=2573647 overlay.render_result hdr=0 monotonic_us=92950315194 elapsed_ms=35 elapsed_us=35889
+2026-10-13T21:19:56.908Z pid=2573647 overlay.editor_ready monotonic_us=92950317131
+2026-10-13T21:19:56.908Z pid=2573647 overlay.hdr_base_queued generation=14 monotonic_us=92950317203
+2026-10-13T21:19:56.909Z pid=2573647 overlay.scroll_prepare monotonic_us=92950317243 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.909Z pid=2573647 overlay.begin_edit monotonic_us=92950317270 elapsed_ms=37 elapsed_us=37972
+2026-10-13T21:19:56.909Z pid=2573647 overlay.render.foreground_prepare hdr=1 monotonic_us=92950317332 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.927Z pid=2573647 overlay.render.background_clip hdr=1 monotonic_us=92950335783 elapsed_ms=9 elapsed_us=9889
+2026-10-13T21:19:56.928Z pid=2573647 overlay.render.background_sdr_to_hdr monotonic_us=92950336290 elapsed_ms=0 elapsed_us=327
+2026-10-13T21:19:56.948Z pid=2573647 overlay.render.real_background_compose monotonic_us=92950356744 elapsed_ms=20 elapsed_us=20383
+2026-10-13T21:19:56.959Z pid=2573647 overlay.render.foreground_compose hdr=1 monotonic_us=92950367661 elapsed_ms=4 elapsed_us=4959
+2026-10-13T21:19:56.959Z pid=2573647 overlay.render.cursor hdr=1 monotonic_us=92950367822 elapsed_ms=0 elapsed_us=0
+2026-10-13T21:19:56.959Z pid=2573647 overlay.render.compose hdr=1 monotonic_us=92950367879 elapsed_ms=50 elapsed_us=50471
+2026-10-13T21:19:56.959Z pid=2573647 overlay.render_result_snapshot hdr=1 monotonic_us=92950367909 elapsed_ms=50 elapsed_us=50579
+2026-10-13T21:19:56.959Z pid=2573647 overlay.hdr_base_build monotonic_us=92950367936 elapsed_ms=50 elapsed_us=50611
+2026-10-13T21:19:56.960Z pid=2573647 overlay.hdr_base_ready generation=14 monotonic_us=92950368279

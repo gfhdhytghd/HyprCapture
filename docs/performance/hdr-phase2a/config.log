@@ -1,0 +1,16 @@
+CMake Warning at /usr/lib/cmake/Qt6/QtPublicDependencyHelpers.cmake:339 (message):
+  This project is using headers of the GuiPrivate module and will therefore
+  be tied to this specific Qt module build version.  Running this project
+  against other versions of the Qt modules may crash at any arbitrary point.
+  This is not a bug, but a result of using Qt internals.  You have been
+  warned!
+
+  You can disable this warning by setting QT_NO_PRIVATE_MODULE_WARNING to ON.
+Call Stack (most recent call first):
+  /usr/lib/cmake/Qt6GuiPrivate/Qt6GuiPrivateConfig.cmake:58 (_qt_internal_show_private_module_warning)
+  CMakeLists.txt:53 (find_package)
+
+
+-- Configuring done (0.4s)
+-- Generating done (0.2s)
+-- Build files have been written to: /tmp/hyprcapture-hdr-phase2a

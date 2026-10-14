@@ -9,6 +9,7 @@
 #include "ui/hdr_thumbnail.hpp"
 #include "ui/i18n.hpp"
 #include "ui/pinned_image.hpp"
+#include "ui/hdr_backdrop.hpp"
 #include "ui/session_lock_guard.hpp"
 
 #include <LayerShellQt/Shell>
@@ -811,9 +812,12 @@ int main(int argc, char** argv) {
     LayerShellQt::Shell::useLayerShell();
 #endif
 
+    if (hasArgument(argc, argv, "--session-json-stdin") || hasArgument(argc, argv, "--session-json-file"))
+        hyprcapture::ui::HdrBackdrop::prewarm();
     hyprcapture::ui::traceTiming(QStringLiteral("ui.entry"));
     hyprcapture::ui::SessionLockApplication app(argc, argv);
     QApplication::setApplicationName("hyprcapture-ui");
+    hyprcapture::ui::HdrBackdrop::prewarmWayland();
     hyprcapture::ui::traceTiming(QStringLiteral("ui.app_ready"));
 
     QCommandLineParser parser;

@@ -106,6 +106,12 @@ int main(int argc, char **argv) {
        20) &
       1023;
   assert(pqNits(checkerCode) > 10 && pqNits(checkerCode) < 30);
+  auto stalled=ui::HdrUpload::pendingForTest(image);
+  assert(stalled->state()==ui::HdrUpload::State::Pending);
+  assert(!stalled->waitUntil(std::chrono::steady_clock::now()));
+  stalled->failForTest();
+  assert(stalled->waitUntil(std::chrono::steady_clock::now()+std::chrono::milliseconds(1)));
+  assert(!stalled->result());
   ui::HdrBackdrop fallback(nullptr);
   assert(!fallback.ready());
   assert(!fallback.setImage(image, QRect(0, 0, 512, 256), 173));

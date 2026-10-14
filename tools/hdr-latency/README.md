@@ -82,3 +82,67 @@ thumbnail Paint event entry. This is **not display presentation**. Missing event
 or wrong binaries mean no accepted live result. Sequence-tagged logs separate
 capture/fence polling/IPC, receive, append, previews, queued delivery and present;
 `elapsed_us` scopes may nest and must not be summed blindly.
+
+## Phase 2A helper-only A/B
+
+The FP16 product path uses **linear BT.2020**, 80 nits/unit, parametric ext_linear,
+with the same peak envelope/reference as the CPU PQ surface. The GPU applies
+identical BT.2020 gamut clipping and opaque checkerboard before submission;
+it neither clips negative input scRGB prematurely nor uses default Windows
+reference metadata. `hdr-gpu` checks the actual exported pixels against
+`hdrToPq10` at 80/203/252-nit reference, straight/premultiplied alpha and wide gamut.
+
+`phase2a-live.py --prepare BUILD --baseline BEFORE_BINARY --out PRIVATE_CACHE`
+prepares `activate-before.sh`, `activate-cpu.sh`, `activate-after.sh`, `restore.sh`.
+They change only the helper option; **no plugin swapping and no plugin timing
+option changes**. The phase-1 directory is reserved and must never be overwritten.
+`before` is the original executable; `cpu` is the new executable with
+`HYPRCAPTURE_HDR_DMABUF=0`, giving PQ fallback plus presentation instrumentation;
+`after` enables FP16. Scripts and binary checksums are reviewable before execution.
+
+No desktop startup acceptance was inferred from the offscreen tests. Measure
+actual input→all expected parent layers mapped, first paint/update, and
+`hdr.presented` separately; use its presentation seconds/nanoseconds only when
+`clock=1` (CLOCK_MONOTONIC), not the later log-delivery timestamp. Keep cold/warm
+and timing/wire-debug trials separate; check the active helper executable/hash,
+close each overlay, restore the original helper, and retain all raw samples.
+A separate `WAYLAND_DEBUG=client` run can verify the HDR child buffer commit
+precedes the parent's first buffer commit. Input-to-map still excludes scanout.
+
+## Phase 2B editor entry
+
+`editor-live.py --prepare BUILD --baseline PHASE1_HELPER --out NEW_PRIVATE_CACHE`
+prepares SHA-checked `activate-before.sh`, `activate-after.sh`, `activate-cpu.sh`
+and `restore.sh`. These select helpers and isolated timing files only; they
+**never load/unload a plugin**. Before is the Phase-1 synchronous helper; after
+includes Phase 2A + 2B; cpu isolates 2B with FP16 monitor backdrop disabled.
+Activation requires the same registered plugin handle as preparation. Reprepare
+in a fresh directory after the user changes the live plugin. Restore the saved
+helper/timing/timing_file only after closing overlays.
+
+Run `editor-live.py --out NEW_PRIVATE_CACHE --record before-window-now-cold --seconds 30`
+and manually perform `open_editor()` → click the same kitty window (2386×1656)
+→ immediate/1s wait → one wheel notch → cancel. Alternate before/after; keep cold
+and warm separate (5 each), keep eDP-1 HDR 2880×1800 scale2/output format/content
+constant, and run without compilation. Repeat region as a control.
+`editor-summary.json` includes request→editor ready, first canvas Paint entry,
+HDR base readiness, hydration/composition sub-timings and wheel→thumbnail Paint;
+all endpoints are distinguished from display presentation. Original helpers
+lack the new editor Paint timestamp, so compare their begin_edit completion
+separately rather than inventing an equivalent scanout measurement. Hashes,
+registration, dimensions/output configuration and raw logs accompany the run.
+
+HDR base snapshots run in workers only for HDR output; SDR editing does not
+build an unused HDR base. Aligned editor regions retain ready native monitor
+backdrops while HDR work finishes. Stage/centered or uncovered regions use the
+safe raster preview. Compositor capture still occurs at selection time, keeping
+the captured frame fresh. Its synchronous readback/real-background passes remain
+a distinct source of latency, measurable via hydrate_dispatch and plugin logs.
+
+Explicit offscreen diagnostic:
+`QT_QPA_PLATFORM=offscreen HYPRCAPTURE_EDITOR_BENCHMARK=1 BUILD/test-ui/hyprcapture-in-place-editor-test hdrEditorCompositionBenchmark`
+uses a prehydrated 2386×1656 HDR real-background fixture. It checks async output
+against synchronous native HDR composition; it excludes live compositor/IPC.
+`editor-background-benchmark` isolates the erased SDR→HDR background conversion.
+Neither benchmark substitutes for manual desktop/color acceptance. The authorized
+HEIC-OFF build cannot accept HDR encoding; the user's full build verifies that.

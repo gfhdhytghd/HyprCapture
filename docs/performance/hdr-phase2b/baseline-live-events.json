@@ -1,0 +1,188 @@
+[
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-region-now-1791922762639479950",
+    "manifest_sha256": "e3c63a6bb92b274d85fa7fdd9029926138d3287c9b89ca7e2429929300534201",
+    "ui": [
+      "2026-10-13T20:19:13.470Z pid=2339224 overlay.begin_edit_requested monotonic_us=89755613661",
+      "2026-10-13T20:19:13.470Z pid=2339224 overlay.render_result hdr=0 monotonic_us=89755613823 elapsed_ms=0 elapsed_us=91",
+      "2026-10-13T20:19:13.470Z pid=2339224 overlay.render_result hdr=1 monotonic_us=89755613973 elapsed_ms=0 elapsed_us=133",
+      "2026-10-13T20:19:13.475Z pid=2339224 scroll.start hdr=1 monotonic_us=89755618366",
+      "2026-10-13T20:19:13.475Z pid=2339224 scroll.start_setup monotonic_us=89755618627 elapsed_ms=0 elapsed_us=227",
+      "2026-10-13T20:19:13.475Z pid=2339224 overlay.scroll_prepare monotonic_us=89755618652 elapsed_ms=0 elapsed_us=617",
+      "2026-10-13T20:19:13.475Z pid=2339224 overlay.begin_edit monotonic_us=89755618662 elapsed_ms=4 elapsed_us=4931"
+    ],
+    "plugin": []
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-region-now-1791922805113780564",
+    "manifest_sha256": "73ff7c7afecd9936ef0c75718c552cec8ce06b1d54f5abed8bcccd4ce5057c72",
+    "ui": [
+      "2026-10-13T20:19:55.852Z pid=2342288 overlay.begin_edit_requested monotonic_us=89797995762",
+      "2026-10-13T20:19:55.853Z pid=2342288 overlay.render_result hdr=0 monotonic_us=89797996133 elapsed_ms=0 elapsed_us=233",
+      "2026-10-13T20:19:55.853Z pid=2342288 overlay.render_result hdr=1 monotonic_us=89797996532 elapsed_ms=0 elapsed_us=376",
+      "2026-10-13T20:19:55.857Z pid=2342288 scroll.start hdr=1 monotonic_us=89798000754",
+      "2026-10-13T20:19:55.858Z pid=2342288 scroll.start_setup monotonic_us=89798001102 elapsed_ms=0 elapsed_us=321",
+      "2026-10-13T20:19:55.858Z pid=2342288 overlay.scroll_prepare monotonic_us=89798001126 elapsed_ms=0 elapsed_us=681",
+      "2026-10-13T20:19:55.858Z pid=2342288 overlay.begin_edit monotonic_us=89798001136 elapsed_ms=5 elapsed_us=5239"
+    ],
+    "plugin": []
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-region-now-1791922847643819844",
+    "manifest_sha256": "ce446c570391a605c670f9e6c022837b01503be8320d46aad2fdb9d23ae059d5",
+    "ui": [
+      "2026-10-13T20:20:38.437Z pid=2345237 overlay.begin_edit_requested monotonic_us=89840580682",
+      "2026-10-13T20:20:38.437Z pid=2345237 overlay.render_result hdr=0 monotonic_us=89840580838 elapsed_ms=0 elapsed_us=90",
+      "2026-10-13T20:20:38.437Z pid=2345237 overlay.render_result hdr=1 monotonic_us=89840581026 elapsed_ms=0 elapsed_us=153",
+      "2026-10-13T20:20:38.442Z pid=2345237 scroll.start hdr=1 monotonic_us=89840585500",
+      "2026-10-13T20:20:38.442Z pid=2345237 scroll.start_setup monotonic_us=89840585845 elapsed_ms=0 elapsed_us=304",
+      "2026-10-13T20:20:38.442Z pid=2345237 overlay.scroll_prepare monotonic_us=89840585873 elapsed_ms=0 elapsed_us=940",
+      "2026-10-13T20:20:38.442Z pid=2345237 overlay.begin_edit monotonic_us=89840585885 elapsed_ms=5 elapsed_us=5138"
+    ],
+    "plugin": []
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-window-now-1791922656682378791",
+    "manifest_sha256": "693bd04fc7039776617edce4517cf370d410cf965e088b512447c3e7ba007c9d",
+    "ui": [
+      "2026-10-13T20:17:27.173Z pid=2332089 overlay.begin_edit_requested monotonic_us=89649316261",
+      "2026-10-13T20:17:27.503Z pid=2332089 overlay.render_result hdr=0 monotonic_us=89649646476 elapsed_ms=330 elapsed_us=330140",
+      "2026-10-13T20:17:28.000Z pid=2332089 overlay.render_result hdr=1 monotonic_us=89650144020 elapsed_ms=497 elapsed_us=497460",
+      "2026-10-13T20:17:28.005Z pid=2332089 scroll.start hdr=1 monotonic_us=89650148389",
+      "2026-10-13T20:17:28.005Z pid=2332089 scroll.start_setup monotonic_us=89650148682 elapsed_ms=0 elapsed_us=265",
+      "2026-10-13T20:17:28.005Z pid=2332089 overlay.scroll_prepare monotonic_us=89650148708 elapsed_ms=0 elapsed_us=736",
+      "2026-10-13T20:17:28.005Z pid=2332089 overlay.begin_edit monotonic_us=89650148719 elapsed_ms=832 elapsed_us=832386"
+    ],
+    "plugin": [
+      "time_ms=1791922647327 event=window.readback monotonic_us=89649470869 elapsed_us=150483",
+      "time_ms=1791922647408 event=realbg.capture_pass monotonic_us=89649551628 elapsed_us=45097",
+      "time_ms=1791922647455 event=realbg.blur_capture monotonic_us=89649598902 elapsed_us=46966"
+    ]
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-window-now-1791922734281613914",
+    "manifest_sha256": "d4f151493a0dccd9b9700544cd3bb11a00e3644788e1d1525b1e6f4476a96f4d",
+    "ui": [
+      "2026-10-13T20:18:44.727Z pid=2337278 overlay.begin_edit_requested monotonic_us=89726871049",
+      "2026-10-13T20:18:45.098Z pid=2337278 overlay.render_result hdr=0 monotonic_us=89727241600 elapsed_ms=370 elapsed_us=370480",
+      "2026-10-13T20:18:46.652Z pid=2337278 overlay.render_result hdr=1 monotonic_us=89728795884 elapsed_ms=1554 elapsed_us=1554201",
+      "2026-10-13T20:18:46.656Z pid=2337278 scroll.start hdr=1 monotonic_us=89728800081",
+      "2026-10-13T20:18:46.657Z pid=2337278 scroll.start_setup monotonic_us=89728800414 elapsed_ms=0 elapsed_us=305",
+      "2026-10-13T20:18:46.657Z pid=2337278 overlay.scroll_prepare monotonic_us=89728800435 elapsed_ms=0 elapsed_us=654",
+      "2026-10-13T20:18:46.657Z pid=2337278 overlay.begin_edit monotonic_us=89728800446 elapsed_ms=1929 elapsed_us=1929328"
+    ],
+    "plugin": [
+      "time_ms=1791922724923 event=window.readback monotonic_us=89727067428 elapsed_us=192853",
+      "time_ms=1791922724998 event=realbg.capture_pass monotonic_us=89727142527 elapsed_us=47257",
+      "time_ms=1791922725044 event=realbg.blur_capture monotonic_us=89727187686 elapsed_us=44853"
+    ]
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-window-now-1791922776817216968",
+    "manifest_sha256": "420f8f6e5c397cc7f2a482e303602f6eb7a43d59153c6b45d42dd04f5ab7f2b0",
+    "ui": [
+      "2026-10-13T20:19:27.275Z pid=2340260 overlay.begin_edit_requested monotonic_us=89769418977",
+      "2026-10-13T20:19:27.576Z pid=2340260 overlay.render_result hdr=0 monotonic_us=89769719132 elapsed_ms=299 elapsed_us=299980",
+      "2026-10-13T20:19:29.122Z pid=2340260 overlay.render_result hdr=1 monotonic_us=89771265532 elapsed_ms=1546 elapsed_us=1546316",
+      "2026-10-13T20:19:29.126Z pid=2340260 scroll.start hdr=1 monotonic_us=89771269911",
+      "2026-10-13T20:19:29.127Z pid=2340260 scroll.start_setup monotonic_us=89771270207 elapsed_ms=0 elapsed_us=265",
+      "2026-10-13T20:19:29.127Z pid=2340260 overlay.scroll_prepare monotonic_us=89771270232 elapsed_ms=0 elapsed_us=622",
+      "2026-10-13T20:19:29.127Z pid=2340260 overlay.begin_edit monotonic_us=89771270243 elapsed_ms=1851 elapsed_us=1851094"
+    ],
+    "plugin": [
+      "time_ms=1791922767418 event=window.readback monotonic_us=89769562142 elapsed_us=138602",
+      "time_ms=1791922767483 event=realbg.capture_pass monotonic_us=89769627004 elapsed_us=45392",
+      "time_ms=1791922767528 event=realbg.blur_capture monotonic_us=89769672452 elapsed_us=45179"
+    ]
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-window-now-1791922819297541984",
+    "manifest_sha256": "da7d96402a716815f551afa9467258606fbf92a80c5724fa2b50a3c67f6f4dd7",
+    "ui": [
+      "2026-10-13T20:20:09.779Z pid=2343245 overlay.begin_edit_requested monotonic_us=89811922509",
+      "2026-10-13T20:20:10.113Z pid=2343245 overlay.render_result hdr=0 monotonic_us=89812256150 elapsed_ms=333 elapsed_us=333515",
+      "2026-10-13T20:20:10.443Z pid=2343245 overlay.render_result hdr=1 monotonic_us=89812586963 elapsed_ms=330 elapsed_us=330733",
+      "2026-10-13T20:20:10.448Z pid=2343245 scroll.start hdr=1 monotonic_us=89812591327",
+      "2026-10-13T20:20:10.448Z pid=2343245 scroll.start_setup monotonic_us=89812591665 elapsed_ms=0 elapsed_us=306",
+      "2026-10-13T20:20:10.448Z pid=2343245 overlay.scroll_prepare monotonic_us=89812591687 elapsed_ms=0 elapsed_us=689",
+      "2026-10-13T20:20:10.448Z pid=2343245 overlay.begin_edit monotonic_us=89812591697 elapsed_ms=669 elapsed_us=669066"
+    ],
+    "plugin": [
+      "time_ms=1791922809956 event=window.readback monotonic_us=89812099780 elapsed_us=172654",
+      "time_ms=1791922810020 event=realbg.capture_pass monotonic_us=89812163881 elapsed_us=45305",
+      "time_ms=1791922810066 event=realbg.blur_capture monotonic_us=89812210348 elapsed_us=46171"
+    ]
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-window-wait-1791922705429418184",
+    "manifest_sha256": "353c675159da1749f4f88332e30c9593ed3168cab0666656d9f4c96d9dbc1f55",
+    "ui": [
+      "2026-10-13T20:18:15.837Z pid=2335272 overlay.begin_edit_requested monotonic_us=89697980786",
+      "2026-10-13T20:18:16.131Z pid=2335272 overlay.render_result hdr=0 monotonic_us=89698274119 elapsed_ms=293 elapsed_us=293223",
+      "2026-10-13T20:18:16.554Z pid=2335272 overlay.render_result hdr=1 monotonic_us=89698697598 elapsed_ms=423 elapsed_us=423386",
+      "2026-10-13T20:18:16.558Z pid=2335272 scroll.start hdr=1 monotonic_us=89698702032",
+      "2026-10-13T20:18:16.559Z pid=2335272 scroll.start_setup monotonic_us=89698702350 elapsed_ms=0 elapsed_us=283",
+      "2026-10-13T20:18:16.559Z pid=2335272 overlay.scroll_prepare monotonic_us=89698702373 elapsed_ms=0 elapsed_us=655",
+      "2026-10-13T20:18:16.559Z pid=2335272 overlay.begin_edit monotonic_us=89698702383 elapsed_ms=721 elapsed_us=721490"
+    ],
+    "plugin": [
+      "time_ms=1791922695975 event=window.readback monotonic_us=89698119238 elapsed_us=133997",
+      "time_ms=1791922696040 event=realbg.capture_pass monotonic_us=89698183644 elapsed_us=45318",
+      "time_ms=1791922696084 event=realbg.blur_capture monotonic_us=89698228455 elapsed_us=44661"
+    ]
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-window-wait-1791922748513336749",
+    "manifest_sha256": "2550925cda8ab5a34529176ef52f066d4b131add8cf014983c9b22c8e3582b5a",
+    "ui": [
+      "2026-10-13T20:18:58.920Z pid=2338209 overlay.begin_edit_requested monotonic_us=89741063596",
+      "2026-10-13T20:18:59.228Z pid=2338209 overlay.render_result hdr=0 monotonic_us=89741371835 elapsed_ms=308 elapsed_us=308170",
+      "2026-10-13T20:19:00.783Z pid=2338209 overlay.render_result hdr=1 monotonic_us=89742926796 elapsed_ms=1554 elapsed_us=1554882",
+      "2026-10-13T20:19:00.788Z pid=2338209 scroll.start hdr=1 monotonic_us=89742931274",
+      "2026-10-13T20:19:00.788Z pid=2338209 scroll.start_setup monotonic_us=89742931587 elapsed_ms=0 elapsed_us=280",
+      "2026-10-13T20:19:00.788Z pid=2338209 overlay.scroll_prepare monotonic_us=89742931610 elapsed_ms=0 elapsed_us=659",
+      "2026-10-13T20:19:00.788Z pid=2338209 overlay.begin_edit monotonic_us=89742931620 elapsed_ms=1867 elapsed_us=1867958"
+    ],
+    "plugin": [
+      "time_ms=1791922739056 event=window.readback monotonic_us=89741200564 elapsed_us=133413",
+      "time_ms=1791922739119 event=realbg.capture_pass monotonic_us=89741263581 elapsed_us=43022",
+      "time_ms=1791922739167 event=realbg.blur_capture monotonic_us=89741310847 elapsed_us=46987"
+    ]
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-window-wait-1791922790892117775",
+    "manifest_sha256": "f2a5d14924d58c082c8e02b4c2e5be96755411fe5bfe75dba2960c6d9915f831",
+    "ui": [
+      "2026-10-13T20:19:41.457Z pid=2341222 overlay.begin_edit_requested monotonic_us=89783600538",
+      "2026-10-13T20:19:41.753Z pid=2341222 overlay.render_result hdr=0 monotonic_us=89783896447 elapsed_ms=295 elapsed_us=295772",
+      "2026-10-13T20:19:42.884Z pid=2341222 overlay.render_result hdr=1 monotonic_us=89785027426 elapsed_ms=1130 elapsed_us=1130899",
+      "2026-10-13T20:19:42.888Z pid=2341222 scroll.start hdr=1 monotonic_us=89785031530",
+      "2026-10-13T20:19:42.888Z pid=2341222 scroll.start_setup monotonic_us=89785031814 elapsed_ms=0 elapsed_us=257",
+      "2026-10-13T20:19:42.888Z pid=2341222 overlay.scroll_prepare monotonic_us=89785031859 elapsed_ms=0 elapsed_us=617",
+      "2026-10-13T20:19:42.888Z pid=2341222 overlay.begin_edit monotonic_us=89785031871 elapsed_ms=1431 elapsed_us=1431200"
+    ],
+    "plugin": [
+      "time_ms=1791922781597 event=window.readback monotonic_us=89783740904 elapsed_us=136312",
+      "time_ms=1791922781661 event=realbg.capture_pass monotonic_us=89783804909 elapsed_us=44564",
+      "time_ms=1791922781705 event=realbg.blur_capture monotonic_us=89783849354 elapsed_us=44207"
+    ]
+  },
+  {
+    "run": "/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/hdr-window-wait-1791922833488173205",
+    "manifest_sha256": "5d5808177bf52679905e044fac65b4adb49e38b3625f5fe53a8ed8c2bb43fc5b",
+    "ui": [
+      "2026-10-13T20:20:23.946Z pid=2344204 overlay.begin_edit_requested monotonic_us=89826089900",
+      "2026-10-13T20:20:24.265Z pid=2344204 overlay.render_result hdr=0 monotonic_us=89826408740 elapsed_ms=318 elapsed_us=318761",
+      "2026-10-13T20:20:24.596Z pid=2344204 overlay.render_result hdr=1 monotonic_us=89826739139 elapsed_ms=330 elapsed_us=330321",
+      "2026-10-13T20:20:24.600Z pid=2344204 scroll.start hdr=1 monotonic_us=89826743482",
+      "2026-10-13T20:20:24.600Z pid=2344204 scroll.start_setup monotonic_us=89826743774 elapsed_ms=0 elapsed_us=264",
+      "2026-10-13T20:20:24.600Z pid=2344204 overlay.scroll_prepare monotonic_us=89826743797 elapsed_ms=0 elapsed_us=631",
+      "2026-10-13T20:20:24.600Z pid=2344204 overlay.begin_edit monotonic_us=89826743807 elapsed_ms=653 elapsed_us=653831"
+    ],
+    "plugin": [
+      "time_ms=1791922824084 event=window.readback monotonic_us=89826227604 elapsed_us=134056",
+      "time_ms=1791922824161 event=realbg.capture_pass monotonic_us=89826305520 elapsed_us=58543",
+      "time_ms=1791922824210 event=realbg.blur_capture monotonic_us=89826354171 elapsed_us=48067"
+    ]
+  }
+]

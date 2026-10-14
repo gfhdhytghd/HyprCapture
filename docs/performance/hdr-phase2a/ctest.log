@@ -1,0 +1,104 @@
+Test project /tmp/hyprcapture-hdr-phase2a
+      Start 10: in-place-editor
+      Start 44: hdr-backdrop
+ 1/48 Test #44: hdr-backdrop ..............................   Passed    0.60 sec
+      Start 48: hdr-gpu
+ 2/48 Test #48: hdr-gpu ...................................   Passed    0.37 sec
+      Start  1: session-lock
+ 3/48 Test  #1: session-lock ..............................   Passed    0.01 sec
+      Start  2: aec-overload
+ 4/48 Test  #2: aec-overload ..............................   Passed    2.31 sec
+      Start  3: aec-delay
+ 5/48 Test  #3: aec-delay .................................   Passed    0.01 sec
+      Start  4: aec-policy
+ 6/48 Test  #4: aec-policy ................................   Passed    0.64 sec
+      Start  5: session-lock-guard
+ 7/48 Test  #5: session-lock-guard ........................   Passed    0.08 sec
+      Start  6: annotation-editor
+ 8/48 Test  #6: annotation-editor .........................   Passed    1.20 sec
+      Start  7: i18n
+ 9/48 Test  #7: i18n ......................................   Passed    0.03 sec
+      Start  8: pinned-image
+10/48 Test  #8: pinned-image ..............................   Passed    0.32 sec
+      Start  9: hyprcapture-sound-ui-test
+11/48 Test #10: in-place-editor ...........................   Passed    7.00 sec
+      Start 11: scroll-live
+12/48 Test #11: scroll-live ...............................***Skipped   0.11 sec
+      Start 12: hyprcapture-audio-timeline-test
+13/48 Test #12: hyprcapture-audio-timeline-test ...........   Passed    0.00 sec
+      Start 13: aec-source-pins
+14/48 Test #13: aec-source-pins ...........................   Passed    0.36 sec
+      Start 14: recording-permissions
+15/48 Test #14: recording-permissions .....................   Passed    4.66 sec
+      Start 15: omarchy-aec-setup
+16/48 Test #15: omarchy-aec-setup .........................   Passed    0.27 sec
+      Start 16: session-startup-ui
+17/48 Test #16: session-startup-ui ........................   Passed    2.11 sec
+      Start 17: pin-launch
+18/48 Test  #9: hyprcapture-sound-ui-test .................   Passed   11.47 sec
+      Start 18: aec-ui-feedback
+19/48 Test #17: pin-launch ................................   Passed    3.13 sec
+      Start 19: hyprcapture-audio-finalize-test
+20/48 Test #18: aec-ui-feedback ...........................   Passed    7.82 sec
+      Start 20: scroll-capture
+21/48 Test #20: scroll-capture ............................   Passed    0.31 sec
+      Start 21: scroll-stitcher
+22/48 Test #19: hyprcapture-audio-finalize-test ...........   Passed   14.33 sec
+      Start 22: mapped-image
+23/48 Test #22: mapped-image ..............................   Passed    0.05 sec
+      Start 23: material-icon
+24/48 Test #23: material-icon .............................   Passed    0.15 sec
+      Start 24: session-startup
+25/48 Test #24: session-startup ...........................   Passed    0.03 sec
+      Start 25: hyprcapture-supervised-process-test
+26/48 Test #25: hyprcapture-supervised-process-test .......   Passed    1.24 sec
+      Start 26: hyprcapture-config-test
+27/48 Test #26: hyprcapture-config-test ...................   Passed    0.01 sec
+      Start 27: hyprcapture-watermark-test
+28/48 Test #27: hyprcapture-watermark-test ................   Passed    0.23 sec
+      Start 28: hyprcapture-security-test
+29/48 Test #28: hyprcapture-security-test .................   Passed    0.10 sec
+      Start 29: hyprcapture-process-environment-test
+30/48 Test #29: hyprcapture-process-environment-test ......   Passed    0.01 sec
+      Start 30: hyprcapture-overlay-paint-test
+31/48 Test #30: hyprcapture-overlay-paint-test ............   Passed    0.20 sec
+      Start 31: hyprcapture-recording-state-test
+32/48 Test #31: hyprcapture-recording-state-test ..........   Passed    0.05 sec
+      Start 32: hyprcapture-recording-codec-test
+33/48 Test #32: hyprcapture-recording-codec-test ..........   Passed    0.00 sec
+      Start 33: hyprcapture-recording-timestamps-test
+34/48 Test #33: hyprcapture-recording-timestamps-test .....   Passed    2.78 sec
+      Start 34: hyprcapture-rgba-transform-test
+35/48 Test #34: hyprcapture-rgba-transform-test ...........   Passed    0.01 sec
+      Start 35: hyprcapture-trusted-path-test
+36/48 Test #35: hyprcapture-trusted-path-test .............   Passed    0.00 sec
+      Start 36: hyprcapture-trusted-path-namespace-test
+37/48 Test #36: hyprcapture-trusted-path-namespace-test ...   Passed    0.23 sec
+      Start 37: hyprcapture-window-stream-test
+38/48 Test #37: hyprcapture-window-stream-test ............   Passed    0.00 sec
+      Start 38: hyprcapture-window-stream-sender-test
+39/48 Test #38: hyprcapture-window-stream-sender-test .....   Passed    0.05 sec
+      Start 39: hyprcapture-window-gpu-wire-test
+40/48 Test #39: hyprcapture-window-gpu-wire-test ..........   Passed    0.00 sec
+      Start 40: hyprcapture-window-gpu-sender-test
+41/48 Test #40: hyprcapture-window-gpu-sender-test ........   Passed    5.97 sec
+      Start 41: hyprcapture-window-stream-control-test
+42/48 Test #41: hyprcapture-window-stream-control-test ....   Passed    0.01 sec
+      Start 42: hyprcapture-window-stream-extent-test
+43/48 Test #42: hyprcapture-window-stream-extent-test .....   Passed    0.00 sec
+      Start 43: hyprcapture-window-stream-cadence-test
+44/48 Test #43: hyprcapture-window-stream-cadence-test ....   Passed    0.00 sec
+      Start 45: hdr-color-export
+45/48 Test #45: hdr-color-export ..........................   Passed    0.36 sec
+      Start 46: hdr-no-heic-capability
+46/48 Test #46: hdr-no-heic-capability ....................   Passed    0.04 sec
+      Start 47: sdr-resolve-gpu
+47/48 Test #47: sdr-resolve-gpu ...........................   Passed    0.12 sec
+48/48 Test #21: scroll-stitcher ...........................   Passed   26.17 sec
+
+100% tests passed out of 48
+
+Total Test time (real) =  51.34 sec
+
+The following tests did not run:
+	 11 - scroll-live (Skipped)

@@ -1,0 +1,14 @@
+BUILD_TESTING:BOOL=ON
+CMAKE_BUILD_TYPE:STRING=Release
+HYPRCAPTURE_GAINMAP_HEIC:BOOL=OFF
+Full build exit: 0
+CTest: 47 passed, 1 scroll-live skipped; exit 0
+Recorder synthetic timestamp filtering, ready/Paint/scroll endpoints, unexpected helper rejection: passed
+Generated shell script syntax: passed
+Copied helper SHA checks: passed
+Runtime helper/timing/timing_file unchanged after preparation: passed
+No live settings applied; no plugin swap; no commit
+Prepared directory: /home/wilf/.cache/hyprcapture-hdr-phase2b-20261013-final
+Before SHA256: 082705c39bd986574dd13dff65f6ced9dc8689585c82744106e63457e9cd1467
+After SHA256: 7a67ee15d3347a1e02420f74ce9c9d85d2a5514b8ac4803e618ff4709d225aea
+Benchmarks: offscreen prehydrated 2386x1656; no compiler processes observed during final measurements
