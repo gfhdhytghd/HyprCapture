@@ -577,6 +577,11 @@ if(BUILD_TESTING)
   target_compile_options(hyprcapture-window-stream-extent-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-window-stream-extent-test COMMAND hyprcapture-window-stream-extent-test)
 
+  add_executable(hyprcapture-recording-cursor-test tests/recording_cursor_test.cpp)
+  target_include_directories(hyprcapture-recording-cursor-test PRIVATE src)
+  target_compile_options(hyprcapture-recording-cursor-test PRIVATE -UNDEBUG)
+  add_test(NAME recording-cursor COMMAND hyprcapture-recording-cursor-test)
+
   add_executable(hyprcapture-window-stream-cadence-test tests/window_stream_cadence_test.cpp)
   target_include_directories(hyprcapture-window-stream-cadence-test PRIVATE src)
   target_compile_options(hyprcapture-window-stream-cadence-test PRIVATE -UNDEBUG)
