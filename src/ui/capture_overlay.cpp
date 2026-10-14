@@ -57,6 +57,7 @@
 #include <QMouseEvent>
 #include <QMetaObject>
 #include <QPalette>
+#include <QAbstractButton>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
@@ -127,6 +128,23 @@ class InlineSelect final : public QWidget {
     int m_compactWidth = 0;
 
     std::function<void()> m_onChanged;
+};
+
+class PillToggle final : public QAbstractButton {
+  public:
+    PillToggle(std::string_view icon, const QString& text, QWidget* parent = nullptr);
+    QSize sizeHint() const override;
+
+  protected:
+    void paintEvent(QPaintEvent* event) override;
+    void enterEvent(QEnterEvent* event) override;
+    void leaveEvent(QEvent* event) override;
+
+  private:
+    std::string_view  m_iconName;
+    QVariantAnimation m_knob;
+    double            m_position = 0.0;
+    bool              m_hover = false;
 };
 
 namespace {
@@ -1274,6 +1292,83 @@ void repairMissingWindowTail(QImage& image, const QRect& fullGeometry, const QRe
 
 } // namespace
 
+PillToggle::PillToggle(std::string_view icon, const QString& text, QWidget* parent) : QAbstractButton(parent), m_iconName(icon) {
+    setText(hyprcapture::ui::uiText(text));
+    setAccessibleName(this->text());
+    setCheckable(true);
+    setFocusPolicy(Qt::NoFocus);
+    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    m_knob.setDuration(160);
+    m_knob.setEasingCurve(QEasingCurve::OutCubic);
+    connect(&m_knob, &QVariantAnimation::valueChanged, this, [this](const QVariant& value) {
+        m_position = value.toDouble();
+        update();
+    });
+    connect(this, &QAbstractButton::toggled, this, [this](bool on) {
+        m_knob.stop();
+        if (!isVisible()) {
+            m_position = on ? 1.0 : 0.0;
+            return;
+        }
+        m_knob.setStartValue(m_position);
+        m_knob.setEndValue(on ? 1.0 : 0.0);
+        m_knob.start();
+    });
+}
+
+QSize PillToggle::sizeHint() const {
+    const auto metrics = fontMetrics();
+    return {10 + 16 + 6 + metrics.horizontalAdvance(text()) + 10 + 26 + 10, metrics.height() + 12};
+}
+
+void PillToggle::enterEvent(QEnterEvent* event) {
+    m_hover = true;
+    update();
+    QAbstractButton::enterEvent(event);
+}
+
+void PillToggle::leaveEvent(QEvent* event) {
+    m_hover = false;
+    update();
+    QAbstractButton::leaveEvent(event);
+}
+
+void PillToggle::paintEvent(QPaintEvent*) {
+    const auto  palette = QApplication::palette();
+    const QColor window = palette.color(QPalette::Window);
+    const QColor ink = palette.color(QPalette::WindowText);
+    const QColor highlight = palette.color(QPalette::Highlight);
+    const double on = std::clamp(m_position, 0.0, 1.0);
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing);
+    if (m_hover || isDown()) {
+        QColor hover = mixedColor(palette.color(QPalette::Button), highlight, isDown() ? 0.32 : 0.16);
+        hover.setAlpha(isDown() ? 220 : 180);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(hover);
+        painter.drawRoundedRect(QRectF(rect()), 5, 5);
+    }
+
+    // The icon brightens with the switch so the state reads at a glance.
+    const QRect iconRect(10, (height() - 16) / 2, 16, 16);
+    painter.setOpacity(0.5 + 0.5 * on);
+    hyprcapture::ui::materialIcon(m_iconName, mixedColor(ink, highlight, 0.6 * on)).paint(&painter, iconRect);
+    painter.setOpacity(1.0);
+    painter.setPen(ink);
+    const QRect track(width() - 10 - 26, (height() - 14) / 2, 26, 14);
+    painter.drawText(QRect(iconRect.right() + 7, 0, track.left() - iconRect.right() - 17, height()), Qt::AlignVCenter | Qt::AlignLeft, text());
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(mixedColor(mixedColor(ink, window, 0.7), highlight, on));
+    painter.drawRoundedRect(QRectF(track), 7, 7);
+    const QRectF knob(track.left() + 2 + on * (track.width() - 14), track.top() + 2, 10, 10);
+    painter.setBrush(QColor(0, 0, 0, 45));
+    painter.drawEllipse(knob.translated(0, 0.6));
+    painter.setBrush(Qt::white);
+    painter.drawEllipse(knob);
+}
+
 InlineSelect::InlineSelect(QWidget* popupParent, QWidget* parent) : QWidget(parent), m_popupParent(popupParent) {
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -2218,6 +2313,12 @@ void CaptureOverlay::ensureRecordControls() {
     m_recordBackend->setCurrentText(qString(hyprcapture::toString(m_defaults.recordWindowBackend)));
     m_recordBackend->setOnChanged(onRecordOptionChanged);
     recordLayout->addWidget(m_recordBackend);
+
+    m_recordCursor = new PillToggle("arrow_selector_tool", "Cursor", m_recordOptions);
+    m_recordCursor->setObjectName("recordCursor");
+    m_recordCursor->setToolTip(hyprcapture::ui::uiText("Show the mouse pointer in this recording"));
+    m_recordCursor->setChecked(m_defaults.includeCursor);
+    recordLayout->addWidget(m_recordCursor);
 
     rootLayout->addWidget(m_recordOptions, 0, Qt::AlignHCenter);
 
@@ -4863,6 +4964,7 @@ QString CaptureOverlay::prepareRecordingRequest() {
         request.defaults.recordSolidAlpha = false;
     request.defaults.windowBorder = currentWindowBorder();
     request.defaults.windowShadow = currentWindowShadow();
+    request.defaults.includeCursor = m_recordCursor ? m_recordCursor->isChecked() : m_defaults.includeCursor;
     const QString recordFormat = currentRecordFormat();
     const bool imageAnimation = isImageAnimationRecordFormat(recordFormat);
     request.defaults.recordFormat = recordFormat.toStdString();
