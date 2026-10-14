@@ -4,6 +4,8 @@
 #include <QApplication>
 #include <QColorSpace>
 #include <QPainter>
+#include <QPointer>
+#include <QWindow>
 #include <QTimer>
 #include <QWidget>
 #include <cassert>
@@ -106,6 +108,32 @@ int main(int argc, char **argv) {
        20) &
       1023;
   assert(pqNits(checkerCode) > 10 && pqNits(checkerCode) < 30);
+  QWindow parent;
+  // Unsupported HDR must leave no repeating timer, even if the consumer keeps
+  // its failed backdrop alive alongside the SDR fallback.
+  if (auto unavailable = ui::HdrBackdrop::unavailableForTest(&parent)) {
+    const auto timers = app.findChildren<QTimer *>("hyprcaptureHdrDrain");
+    assert(timers.size() == 1);
+    QPointer<QTimer> timer = timers.front();
+    assert(timer->isActive());
+    assert(!unavailable->setPqImage(pq, QRect(0, 0, 512, 256), peak, 203));
+    assert(!timer->isActive());
+    unavailable.reset();
+    assert(!timer || !timer->isActive());
+  }
+  if (auto abandoned = ui::HdrBackdrop::unavailableForTest(&parent)) {
+    const auto timers = app.findChildren<QTimer *>("hyprcaptureHdrDrain");
+    QPointer<QTimer> timer = timers.back();
+    assert(timer->isActive());
+    abandoned.reset();
+    assert(!timer || !timer->isActive());
+  }
+  auto stalled=ui::HdrUpload::pendingForTest(image);
+  assert(stalled->state()==ui::HdrUpload::State::Pending);
+  assert(!stalled->waitUntil(std::chrono::steady_clock::now()));
+  stalled->failForTest();
+  assert(stalled->waitUntil(std::chrono::steady_clock::now()+std::chrono::milliseconds(1)));
+  assert(!stalled->result());
   ui::HdrBackdrop fallback(nullptr);
   assert(!fallback.ready());
   assert(!fallback.setImage(image, QRect(0, 0, 512, 256), 173));

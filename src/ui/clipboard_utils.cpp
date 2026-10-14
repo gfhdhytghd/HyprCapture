@@ -256,7 +256,7 @@ QByteArray pngBytes(const QImage& image) {
 
 bool writePrivateFile(const QString& path, const QByteArray& bytes) {
     QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
         return false;
     if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
         file.remove();
@@ -271,7 +271,7 @@ bool writePrivateFile(const QString& path, const QByteArray& bytes) {
 
 bool savePng(const QImage& image, const QString& path) {
     QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly))
+    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
         return false;
     if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
         file.remove();

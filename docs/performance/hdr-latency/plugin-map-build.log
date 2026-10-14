@@ -1,0 +1,6 @@
+[  0%] Built target hyprcapture_autogen_timestamp_deps
+[ 14%] Automatic MOC for target hyprcapture
+[ 14%] Built target hyprcapture_autogen
+[ 14%] Building CXX object CMakeFiles/hyprcapture.dir/src/plugin/artifact_capture.cpp.o
+[ 28%] Linking CXX shared library libhyprcapture.so
+[100%] Built target hyprcapture

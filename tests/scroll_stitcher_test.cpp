@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <iostream>
+#include <opencv2/core.hpp>
 
 using hyprcapture::ui::ScrollStitcher;
 using Status = ScrollStitcher::Status;
@@ -25,6 +26,92 @@ QImage texture(int width, int height, unsigned seed = 42) {
 }
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
+    // A changing image and an interior fixed panel must not become the page's
+    // motion model. Exercise forward, reverse, idle and recovery transitions.
+    const auto dynamicDocument = texture(640, 2400, 730);
+    const auto panel = texture(360, 280, 91);
+    const auto dynamicFrame = [&](int offset, unsigned tick, bool fixed) {
+        auto image = dynamicDocument.copy(0, offset, 640, 600);
+        QPainter p(&image);
+        if (fixed)
+            p.drawImage(140, 160, panel);
+        else
+            p.drawImage(130, 650-offset, texture(380, 220, tick));
+        return image;
+    };
+    for (bool fixed : {false, true}) {
+        ScrollStitcher dynamic;
+        unsigned tick = 1;
+        dynamic.append(dynamicFrame(400, tick++, fixed));
+        for (int offset : {520, 640, 460, 300, 400, 700}) {
+            const auto result = dynamic.append(dynamicFrame(offset, tick++, fixed));
+            require(result.status == Status::Appended || result.status == Status::Relocated,
+                    "animation and interior fixed panel allow bidirectional scrolling");
+            require(dynamic.layout().viewportY == offset-400,
+                    "dynamic regions cannot change the measured page displacement");
+        }
+        const auto accepted = dynamic.image();
+        require(accepted.copy(0, 0, 100, 1000) == dynamicDocument.copy(0, 300, 100, 1000),
+                "unobscured document pixels remain exact through dynamic captures");
+        require(dynamic.append(dynamicFrame(700, tick++, fixed)).status == Status::Unchanged,
+                "animation at rest is unchanged document position");
+        require(dynamic.image() == accepted, "idle animation never changes the retained image");
+    }
+    ScrollStitcher idleAnimation;
+    idleAnimation.append(dynamicFrame(400, 101, false));
+    require(idleAnimation.append(dynamicFrame(400, 102, false)).status == Status::Unchanged,
+            "animation before first scroll does not lock a false content rectangle");
+    require(idleAnimation.layout().content == QRect(0, 0, 640, 600),
+            "idle animation preserves the full viewport layout");
+    require(idleAnimation.append(dynamicFrame(520, 103, false)).displacement == 120,
+            "scrolling starts correctly after an idle animated baseline");
+    ScrollStitcher animatedHistory;
+    unsigned historyTick = 201;
+    for (int offset : {300, 450, 600, 850, 1100, 1350, 300}) {
+        const auto result = animatedHistory.append(dynamicFrame(offset, historyTick++, false));
+        require(result.status == Status::Started || result.status == Status::Appended ||
+                    result.status == Status::Relocated,
+                "animation does not prevent relocation into distant retained history");
+        require(animatedHistory.layout().viewportY == offset-300,
+                "historical animation relocation has an exact document coordinate");
+    }
+
+    // Motion contained in one widget is not evidence that the document moved.
+    ScrollStitcher movingWidget;
+    const auto widget = texture(300, 1000, 57);
+    for (int tick = 0; tick < 4; ++tick) {
+        auto image = dynamicDocument.copy(0, 400, 640, 600);
+        { QPainter p(&image); p.drawImage(160, 180, widget.copy(0, tick*30, 300, 220)); }
+        const auto result = movingWidget.append(image);
+        if (result.status != (tick == 0 ? Status::Started : Status::Unchanged))
+            std::cerr << "widget tick=" << tick << " status=" << int(result.status)
+                      << " delta=" << result.displacement << '\n';
+        require(result.status == (tick == 0 ? Status::Started : Status::Unchanged),
+                "motion inside a video never grows a stationary page");
+        require(movingWidget.size() == QSize(640, 600), "video motion cannot grow the canvas");
+    }
+    // Two independently scrolling panes have no single document coordinate.
+    const auto splitFrame = [&](int left, int right) {
+        auto image = dynamicDocument.copy(0, left, 640, 600);
+        QPainter p(&image);
+        p.drawImage(320, 0, dynamicDocument.copy(320, right, 320, 600));
+        return image;
+    };
+    ScrollStitcher conflicting;
+    const auto splitInitial = splitFrame(400, 1000);
+    conflicting.append(splitInitial);
+    require(conflicting.append(splitFrame(520, 880)).status == Status::Ambiguous,
+            "two spatially supported motion layers are rejected");
+    require(conflicting.image() == splitInitial, "conflicting motion preserves accepted pixels");
+
+    // Without persistent document detail, fresh animation frames provide no
+    // measured offset. Rejection must preserve every retained output plane.
+    ScrollStitcher noAnchors;
+    const auto noAnchorInitial = texture(640, 600, 999);
+    noAnchors.append(noAnchorInitial);
+    require(noAnchors.append(texture(640, 600, 1000)).status == Status::NoOverlap,
+            "full viewport animation is not assigned a guessed displacement");
+    require(noAnchors.image() == noAnchorInitial, "no-anchor rejection preserves the canvas");
     // A small movement at 2x scale leaves some top-row glyph stems unchanged.
     // They still belong to the document, not to a fixed header.
     QImage textPage(1600, 6000, QImage::Format_ARGB32);
@@ -159,6 +246,28 @@ int main(int argc, char** argv) {
         }
         return hdr;
     };
+    for (bool down : {true, false}) {
+        // The animated object straddles the old viewport edge. All three
+        // planes must choose the same new capture for the complete object.
+        const int objectY = down ? 840 : 340;
+        const auto seamFrame = [&](int offset, unsigned tick) {
+            auto image = dynamicDocument.copy(0, offset, 640, 600);
+            QPainter p(&image);
+            p.drawImage(130, objectY-offset, texture(380, 220, tick));
+            return image;
+        };
+        ScrollStitcher seam;
+        const auto a = seamFrame(400, 11), b = seamFrame(down ? 520 : 280, 12);
+        seam.append(a, a, floatPlane(a));
+        require(seam.append(b, b, floatPlane(b)).status == Status::Appended,
+                "animated boundary extends in either direction");
+        const int minimum = down ? 400 : 280;
+        require(seam.image().copy(130, objectY-minimum, 380, 220) == texture(380, 220, 12),
+                "seam avoids cutting an animated object between two times");
+        require(seam.originalImage() == seam.image(), "raw pixels use the same dynamic seam");
+        require(seam.hdrImage() == floatPlane(seam.image()),
+                "HDR pixels use the same dynamic seam without blending");
+    }
     ScrollStitcher clippedWindow;
     for(int offset : {200,350,100}) {
         auto raw=frame(offset); auto displayed=raw;
@@ -348,6 +457,26 @@ int main(int argc, char** argv) {
         const auto result = textStitcher.append(text.copy(0, y, 800, 700));
         require(result.status == Status::Appended, "sparse text alignment");
         require(textStitcher.image() == text.copy(0, 0, 800, y + 700), "sparse text pixels preserved");
+    }
+    for (bool fixed : {false, true}) {
+        ScrollStitcher textWithWidget;
+        unsigned tick = 500;
+        for (int offset : {300, 420, 510, 380, 210, 450, 600}) {
+            auto image = text.copy(0, offset, 800, 700);
+            { QPainter p(&image);
+              p.drawImage(220, fixed ? 190 : 660-offset,
+                          texture(400, 300, fixed ? 17 : tick++)); }
+            const auto result = textWithWidget.append(image);
+            if (result.status != Status::Started && result.status != Status::Appended &&
+                result.status != Status::Relocated)
+                std::cerr << "text widget fixed=" << fixed << " offset=" << offset
+                          << " status=" << int(result.status) << '\n';
+            require(result.status == Status::Started || result.status == Status::Appended ||
+                        result.status == Status::Relocated,
+                    "sparse text remains matchable with a large animated or fixed widget");
+            require(textWithWidget.layout().viewportY == offset-300,
+                    "repeated text around a widget preserves exact document position");
+        }
     }
     return 0;
 }

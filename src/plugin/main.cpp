@@ -26,6 +26,7 @@ extern "C" {
 #include "plugin/notification.hpp"
 #include "plugin/recording.hpp"
 #include "plugin/session_launcher.hpp"
+#include "plugin/session_lock.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 
@@ -296,6 +297,7 @@ void installOverlayLayerRule() {
 }
 
 SDispatchResult openCapture(const std::string& args, bool quick, bool record, bool inPlaceEditToolbar = false) {
+    if (hyprcapture::sessionLocked()) return {.success = false, .error = "session locked"};
     const auto now = std::chrono::steady_clock::now();
     if (g_lastCaptureDispatch.time_since_epoch().count() != 0 && now - g_lastCaptureDispatch < kMinDispatchInterval) {
         const std::string error = "capture dispatch rate-limited";
@@ -430,61 +432,82 @@ std::string normalizeHyprcaptureAction(std::string action) {
 }
 
 int luaOpen(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchOpen(luaOptionalString(L, 1)));
 }
 
 int luaOpenEditor(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchOpenEditor(luaOptionalString(L, 1)));
 }
 
 int luaQuick(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchQuick(luaOptionalString(L, 1)));
 }
 
 int luaRecord(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchRecord(luaOptionalString(L, 1)));
 }
 
 int luaRecordToggle(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchRecordToggle(luaOptionalString(L, 1)));
 }
 
 int luaRecordStop(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchRecordStop(""));
 }
 
 int luaRecordStart(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchRecordStart(luaOptionalString(L, 1)));
 }
 
-int luaScrollSessionStart(lua_State* L) { return luaDispatchResult(L, dispatchResult(hyprcapture::startScrollSessionFromRequestFile(luaOptionalString(L,1)))); }
-int luaScrollSessionStop(lua_State* L) { return luaDispatchResult(L, dispatchResult(hyprcapture::stopScrollSessionFromRequestFile(luaOptionalString(L,1)))); }
+int luaScrollSessionStart(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
+    return luaDispatchResult(L, dispatchResult(hyprcapture::startScrollSessionFromRequestFile(luaOptionalString(L, 1))));
+}
+
+int luaScrollSessionStop(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
+    return luaDispatchResult(L, dispatchResult(hyprcapture::stopScrollSessionFromRequestFile(luaOptionalString(L, 1))));
+}
 
 int luaRegionCapture(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchResult(hyprcapture::captureRegionArtifactFromRequestFile(luaOptionalString(L, 1))));
 }
 
 int luaWindowCapture(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchWindowCapture(luaOptionalString(L, 1)));
 }
 
 int luaExportPipe(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchExportPipe(luaOptionalString(L, 1)));
 }
 
 int luaWindowStreamStart(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchWindowStreamStart(luaOptionalString(L, 1)));
 }
 
 int luaWindowStreamStop(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchWindowStreamStop(luaOptionalString(L, 1)));
 }
 
 int luaCancel(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaDispatchResult(L, dispatchCancel(""));
 }
 
 int luaDispatch(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     const std::string action = normalizeHyprcaptureAction(luaL_checkstring(L, 1));
     const std::string args   = luaOptionalString(L, 2);
 
@@ -537,6 +560,7 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pluginHandle = handle;
+    hyprcapture::initializeSessionLock();
 
     registerConfigValues();
 
@@ -579,11 +603,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .name = "HyprCapture",
         .description = "Hyprland-only screenshot overlay",
         .author = "wilf",
-        .version = "0.3.0",
+        .version = "0.4.2",
     };
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    hyprcapture::shutdownSessionLock();
+    hyprcapture::cancelCaptureHelpers();
     unregisterLuaFunctions();
     hyprcapture::shutdownRecording();
     hyprcapture::shutdownArtifactCapture();

@@ -1,0 +1,53 @@
+[  0%] Built target hyprcapture_autogen_timestamp_deps
+[ 14%] Built target hyprcapture_autogen
+[ 14%] Building CXX object CMakeFiles/hyprcapture.dir/src/plugin/artifact_capture.cpp.o
+[ 28%] Linking CXX shared library libhyprcapture.so
+[100%] Built target hyprcapture
+[  8%] Built target libheif
+[ 43%] Built target image_io
+[ 56%] Built target core
+[ 60%] Built target uhdr
+[ 60%] Built target hyprcapture-hdr_autogen_timestamp_deps
+[ 60%] Built target hyprcapture-hdr_autogen
+[ 65%] Built target hyprcapture-hdr
+[ 65%] Built target hyprcapture-hdr-backdrop_autogen_timestamp_deps
+[ 69%] Built target hyprcapture-hdr-backdrop_autogen
+[ 73%] Built target hyprcapture-hdr-backdrop
+[ 73%] Built target hyprcapture-ui_autogen_timestamp_deps
+[ 78%] Automatic MOC for target hyprcapture-ui
+[ 78%] Built target hyprcapture-ui_autogen
+[ 78%] Building CXX object CMakeFiles/hyprcapture-ui.dir/src/ui/scroll_capture.cpp.o
+[ 78%] Linking CXX executable hyprcapture-ui
+[100%] Built target hyprcapture-ui
+[ 10%] Built target libheif
+[ 50%] Built target image_io
+[ 65%] Built target core
+[ 70%] Built target uhdr
+[ 70%] Built target hyprcapture-hdr_autogen_timestamp_deps
+[ 70%] Built target hyprcapture-hdr_autogen
+[ 75%] Built target hyprcapture-hdr
+[ 75%] Built target hyprcapture-hdr-backdrop_autogen_timestamp_deps
+[ 80%] Built target hyprcapture-hdr-backdrop_autogen
+[ 85%] Built target hyprcapture-hdr-backdrop
+[ 85%] Built target hyprcapture-scroll-capture-test_autogen_timestamp_deps
+[ 85%] Automatic MOC for target hyprcapture-scroll-capture-test
+[ 85%] Built target hyprcapture-scroll-capture-test_autogen
+[ 90%] Building CXX object CMakeFiles/hyprcapture-scroll-capture-test.dir/src/ui/scroll_capture.cpp.o
+[ 90%] Linking CXX executable hyprcapture-scroll-capture-test
+[100%] Built target hyprcapture-scroll-capture-test
+[  8%] Built target libheif
+[ 43%] Built target image_io
+[ 56%] Built target core
+[ 60%] Built target uhdr
+[ 60%] Built target hyprcapture-hdr_autogen_timestamp_deps
+[ 60%] Built target hyprcapture-hdr_autogen
+[ 65%] Built target hyprcapture-hdr
+[ 65%] Built target hyprcapture-hdr-backdrop_autogen_timestamp_deps
+[ 69%] Built target hyprcapture-hdr-backdrop_autogen
+[ 73%] Built target hyprcapture-hdr-backdrop
+[ 73%] Built target hyprcapture-in-place-editor-test_autogen_timestamp_deps
+[ 73%] Automatic MOC for target hyprcapture-in-place-editor-test
+[ 73%] Built target hyprcapture-in-place-editor-test_autogen
+[ 73%] Building CXX object CMakeFiles/hyprcapture-in-place-editor-test.dir/src/ui/scroll_capture.cpp.o
+[ 73%] Linking CXX executable test-ui/hyprcapture-in-place-editor-test
+[100%] Built target hyprcapture-in-place-editor-test

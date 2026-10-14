@@ -471,10 +471,14 @@ ResultThumbnail::~ResultThumbnail() = default;
 void ResultThumbnail::setHdrImage(const QImage& image) {
     if (image.isNull()) return;
     m_hdrBackdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), true);
+    m_hdrBackdrop->setReadyCallback([this](bool ready) {
+        if (ready) m_imageLabel->clear();
+        updateHdrGeometry();
+    });
     if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()), 203)) {
         m_hdrBackdrop.reset(); return;
     }
-    m_imageLabel->clear();
+    if (m_hdrBackdrop->ready()) m_imageLabel->clear();
     m_imageLabel->installEventFilter(this);
     m_card->installEventFilter(this);
     QTimer::singleShot(0, this, [this] { updateHdrGeometry(); });

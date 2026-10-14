@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import zlib
+from session_lock_fixture import SessionLockFixture
 
 
 def png_chunk(kind, payload):
@@ -23,8 +24,8 @@ PNG = (
 )
 
 
-def launch(helper, source, ready_socket):
-    env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
+def launch(helper, source, ready_socket, lock):
+    env = dict(lock.env, QT_QPA_PLATFORM="offscreen")
     return subprocess.Popen(
         [helper, "--pin-image", str(source), "--pin-consume-source", "--pin-ready-socket", str(ready_socket),
          "--pin-geometry", "212,330,788,430"],
@@ -38,7 +39,7 @@ def main():
     if not runtime.exists():
         runtime.mkdir(mode=0o700)
     assert runtime.is_dir() and runtime.stat().st_uid == os.geteuid()
-    with tempfile.TemporaryDirectory(prefix="pin-launch-test-", dir=runtime) as temporary:
+    with SessionLockFixture() as lock, tempfile.TemporaryDirectory(prefix="pin-launch-test-", dir=runtime) as temporary:
         root = Path(temporary)
         for name, payload, accept in (("valid", PNG, True), ("invalid", b"invalid image", False), ("unaccepted", PNG, False)):
             source = root / f"{name}.png"
@@ -49,7 +50,7 @@ def main():
                 os.chmod(ready_path, 0o600)
                 server.listen(1)
                 server.settimeout(5)
-                process = launch(helper, source, ready_path)
+                process = launch(helper, source, ready_path, lock)
                 try:
                     connection, _ = server.accept()
                     with connection:
@@ -73,8 +74,9 @@ def main():
                                 pass
                             else:
                                 raise AssertionError("accepted pin exited prematurely")
-                            process.terminate()
-                            process.wait(timeout=5)
+                            lock.lock()
+                            lock.locked = False
+                            assert process.wait(timeout=5) == 0, "session lock must close a detached pin"
                         else:
                             assert process.wait(timeout=5) == 1, "failed/unaccepted launch must exit"
                 finally:
@@ -83,7 +85,7 @@ def main():
                         process.wait(timeout=5)
         source = root / "missing-server.png"
         source.write_bytes(PNG)
-        process = launch(helper, source, root / "missing.socket")
+        process = launch(helper, source, root / "missing.socket", lock)
         assert process.wait(timeout=5) == 1
         assert source.exists(), "missing parent must not consume source"
     print("pin launch handshake tests passed")

@@ -20,6 +20,8 @@ build = [
     "install -Dm755 build-hyprpm/libspa-aec-dtln.so \"$HOME/.local/lib/hyprcapture/libspa-aec-dtln.so\"",
     "sh -c 'if test -f build-hyprpm/libhyprcapture-aec-openvino.so; then install -Dm755 build-hyprpm/libhyprcapture-aec-openvino.so \"$HOME/.local/lib/hyprcapture/libhyprcapture-aec-openvino.so\"; fi'",
     "install -Dm755 scripts/build-aec-runtime.sh \"$HOME/.local/bin/hyprcapture-build-aec-runtime\"",
+    "install -Dm644 nix/aec-sources.json \"$HOME/.local/bin/hyprcapture-aec-sources.json\"",
+    "install -Dm644 scripts/prepare-aec-sources.cmake \"$HOME/.local/bin/hyprcapture-prepare-aec-sources.cmake\"",
     "install -Dm755 scripts/install-aec.sh \"$HOME/.local/bin/hyprcapture-install-aec\"",
     "install -Dm644 resources/aec/DTLN-LICENSE.txt \"$HOME/.local/share/licenses/hyprcapture/DTLN-LICENSE.txt\"",
     "bash scripts/install-aec.sh"

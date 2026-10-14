@@ -23,6 +23,7 @@ int main() {
     require(desktopEnvironmentNameAllowed("XDG_DATA_DIRS"), "XDG data directories are preserved");
     require(desktopEnvironmentNameAllowed("DESKTOP_SESSION"), "desktop session is preserved");
     require(desktopEnvironmentNameAllowed("LC_ALL"), "locale variables are preserved");
+    require(desktopEnvironmentNameAllowed("HYPRCAPTURE_LOCK_GENERATION"), "helper descendants retain their capture lock generation");
     require(!desktopEnvironmentNameAllowed("PATH"), "caller-supplied PATH remains rejected");
     require(!desktopEnvironmentNameAllowed("LD_PRELOAD"), "dynamic loader injection remains rejected");
     require(!desktopEnvironmentNameAllowed("QT_PLUGIN_PATH"), "Qt plugin injection remains rejected");

@@ -1,5 +1,6 @@
 #include "plugin/artifact_capture.hpp"
 #include "plugin/hymission_capture.hpp"
+#include "plugin/session_lock.hpp"
 
 #include "plugin/session_launcher.hpp"
 #include "plugin/timing.hpp"
@@ -8,6 +9,7 @@
 #include "plugin/window_stream_control.hpp"
 #include "plugin/window_stream_extent.hpp"
 #include "plugin/window_capture_geometry.hpp"
+#include "plugin/offscreen_render_scope.hpp"
 #include "plugin/window_stream_cadence.hpp"
 #include "plugin/window_gpu_export.hpp"
 #include "plugin/window_gpu_sender.hpp"
@@ -1212,7 +1214,11 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
     }
 
     glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[source]);
-    const auto* mapped = static_cast<const unsigned char*>(glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(state.bytes), GL_MAP_READ_BIT));
+    const unsigned char* mapped = nullptr;
+    {
+        ScopedTiming timing("window.stream.pbo_map");
+        mapped = static_cast<const unsigned char*>(glMapBufferRange(GL_PIXEL_PACK_BUFFER, 0, static_cast<GLsizeiptr>(state.bytes), GL_MAP_READ_BIT));
+    }
     std::optional<ReadyWindowStreamPboFrame> newest;
     if (mapped) {
         ScopedTiming mapCopyTiming("window.stream.pbo_map_copy");
@@ -1259,10 +1265,17 @@ bool issueWindowStreamPboReadback(WindowStreamPboReadbackState& state,
     if (!slot || *slot != state.next)
         return false;
     glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[state.next]);
-    glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(state.bytes), nullptr, GL_STREAM_READ);
-    glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    {
+        ScopedTiming timing("window.stream.pbo_allocate");
+        glBufferData(GL_PIXEL_PACK_BUFFER, static_cast<GLsizeiptr>(state.bytes), nullptr, GL_STREAM_READ);
+    }
+    {
+        ScopedTiming timing("window.stream.pbo_read_sdr");
+        glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    }
     if (hdrFramebuffer) {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, framebufferId(*hdrFramebuffer));
+        ScopedTiming timing("window.stream.pbo_read_hdr");
         glReadPixels(cropX, readY, state.width, state.height, GL_RGBA, GL_HALF_FLOAT,
                      reinterpret_cast<void*>(size_t(state.width) * state.height * 4));
     }
@@ -1670,6 +1683,10 @@ void queueRealBackgroundCapturePasses(std::vector<RealBackgroundCaptureState>& s
 }
 
 void hkRenderTextureInternal(void* openGLThisptr, Render::CRenderContext& ctx, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
+    if (sessionLocked()) {
+        if (g_renderTextureInternalOriginal) g_renderTextureInternalOriginal(openGLThisptr, ctx, texture, box, data);
+        return;
+    }
     auto* state = g_realBackgroundRenderHookContext ? g_realBackgroundRenderHookContext->activeBlurState : nullptr;
     const bool captureAfterDraw = isActiveBlurBackgroundPass(ctx, state, data);
 
@@ -1697,6 +1714,10 @@ void hkRenderTextureInternal(void* openGLThisptr, Render::CRenderContext& ctx, S
 }
 
 void hkRenderTextureWithBlurInternal(void* openGLThisptr, Render::CRenderContext& ctx, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
+    if (sessionLocked()) {
+        if (g_renderTextureWithBlurInternalOriginal) g_renderTextureWithBlurInternalOriginal(openGLThisptr, ctx, texture, box, data);
+        return;
+    }
     auto* context = g_realBackgroundRenderHookContext;
     auto* state = findRealBackgroundStateForWindow(currentRenderWindow(ctx));
 
@@ -2427,6 +2448,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
         g_pHyprOpenGL->makeEGLCurrent();
         WindowLocalProjectionScope projection(monitor);
+        OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
         renderContext().m_blockSurfaceFeedback = true;
         setCaptureImageDescription(targetFramebuffer, monitor);
         if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
@@ -2434,6 +2456,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             return false;
         }
         projection.apply(framebufferWidth, framebufferHeight);
+        offscreen.activate();
 
         renderContext().m_renderingSnapshot = true;
         FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
@@ -2470,6 +2493,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
             g_pHyprOpenGL->makeEGLCurrent();
             WindowLocalProjectionScope projection(monitor);
+            OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
             renderContext().m_blockSurfaceFeedback = true;
             setCaptureImageDescription(matteFramebuffer, monitor);
             if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, matteFramebuffer)) {
@@ -2478,6 +2502,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             }
 
             projection.apply(framebufferWidth, framebufferHeight);
+            offscreen.activate();
             renderContext().m_renderingSnapshot = true;
             FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
             renderContext().m_blockSurfaceFeedback = true;
@@ -2838,7 +2863,7 @@ bool shouldCaptureWindow(const PHLWINDOW& window) {
 }
 
 bool isLiveWindowCaptureTarget(const PHLWINDOW& window) {
-    return window && window->m_isMapped && !window->isHidden() && window->m_workspace;
+    return !sessionLocked() && window && window->m_isMapped && !window->isHidden() && window->m_workspace;
 }
 
 std::vector<PHLWINDOW> windowsInRenderOrder() {
@@ -3727,6 +3752,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
 } // namespace
 
 CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool quick) {
+    if (sessionLocked()) return {};
     LinearCaptureScope linearCapture;
     CaptureSession session;
     session.regionCaptureAvailable = true;
@@ -3895,6 +3921,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
 // Bounded, cursor-free sampling for scrolling capture. Artifacts live beside
 // the private request so cancellation can remove the entire exchange at once.
 LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     const auto json = readPrivateRequestFile(path);
     const auto request = json ? decodeRecordingRequestJson(*json) : std::nullopt;
     if (!request || request->mode != CaptureMode::Region || !g_pCompositor)
@@ -3956,6 +3983,7 @@ LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
 }
 
 LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     LinearCaptureScope linearCapture;
     const auto requestJson = readPrivateRequestFile(path);
     if (!requestJson)
@@ -4033,6 +4061,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
 }
 
 LaunchResult captureExportPipeFromRequestFile(const std::string& path) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     const auto requestJson = readPrivateFifoLine(path);
     if (!requestJson)
         return {.success = false, .error = "invalid export pipe request fifo"};
@@ -4055,6 +4084,7 @@ LaunchResult captureExportPipeFromRequestFile(const std::string& path) {
 }
 
 std::optional<RecordingFrame> captureRecordingFrame(const RecordingFrameRequest& request) {
+    if (sessionLocked()) return std::nullopt;
     if (request.mode == CaptureMode::Window)
         return captureWindowRecordingFrame(request);
 
@@ -4468,6 +4498,7 @@ std::optional<WindowStreamCapturedFrame> captureWindowStreamFrameImpl(const Wind
 }
 
 std::optional<WindowStreamCapturedFrame> captureWindowStreamFrame(const WindowStreamCaptureRequest& request) {
+    if (sessionLocked()) return std::nullopt;
     std::optional<WindowStreamCapturedFrame> completed;
     (void)captureWindowStreamFrameImpl(request, [&completed](WindowStreamCapturedFrame&& frame) { completed = std::move(frame); });
     return completed;
@@ -4516,6 +4547,7 @@ void stopWindowStreamSession() {
 }
 
 void captureWindowStreamDrainTick(SP<CEventLoopTimer> self) {
+    if (sessionLocked()) { stopWindowStreamSession(); return; }
     ScopedTiming drainTiming("window.stream.drain_tick");
     auto* session = g_windowStreamSession.get();
     if (!session || !session->drainTimer || !session->drainPoll.acceptsCallback(session->drainTimer.get() == self.get()))
@@ -4534,6 +4566,7 @@ void captureWindowStreamDrainTick(SP<CEventLoopTimer> self) {
 }
 
 void captureWindowStreamTick(SP<CEventLoopTimer> self) {
+    if (sessionLocked()) { stopWindowStreamSession(); return; }
     ScopedTiming tickTiming("window.stream.tick");
     const auto tickStartedAt = Time::steadyNow();
     auto* session = g_windowStreamSession.get();
@@ -4626,6 +4659,7 @@ void captureWindowStreamTick(SP<CEventLoopTimer> self) {
 }
 
 int onWindowGpuNotification(int, uint32_t, void* data) {
+    if (sessionLocked()) return 0;
     auto* session = static_cast<WindowStreamSession*>(data);
     if (g_windowStreamSession.get() != session || !session->gpuSender || !session->timer)
         return 0;
@@ -4643,6 +4677,7 @@ bool isValidWindowStreamStartRequest(const std::string& json) {
 }
 
 LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     const auto raw = readPrivateRequestFile(path);
     if (!raw)
         return {.success = false, .error = "invalid window stream request file"};
@@ -4664,6 +4699,7 @@ LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
     session->targetWindow = targetWindow;
     session->targetSurface = targetWindow->wlSurface() ? targetWindow->wlSurface()->resource() : nullptr;
     const auto revokeTarget = [target = session.get()] {
+        if (sessionLocked()) return;
         // Do not destroy the session from inside a compositor signal callback.
         // The next capture/drain tick retires timers and outstanding exports.
         target->targetRevoked = true;
@@ -4693,6 +4729,7 @@ LaunchResult startWindowStreamFromRequestFile(const std::string& path) {
         if (!notificationWindow)
             return {.success = false, .error = "GPU window stream target disappeared"};
         session->gpuTargetUnmapNotification = notificationWindow->m_events.unmap.listen([target = session.get()] {
+            if (sessionLocked()) return;
             if (target->timer)
                 target->timer->updateTimeout(std::chrono::microseconds(1));
         });
@@ -4791,6 +4828,13 @@ void cleanupCompositorArtifacts(const CaptureSession& session) {
         std::error_code ec;
         std::filesystem::remove(parent, ec);
     }
+}
+
+void abortArtifactCapture() {
+    stopScrollSession();
+    stopWindowStreamSession();
+    shutdownExportPipeWriters();
+    resetRecordingCaptureState();
 }
 
 void shutdownArtifactCapture() {

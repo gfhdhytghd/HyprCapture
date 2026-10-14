@@ -1,0 +1,275 @@
+shm ARGB8888 0x00000000
+shm XRGB8888 0x00000001
+shm XB24 0x34324258
+shm AB24 0x34324241
+shm XR30 0x30335258
+shm AR30 0x30335241
+shm XB30 0x30334258
+shm AB30 0x30334241
+presentation clock=1
+cm feature 1
+cm feature 2
+cm feature 4
+cm feature 7
+cm feature 5
+cm feature 6
+cm primaries 1
+cm primaries 6
+cm primaries 2
+cm primaries 3
+cm primaries 4
+cm primaries 5
+cm primaries 8
+cm primaries 9
+cm primaries 10
+cm primaries 7
+cm tf 9
+cm tf 10
+cm tf 2
+cm tf 3
+cm tf 5
+cm tf 11
+cm tf 13
+cm tf 1
+cm tf 4
+cm tf 6
+cm tf 7
+cm tf 8
+cm tf 12
+cm intent 0
+cm done
+dmabuf-format AB4H
+dmabuf AB4H modifier=0x0000000000000000
+dmabuf AB4H modifier=0x0100000000000001
+dmabuf AB4H modifier=0x0100000000000009
+dmabuf AB4H modifier=0x0100000000000010
+dmabuf AB4H modifier=0x00ffffffffffffff
+dmabuf-format XB4H
+dmabuf XB4H modifier=0x0000000000000000
+dmabuf XB4H modifier=0x0100000000000001
+dmabuf XB4H modifier=0x0100000000000009
+dmabuf XB4H modifier=0x0100000000000010
+dmabuf XB4H modifier=0x00ffffffffffffff
+dmabuf-format AB48
+dmabuf AB48 modifier=0x0000000000000000
+dmabuf AB48 modifier=0x0100000000000001
+dmabuf AB48 modifier=0x0100000000000009
+dmabuf AB48 modifier=0x0100000000000010
+dmabuf AB48 modifier=0x00ffffffffffffff
+dmabuf-format XB48
+dmabuf XB48 modifier=0x0000000000000000
+dmabuf XB48 modifier=0x0100000000000001
+dmabuf XB48 modifier=0x0100000000000009
+dmabuf XB48 modifier=0x0100000000000010
+dmabuf XB48 modifier=0x00ffffffffffffff
+dmabuf-format AR30
+dmabuf AR30 modifier=0x0000000000000000
+dmabuf AR30 modifier=0x0100000000000001
+dmabuf AR30 modifier=0x0100000000000009
+dmabuf AR30 modifier=0x0100000000000010
+dmabuf AR30 modifier=0x00ffffffffffffff
+dmabuf-format XR30
+dmabuf XR30 modifier=0x0000000000000000
+dmabuf XR30 modifier=0x0100000000000001
+dmabuf XR30 modifier=0x0100000000000009
+dmabuf XR30 modifier=0x0100000000000010
+dmabuf XR30 modifier=0x00ffffffffffffff
+dmabuf-format AB30
+dmabuf AB30 modifier=0x0000000000000000
+dmabuf AB30 modifier=0x0100000000000001
+dmabuf AB30 modifier=0x0100000000000009
+dmabuf AB30 modifier=0x0100000000000010
+dmabuf AB30 modifier=0x00ffffffffffffff
+dmabuf-format XB30
+dmabuf XB30 modifier=0x0000000000000000
+dmabuf XB30 modifier=0x0100000000000001
+dmabuf XB30 modifier=0x0100000000000009
+dmabuf XB30 modifier=0x0100000000000010
+dmabuf XB30 modifier=0x00ffffffffffffff
+dmabuf-format AR24
+dmabuf AR24 modifier=0x0000000000000000
+dmabuf AR24 modifier=0x0100000000000001
+dmabuf AR24 modifier=0x0100000000000009
+dmabuf AR24 modifier=0x0100000000000010
+dmabuf AR24 modifier=0x00ffffffffffffff
+dmabuf-format AB24
+dmabuf AB24 modifier=0x0000000000000000
+dmabuf AB24 modifier=0x0100000000000001
+dmabuf AB24 modifier=0x0100000000000009
+dmabuf AB24 modifier=0x0100000000000010
+dmabuf AB24 modifier=0x00ffffffffffffff
+dmabuf-format XR24
+dmabuf XR24 modifier=0x0000000000000000
+dmabuf XR24 modifier=0x0100000000000001
+dmabuf XR24 modifier=0x0100000000000009
+dmabuf XR24 modifier=0x0100000000000010
+dmabuf XR24 modifier=0x00ffffffffffffff
+dmabuf-format XB24
+dmabuf XB24 modifier=0x0000000000000000
+dmabuf XB24 modifier=0x0100000000000001
+dmabuf XB24 modifier=0x0100000000000009
+dmabuf XB24 modifier=0x0100000000000010
+dmabuf XB24 modifier=0x00ffffffffffffff
+dmabuf-format AR15
+dmabuf AR15 modifier=0x0000000000000000
+dmabuf AR15 modifier=0x0100000000000001
+dmabuf AR15 modifier=0x0100000000000009
+dmabuf AR15 modifier=0x0100000000000010
+dmabuf AR15 modifier=0x00ffffffffffffff
+dmabuf-format AR12
+dmabuf AR12 modifier=0x0000000000000000
+dmabuf AR12 modifier=0x0100000000000001
+dmabuf AR12 modifier=0x0100000000000009
+dmabuf AR12 modifier=0x0100000000000010
+dmabuf AR12 modifier=0x00ffffffffffffff
+dmabuf-format RG16
+dmabuf RG16 modifier=0x0000000000000000
+dmabuf RG16 modifier=0x0100000000000001
+dmabuf RG16 modifier=0x0100000000000009
+dmabuf RG16 modifier=0x0100000000000010
+dmabuf RG16 modifier=0x00ffffffffffffff
+dmabuf-format R8  
+dmabuf R8   modifier=0x0000000000000000
+dmabuf R8   modifier=0x0100000000000001
+dmabuf R8   modifier=0x0100000000000009
+dmabuf R8   modifier=0x0100000000000010
+dmabuf R8   modifier=0x00ffffffffffffff
+dmabuf-format R16 
+dmabuf R16  modifier=0x0000000000000000
+dmabuf R16  modifier=0x0100000000000001
+dmabuf R16  modifier=0x0100000000000009
+dmabuf R16  modifier=0x0100000000000010
+dmabuf R16  modifier=0x00ffffffffffffff
+dmabuf-format GR88
+dmabuf GR88 modifier=0x0000000000000000
+dmabuf GR88 modifier=0x0100000000000001
+dmabuf GR88 modifier=0x0100000000000009
+dmabuf GR88 modifier=0x0100000000000010
+dmabuf GR88 modifier=0x00ffffffffffffff
+dmabuf-format GR32
+dmabuf GR32 modifier=0x0000000000000000
+dmabuf GR32 modifier=0x0100000000000001
+dmabuf GR32 modifier=0x0100000000000009
+dmabuf GR32 modifier=0x0100000000000010
+dmabuf GR32 modifier=0x00ffffffffffffff
+dmabuf-format R  H
+dmabuf R  H modifier=0x0000000000000000
+dmabuf R  H modifier=0x0100000000000001
+dmabuf R  H modifier=0x0100000000000009
+dmabuf R  H modifier=0x0100000000000010
+dmabuf R  H modifier=0x00ffffffffffffff
+dmabuf-format R  F
+dmabuf R  F modifier=0x0000000000000000
+dmabuf R  F modifier=0x0100000000000001
+dmabuf R  F modifier=0x0100000000000009
+dmabuf R  F modifier=0x0100000000000010
+dmabuf R  F modifier=0x00ffffffffffffff
+dmabuf-format GR H
+dmabuf GR H modifier=0x0000000000000000
+dmabuf GR H modifier=0x0100000000000001
+dmabuf GR H modifier=0x0100000000000009
+dmabuf GR H modifier=0x0100000000000010
+dmabuf GR H modifier=0x00ffffffffffffff
+dmabuf-format GR F
+dmabuf GR F modifier=0x0000000000000000
+dmabuf GR F modifier=0x0100000000000001
+dmabuf GR F modifier=0x0100000000000009
+dmabuf GR F modifier=0x0100000000000010
+dmabuf GR F modifier=0x00ffffffffffffff
+dmabuf-format AB8F
+dmabuf AB8F modifier=0x0000000000000000
+dmabuf AB8F modifier=0x0100000000000001
+dmabuf AB8F modifier=0x0100000000000009
+dmabuf AB8F modifier=0x0100000000000010
+dmabuf AB8F modifier=0x00ffffffffffffff
+dmabuf-format YUV9
+dmabuf YUV9 modifier=0x00ffffffffffffff
+dmabuf-format YU11
+dmabuf YU11 modifier=0x00ffffffffffffff
+dmabuf-format YU12
+dmabuf YU12 modifier=0x00ffffffffffffff
+dmabuf-format YU16
+dmabuf YU16 modifier=0x00ffffffffffffff
+dmabuf-format YU24
+dmabuf YU24 modifier=0x00ffffffffffffff
+dmabuf-format YVU9
+dmabuf YVU9 modifier=0x00ffffffffffffff
+dmabuf-format YV11
+dmabuf YV11 modifier=0x00ffffffffffffff
+dmabuf-format YV12
+dmabuf YV12 modifier=0x00ffffffffffffff
+dmabuf-format YV16
+dmabuf YV16 modifier=0x00ffffffffffffff
+dmabuf-format YV24
+dmabuf YV24 modifier=0x00ffffffffffffff
+dmabuf-format S010
+dmabuf S010 modifier=0x00ffffffffffffff
+dmabuf-format S210
+dmabuf S210 modifier=0x00ffffffffffffff
+dmabuf-format S410
+dmabuf S410 modifier=0x00ffffffffffffff
+dmabuf-format S012
+dmabuf S012 modifier=0x00ffffffffffffff
+dmabuf-format S212
+dmabuf S212 modifier=0x00ffffffffffffff
+dmabuf-format S412
+dmabuf S412 modifier=0x00ffffffffffffff
+dmabuf-format S016
+dmabuf S016 modifier=0x00ffffffffffffff
+dmabuf-format S216
+dmabuf S216 modifier=0x00ffffffffffffff
+dmabuf-format S416
+dmabuf S416 modifier=0x00ffffffffffffff
+dmabuf-format NV12
+dmabuf NV12 modifier=0x00ffffffffffffff
+dmabuf-format NV21
+dmabuf NV21 modifier=0x00ffffffffffffff
+dmabuf-format P010
+dmabuf P010 modifier=0x00ffffffffffffff
+dmabuf-format P012
+dmabuf P012 modifier=0x00ffffffffffffff
+dmabuf-format P016
+dmabuf P016 modifier=0x00ffffffffffffff
+dmabuf-format P030
+dmabuf P030 modifier=0x00ffffffffffffff
+dmabuf-format NV16
+dmabuf NV16 modifier=0x00ffffffffffffff
+dmabuf-format NV61
+dmabuf NV61 modifier=0x00ffffffffffffff
+dmabuf-format NV24
+dmabuf NV24 modifier=0x00ffffffffffffff
+dmabuf-format NV42
+dmabuf NV42 modifier=0x00ffffffffffffff
+dmabuf-format AYUV
+dmabuf AYUV modifier=0x00ffffffffffffff
+dmabuf-format XYUV
+dmabuf XYUV modifier=0x00ffffffffffffff
+dmabuf-format Y410
+dmabuf Y410 modifier=0x00ffffffffffffff
+dmabuf-format Y412
+dmabuf Y412 modifier=0x00ffffffffffffff
+dmabuf-format Y416
+dmabuf Y416 modifier=0x00ffffffffffffff
+dmabuf-format YUYV
+dmabuf YUYV modifier=0x00ffffffffffffff
+dmabuf-format YVYU
+dmabuf YVYU modifier=0x00ffffffffffffff
+dmabuf-format UYVY
+dmabuf UYVY modifier=0x00ffffffffffffff
+dmabuf-format VYUY
+dmabuf VYUY modifier=0x00ffffffffffffff
+dmabuf-format Y210
+dmabuf Y210 modifier=0x00ffffffffffffff
+dmabuf-format Y212
+dmabuf Y212 modifier=0x00ffffffffffffff
+dmabuf-format Y216
+dmabuf Y216 modifier=0x00ffffffffffffff
+FP16 shm=0 dmabuf=1 ext_linear=1 windows_scrgb=1
+description READY 4 at 0.297 ms
+GPU Mesa Intel(R) Graphics (LNL) / OpenGL ES 3.2 Mesa 26.2.4-arch1.1
+FP16 upload+shader_setup+copy+finish 11.248 ms GL_error=0
+path=dmabuf stride=4096 modifier=0
+ATTACH 29.665 ms
+FRAME callback 34.787 ms (not presentation)
+PRESENTED 59.675 ms timestamp=85667.249628000 refresh_ns=16669444 flags=7
+RESULT ready=1 frame=1 presented=1 discarded=0 display_error=0

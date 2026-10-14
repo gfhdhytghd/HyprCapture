@@ -1,0 +1,5 @@
+renderer=Mesa Intel(R) Graphics (LNL) version=OpenGL ES 3.2 Mesa 26.2.4-arch1.1
+2880x1800 PQ six patch RGB max_code_delta=0
+2880x1800 FP16 copy exact (negative, >1 and alpha)
+6144x3456 PQ six patch RGB max_code_delta=0
+6144x3456 FP16 copy exact (negative, >1 and alpha)

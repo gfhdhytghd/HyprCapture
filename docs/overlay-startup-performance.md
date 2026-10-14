@@ -1,5 +1,26 @@
 # Overlay startup performance
 
+## HDR first-paint blocking (2026-10-11)
+
+Native HDR monitor backdrops previously called `HdrBackdrop::setImage()` from
+`prepareHdrBackdrops()` during first paint. That synchronously converted every
+monitor pixel from scRGB half-float to BT.2020 PQ before painting the controls.
+A synthetic 6144×3456 image took 398–557 ms for PQ conversion in three local
+trials; SDR preview conversion took 61–116 ms. Other builds were running, so
+these samples identify synchronous CPU work, not representative desktop latency
+or an end-to-end speedup.
+
+PQ conversion now runs on background workers with shared frozen image data.
+First paint uses the existing SDR preview. Wayland surface creation/upload stays
+on the UI thread after conversion, then the overlay repaints with native HDR.
+Closing an overlay discards pending results without waiting for its workers.
+Timing events `overlay.hdr_backdrop_convert` and `overlay.hdr_backdrop_upload`
+separate conversion from upload. Artifact loading/SDR conversion and compositor
+capture remain on the startup path; installed HDR presentation latency still
+needs a desktop measurement. The editor regression test holds the worker until
+after first paint and overlay destruction, then verifies conversion completes
+using the unlinked artifact without applying a result to the destroyed widget.
+
 Measured on 2026-10-05 (America/New_York), Hyprland 0.56.2, Release builds.
 
 ## Changes

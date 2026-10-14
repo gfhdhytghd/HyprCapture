@@ -12,7 +12,7 @@ bool desktopEnvironmentNameAllowed(std::string_view name) {
         "WAYLAND_DISPLAY", "DISPLAY", "DBUS_SESSION_BUS_ADDRESS", "PULSE_SERVER", "PULSE_COOKIE",
         "QT_QPA_PLATFORM", "QT_QPA_PLATFORMTHEME", "QT_SCALE_FACTOR",
         "QT_AUTO_SCREEN_SCALE_FACTOR", "QT_ENABLE_HIGHDPI_SCALING",
-        "HYPRCAPTURE_TIMING", "HYPRLAND_INSTANCE_SIGNATURE",
+        "HYPRCAPTURE_TIMING", "HYPRCAPTURE_LOCK_GENERATION", "HYPRLAND_INSTANCE_SIGNATURE",
     };
     return std::find(std::begin(allowed), std::end(allowed), name) != std::end(allowed) || name.starts_with("LC_");
 }

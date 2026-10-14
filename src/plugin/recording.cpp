@@ -1,4 +1,5 @@
 #include "plugin/recording.hpp"
+#include "plugin/session_lock.hpp"
 #include "plugin/recording_codec.hpp"
 #include "plugin/timestamped_rgba.hpp"
 #include "plugin/audio_session.hpp"
@@ -1358,7 +1359,7 @@ bool reapGsrRecordingIfExited() {
         if (recording->timer && g_pEventLoopManager)
             g_pEventLoopManager->removeTimer(recording->timer);
         const bool failedExit = recording->exitCode.load() != 0;
-        if ((!recordingOutputHasBytes(recording->outputPath) || failedExit) && recording->allowCompositorFallback && !recording->stopRequested) {
+        if ((!recordingOutputHasBytes(recording->outputPath) || failedExit) && recording->allowCompositorFallback && !recording->stopRequested && !sessionLocked()) {
             std::error_code ec;
             std::filesystem::remove(recording->outputPath, ec);
             if (!g_finishingAudio) g_recordingStateServer.clear();
@@ -1550,6 +1551,7 @@ void scheduleGsrMonitorTimer(int maxSeconds) {
     g_gsrRecording->timer = makeShared<CEventLoopTimer>(
         std::chrono::milliseconds(250),
         [maxSeconds](SP<CEventLoopTimer> self, void*) {
+            if (sessionLocked()) { stopRecordingForSessionLock(); }
             if (!g_gsrRecording || g_gsrRecording->timer.get() != self.get())
                 return;
             if (!reapGsrRecordingIfExited() || !g_gsrRecording)
@@ -1565,6 +1567,7 @@ void scheduleGsrMonitorTimer(int maxSeconds) {
 }
 
 void captureRecordingTick(SP<CEventLoopTimer> self) {
+    if (sessionLocked()) { stopRecordingForSessionLock(); return; }
     ScopedTiming timing("record.tick_total");
 
     if (!g_recording || g_recording->timer.get() != self.get())
@@ -1938,6 +1941,7 @@ LaunchResult startRecordingBackends(const RecordingRequest& request) {
 } // namespace
 
 LaunchResult startRecordingFromRequestFile(const std::string& path, const std::string& configuredHelper) {
+    if (sessionLocked()) return {.success = false, .error = "session locked"};
     const bool gsrBusy = reapGsrRecordingIfExited();
     const bool rawBusy = reapFinishingRawRecordingIfActive();
     if (g_preparingAudioTimer || g_finishingAudio || g_recording || gsrBusy || rawBusy)
@@ -1981,6 +1985,7 @@ LaunchResult startRecordingFromRequestFile(const std::string& path, const std::s
         g_audioPreparedOutput = output;
         const auto deadline = Time::steadyNow() + std::chrono::seconds(5);
         g_preparingAudioTimer = makeShared<CEventLoopTimer>(std::chrono::milliseconds(20), [request = *request, deadline](SP<CEventLoopTimer> self, void*) {
+            if (sessionLocked()) { stopRecordingForSessionLock(); return; }
             pollAudioErrors(g_audio.get());
             if (g_audio && !g_audio->captureReady() && Time::steadyNow() < deadline) {
                 self->updateTimeout(std::chrono::milliseconds(20)); return;
@@ -1994,6 +1999,31 @@ LaunchResult startRecordingFromRequestFile(const std::string& path, const std::s
         return {.success = true};
     }
     return startRecordingBackends(*request);
+}
+
+void stopRecordingForSessionLock() {
+    // Drain only already captured frames; never show or copy a result later.
+    if (g_recording) {
+        g_recording->request.defaults.clipboard = false;
+        g_recording->request.defaults.showThumbnail = false;
+    }
+    if (g_gsrRecording) {
+        g_gsrRecording->defaults.clipboard = false;
+        g_gsrRecording->defaults.showThumbnail = false;
+        g_gsrRecording->allowCompositorFallback = false;
+    }
+    stopRecordingInternal("stopped on session lock", true);
+    if (g_gsrRecording) g_gsrRecording->showResult = false;
+    if (g_finishingRawRecording) {
+        g_finishingRawRecording->launchResultHelper = false;
+        // APNG conversion normally opens another interactive helper. Keep its
+        // finalized MKV intermediate instead of deferring that action to unlock.
+        if (g_finishingRawRecording->transcodeToApng) {
+            g_finishingRawRecording->transcodeToApng = false;
+            g_finishingRawRecording->outputPath = g_finishingRawRecording->encoderOutputPath;
+        }
+    }
+    if (g_finishingAudio) g_finishingAudio->showResult = false;
 }
 
 LaunchResult stopRecording(const std::string& reason) {

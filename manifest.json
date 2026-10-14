@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.gfhdhytghd.hyprcapture",
   "name": "HyprCapture",
-  "version": "0.3.0",
+  "version": "0.4.2",
   "author": "wilf",
   "license": "GPL-3.0-only",
   "description": "Native Hyprland screenshots and screen recording: region, window and scrolling capture, annotation, pinning, and recording with sound.",

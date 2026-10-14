@@ -1,8 +1,11 @@
 #pragma once
 
+#include <atomic>
+
 #include "shared/config.hpp"
 #include "ui/overlay_paint.hpp"
 #include "ui/scroll_stitcher.hpp"
+#include "ui/session_lock_guard.hpp"
 
 #include <QImage>
 #include <QMainWindow>
@@ -11,6 +14,7 @@
 #include <QRect>
 #include <QString>
 #include <functional>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -27,6 +31,7 @@ class QShowEvent;
 class QWheelEvent;
 class QPropertyAnimation;
 class QScreen;
+class QTimer;
 class InlineSelect;
 class AudioMeter;
 class QSlider;
@@ -38,9 +43,10 @@ namespace hyprcapture::ui {
 struct ClipboardSnapshotData;
 class ScrollCaptureController;
 class HdrBackdrop;
+class HdrUpload;
 }
 
-class CaptureOverlay final : public QMainWindow {
+class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::SessionLockParticipant {
     Q_OBJECT
     Q_PROPERTY(double overlayOpacity READ overlayOpacity WRITE setOverlayOpacity)
 
@@ -48,6 +54,7 @@ class CaptureOverlay final : public QMainWindow {
     explicit CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick, bool record, bool recordActive, QString sessionJson, QWidget* parent = nullptr);
     CaptureOverlay(const CaptureOverlay& source, const QRect& overlayGeometry, bool active, QWidget* parent = nullptr);
     ~CaptureOverlay() override;
+    void abortForSessionLock() override;
 
     QScreen* overlayScreen() const;
     hyprcapture::OverlayScope overlayScope() const;
@@ -67,6 +74,7 @@ class CaptureOverlay final : public QMainWindow {
     void enterEvent(QEnterEvent* event) override;
     void showEvent(QShowEvent* event) override;
     void paintEvent(QPaintEvent* event) override;
+    bool eventFilter(QObject* watched, QEvent* event) override;
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
@@ -83,12 +91,14 @@ class CaptureOverlay final : public QMainWindow {
         QRect   logicalGeometry;
         QImage  image;
         QImage  hdrImage;
+        std::shared_ptr<hyprcapture::ui::HdrUpload> hdrUpload;
         float   referenceNits = 203;
         QImage  cursorImage;
         QImage  hdrCursorImage;
         QString name;
         int     transform = 0;
         bool    focused = false;
+        bool    hdrActive = false;
         std::optional<int> workspaceWindowCount;
         QString singleWorkspaceWindowClass;
         QString singleWorkspaceWindowTitle;
@@ -119,11 +129,22 @@ class CaptureOverlay final : public QMainWindow {
     };
 
     void prepareHdrBackdrops();
+    void queuePqBackdrop(const QRect& geometry);
+    bool hdrStartupBlocked();
     void updateHdrEditBackdrop();
+    bool canKeepHdrDesktopInEditor() const;
     bool hasHdrBackdrop(const MonitorArtifact& artifact) const;
-    struct HdrMonitorBackdrop { QRect geometry; std::unique_ptr<hyprcapture::ui::HdrBackdrop> surface; };
+    struct HdrMonitorBackdrop {
+        QRect geometry;
+        std::unique_ptr<hyprcapture::ui::HdrBackdrop> surface;
+        bool fp16Submitted = false, pqQueued = false;
+    };
     std::vector<HdrMonitorBackdrop> m_hdrBackdrops;
-    bool m_hdrBackdropsAttempted = false;
+    std::shared_ptr<void> m_hdrNativeWarmup;
+    QTimer* m_hdrStartupTimer = nullptr;
+    bool m_hdrStartupWaiting = false;
+    std::chrono::steady_clock::time_point m_hdrStartupDeadline{};
+    friend class InPlaceEditorTest;
     std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrEditBackdrop;
     qint64 m_hdrEditCacheKey = 0;
     QThreadPool* m_hdrEditPreviewPool = nullptr;
@@ -178,8 +199,24 @@ class CaptureOverlay final : public QMainWindow {
                    hyprcapture::FilenameMetadata filenameMetadata);
     QImage renderResultImage(bool hdr = false);
     QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect, bool hdr = false) const;
-    void paintDesktop(QPainter& painter, const QRect& target) const;
-    void paintCursorLayers(QPainter& painter, const QRect& outputRect, const QRect& globalRect, bool hdr = false) const;
+    void paintDesktop(QPainter& painter, const QRect& target, bool preserveClip = false) const;
+    static void paintCursorSnapshot(QPainter& painter, const QRect& outputRect, const QRect& globalRect, bool hdr,
+                                    const std::vector<MonitorArtifact>& monitors, bool includeCursor);
+    static QImage renderDesktopSnapshot(const QRect& globalRect, bool hdr, const std::vector<MonitorArtifact>& monitors,
+                                        bool hasHdrScreen, bool includeCursor);
+    std::function<QImage()> windowResultRenderer(const WindowArtifact& window, bool hdr) const;
+    std::function<QImage()> hdrResultRenderer() const;
+    void queueHdrEditBase();
+    void startHdrEditBase();
+    void invalidateHdrEditBase();
+    quint64 m_hdrBaseGeneration = 0;
+    bool m_hdrBasePending = false;
+    bool m_hdrBaseRunning = false;
+    bool m_hdrBaseFailed = false;
+    std::function<QImage()> m_hdrBaseLatest;
+    bool m_firstEditorPaintPending = false;
+    bool m_hdrExportPending = false;
+    std::shared_ptr<std::atomic_bool> m_hdrBaseCancelled;
     QRect normalizedSelection() const;
     QRect captureRectForMode() const;
     QRect fullscreenCaptureRect() const;
@@ -223,7 +260,7 @@ class CaptureOverlay final : public QMainWindow {
     bool selectedWindowUsesOverviewSelection() const;
     void beginHymissionCaptureInputSuppression();
     void endHymissionCaptureInputSuppression();
-    double windowFrameRadius(const WindowArtifact& window) const;
+    double windowFrameRadius(const WindowArtifact& window, bool selection = true) const;
     bool hydrateWindowArtifact(WindowArtifact& window);
     bool windowWheelSelectionEnabled() const;
     std::vector<int> currentMonitorWindowCandidates() const;

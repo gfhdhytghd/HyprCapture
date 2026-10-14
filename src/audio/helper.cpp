@@ -692,9 +692,9 @@ int finalize(const QStringList& args) {
 }
 
 int runHelper(int argc, char** argv) {
+    umask(0077);
     QCoreApplication app(argc, argv);
     const auto args = app.arguments();
-    umask(0077);
     if (args.value(1) == "--sound-finalize") return finalize(args);
     Recorder recorder;
     recorder.listOnly = args.value(1) == "--sound-list";

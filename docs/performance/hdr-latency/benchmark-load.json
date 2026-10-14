@@ -1,0 +1,14 @@
+{
+  "time": 1791920081.762646,
+  "loadavg": [
+    2.46826171875,
+    3.47119140625,
+    5.0380859375
+  ],
+  "cpu_allowed": "Cpus_allowed_list:\t0-7",
+  "ac_online": "1",
+  "battery_status": "Charging",
+  "power_profile": "performance",
+  "compiler_count": 0,
+  "protocol": "Release; one cold + four warm trials; serial CPU/GPU; glFinish at GPU boundaries"
+}

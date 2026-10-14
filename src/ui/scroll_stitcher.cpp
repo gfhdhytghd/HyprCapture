@@ -82,6 +82,105 @@ struct Match {
   int position = 0;
   bool found = false, ambiguous = false;
 };
+// Independent templates vote for a *vertical translation*, not an affine
+// warp. Like multi-template screenshot stitchers, cap each spatial cell at
+// one vote. A detailed GIF cannot buy more votes by containing more corners.
+// Native RGBA checks keep downsampling and repeated text from inventing a
+// correspondence. Stationary cells form a separate zero-motion layer.
+Match matchConsensus(const QImage &first, const QImage &second, QRect content,
+                     bool history = false) {
+  const auto a = compact(gray(history ? first : first.copy(content)));
+  const auto b = compact(gray(second.copy(content)));
+  cv::Mat aa(first.height(), first.width(), CV_8UC4,
+             const_cast<uchar *>(first.constBits()), first.bytesPerLine());
+  cv::Mat bb(second.height(), second.width(), CV_8UC4,
+             const_cast<uchar *>(second.constBits()), second.bytesPerLine());
+  struct Vote { int x, y; };
+  std::map<int, std::vector<Vote>> votes;
+  constexpr int columns = 6, rows = 12;
+  const int w = std::min(48, b.cols / 2), h = std::min(48, b.rows / 8);
+  if (w < 8 || h < 8) return {};
+  const auto error = [&](int x, int y, int d) {
+    const int left = x * content.width() / b.cols;
+    const int right = (x + w) * content.width() / b.cols;
+    const cv::Rect rb(content.x() + left, content.y() + y, right - left, h);
+    auto ra = rb;
+    ra.y += d;
+    cv::Mat diff;
+    cv::absdiff(aa(ra), bb(rb), diff);
+    const auto mean = cv::mean(diff);
+    const double worst = std::max({mean[0], mean[1], mean[2], mean[3]});
+    // An averaged error alone hides differing line numbers beside repeated
+    // text. Native captures are lossless: require nearly identical pixels in
+    // each voting patch, leaving translucent detail to the strict matcher.
+    return worst <= .35 && size_t(cv::countNonZero(diff.reshape(1) > 3)) <= diff.total() / 1000
+               ? worst : 1e9;
+  };
+  for (int row = 0; row < rows; ++row) {
+    const int y = row * (b.rows - h) / (rows - 1);
+    for (int column = 0; column < columns; ++column) {
+      const int x = column * (b.cols - w) / (columns - 1);
+      const auto pattern = b(cv::Rect(x, y, w, h));
+      cv::Scalar mean, dev;
+      cv::meanStdDev(pattern, mean, dev);
+      if (dev[0] < 3) continue; // Blank margins have no motion information.
+      if (!history && error(x, y, 0) <= .35) {
+        votes[0].push_back({x, y});
+        continue;
+      }
+      cv::Mat score;
+      cv::matchTemplate(a.colRange(x, x + w), pattern, score, cv::TM_CCOEFF_NORMED);
+      std::vector<std::pair<double, int>> peaks;
+      for (int from = 0; from < score.rows; ++from) {
+        const int d = from - y;
+        const bool inRange = history ? d >= 0 && d + b.rows <= a.rows
+            : b.rows - std::abs(d) >= std::max(64, b.rows / 4);
+        if (!inRange ||
+            score.at<float>(from, 0) < .97f)
+          continue;
+        const double e = error(x, y, d);
+        if (e <= .35) peaks.emplace_back(e, d);
+        if (peaks.size() > 32) break; // Repeated history cannot cast a unique vote.
+      }
+      if (peaks.empty() || peaks.size() > 32) continue; // No unique correspondence.
+      std::sort(peaks.begin(), peaks.end());
+      const auto [best, d] = peaks.front();
+      const bool ambiguous = std::any_of(peaks.begin() + 1, peaks.end(),
+          [&](const auto &peak) {
+            return std::abs(peak.second - d) > 2 && peak.first <= best + .5;
+          });
+      if (ambiguous) continue;
+      votes[d].push_back({x, y});
+    }
+  }
+  std::vector<int> accepted;
+  bool stationary = false;
+  for (const auto &[d, support] : votes) {
+    if (support.size() < 6) continue;
+    int minX = b.cols, maxX = 0, minY = b.rows, maxY = 0;
+    std::set<int> bands, lanes;
+    for (const auto &v : support) {
+      minX = std::min(minX, v.x); maxX = std::max(maxX, v.x);
+      minY = std::min(minY, v.y); maxY = std::max(maxY, v.y);
+      bands.insert(v.y); lanes.insert(v.x);
+    }
+    // A scrolling video inside a stationary page can itself have perfect
+    // matches. Require evidence spread across the overlap, not one widget.
+    const int overlap = history ? b.rows : b.rows - std::abs(d);
+    const bool broad = lanes.size() >= 2 && maxX - minX >= b.cols * .35;
+    // A wide fixed panel can leave only a narrow column of line numbers.
+    // Accept that column only with more independently matched vertical bands.
+    const bool tall = bands.size() >= 5 && maxY - minY >= overlap * .75;
+    if (bands.size() < 3 || (!broad && !tall) || maxY - minY < overlap * .60)
+      continue;
+    if (d == 0 && !history) stationary = true;
+    else accepted.push_back(d);
+  }
+  if (accepted.size() > 1) return {0, false, true};
+  if (accepted.size() == 1) return {accepted.front(), true, false};
+  if (stationary) return {0, true, false};
+  return {};
+}
 Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false) {
   std::set<int> candidates;
   const int h = std::min(48, frame.rows / 4);
@@ -227,6 +326,28 @@ bool exactOverlap(const QImage &first, const QImage &second, QRect content, int 
       return false;
   return true;
 }
+// Once motion is known, source selection is a separate problem. If a changing
+// object crosses the insertion edge, move the cut into an agreeing band in the
+// overlap. Copy whole rows from one capture; never blend text or HDR values.
+int coherentSeam(const QImage &retained, const QImage &incoming, bool down) {
+  const int boundary = down ? retained.height() : 0;
+  int run = 0;
+  for (int step = 0; step < retained.height(); ++step) {
+    const int y = down ? retained.height() - 1 - step : step;
+    const auto *a = reinterpret_cast<const QRgb *>(retained.constScanLine(y));
+    const auto *b = reinterpret_cast<const QRgb *>(incoming.constScanLine(y));
+    int changed = 0;
+    for (int x = 0; x < retained.width(); ++x)
+      changed += std::max({std::abs(qRed(a[x]) - qRed(b[x])),
+                          std::abs(qGreen(a[x]) - qGreen(b[x])),
+                          std::abs(qBlue(a[x]) - qBlue(b[x])),
+                          std::abs(qAlpha(a[x]) - qAlpha(b[x]))}) > 3;
+    run = changed <= retained.width() / 200 ? run + 1 : 0;
+    if (run == 8)
+      return step == 7 ? boundary : down ? y + 4 : y - 3;
+  }
+  return boundary; // No observed clean cut: retain the existing overlap.
+}
 bool verifyOriginalPixels(const QImage &first, const QImage &second,
                           QRect content, int d, bool foreground = false) {
   cv::Mat firstPixels(first.height(), first.width(), CV_8UC4,
@@ -285,6 +406,32 @@ QRect detectContent(const cv::Mat &a, const cv::Mat &b) {
     top = 0;
   if (!meaningful({0, bottom, a.cols, a.rows - bottom}))
     bottom = a.rows;
+  const auto background=[&](cv::Rect r) {
+    if(r.area()==0) return -1;
+    std::array<int,256> counts{};
+    for(int y=r.y;y<r.y+r.height;++y) for(int x=r.x;x<r.x+r.width;++x)
+      ++counts[a.at<uchar>(y,x)];
+    const auto mode=std::max_element(counts.begin(),counts.end());
+    return *mode>=r.area()/2?int(mode-counts.begin()):-1;
+  };
+  const auto sameBackground=[&](cv::Rect side,cv::Rect body) {
+    const int value=background(side);
+    return value>=0 && value==background(body);
+  };
+  const auto detail=[&](cv::Rect r) {
+    cv::Scalar mean,dev;cv::meanStdDev(a(r),mean,dev);return dev[0]>4;
+  };
+  const auto distributedBand=[&](int y,int height) {
+    int bands=0;
+    const bool gutter=sameBackground({0,y,a.cols,height},{0,top,a.cols,bottom-top});
+    for(int i=0;i<3;++i) {
+      const int x=a.cols*i/3,end=a.cols*(i+1)/3;
+      bands+=gutter?detail({x,y,end-x,height}):meaningful({x,y,end-x,height});
+    }
+    return bands>=2;
+  };
+  if(top && !distributedBand(0,top)) top=0;
+  if(bottom<a.rows && !distributedBand(bottom,a.rows-bottom)) bottom=a.rows;
   while (left < a.cols / 3 &&
          cv::countNonZero(changed(cv::Rect(left, top, 1, bottom - top))) < 2)
     ++left;
@@ -296,6 +443,20 @@ QRect detectContent(const cv::Mat &a, const cv::Mat &b) {
     left = 0;
   if (!meaningful({right, top, a.cols - right, bottom - top}))
     right = a.cols;
+  // A compact fixed widget in an otherwise white gutter is not a sidebar.
+  // Require stationary side appearance in multiple vertical bands before
+  // freezing an edge on the first translation (before column history exists).
+  const auto distributedSide=[&](int x,int width) {
+    int bands=0;
+    const bool gutter=sameBackground({x,top,width,bottom-top},{left,top,right-left,bottom-top});
+    for(int i=0;i<3;++i) {
+      const int y=top+(bottom-top)*i/3, end=top+(bottom-top)*(i+1)/3;
+      bands+=gutter?detail({x,y,width,end-y}):meaningful({x,y,width,end-y});
+    }
+    return bands>=2;
+  };
+  if(left && !distributedSide(0,left)) left=0;
+  if(right<a.cols && !distributedSide(right,a.cols-right)) right=a.cols;
   return {left, top, right - left, bottom - top};
 }
 // Insert only into a quiet band: never through text, icons, or a footer.
@@ -345,9 +506,521 @@ bool texturedFrames(const cv::Mat &a, const cv::Mat &b) {
 cv::Mat crop(const cv::Mat &image, const QRect &rect) {
   return image(cv::Rect(rect.x(), rect.y(), rect.width(), rect.height()));
 }
+struct ColumnEvidence {
+  bool stationary = false, changed = false, translating = false;
+};
+// Compare zero motion with the already registered document translation at
+// native resolution. Flat/repeating pixels cannot vote for either layer.
+// Require detail distributed vertically, rather than a clock/caret or one
+// horizontal line. This also works for one-pixel precision-touchpad steps.
+std::vector<ColumnEvidence> columnEvidence(const QImage &a, const QImage &b,
+                                          QRect content, int d) {
+  std::vector<ColumnEvidence> result(a.width());
+  const int top = content.top() + std::max(0, -d),
+            bottom = content.bottom() + 1 - std::max(0, d);
+  if (bottom - top < 96) return result;
+  const auto difference = [](QRgb x, QRgb y) {
+    return std::max({std::abs(qRed(x) - qRed(y)),
+                     std::abs(qGreen(x) - qGreen(y)),
+                     std::abs(qBlue(x) - qBlue(y)),
+                     std::abs(qAlpha(x) - qAlpha(y))});
+  };
+  struct Counts { int changed = 0, stationary = 0, translating = 0, first, last; };
+  std::vector<Counts> counts(a.width(), {0, 0, 0, bottom, top});
+  // Walk scanlines contiguously; touchpad captures run this for many frames.
+  // At most 256 distributed scanlines: decisions need spatial support, not
+  // a full image traversal. Retain native pixels for tiny touchpad movement.
+  const int rowStep=std::max(1,(bottom-top+255)/256);
+  for (int sample=0,begin=top;begin<bottom;begin+=rowStep,++sample) {
+    // Rotate the phase so repeated rules/glyph edges cannot alias the stride.
+    const int y=std::min(bottom-1,begin+sample%rowStep);
+    const auto *current = reinterpret_cast<const QRgb *>(b.constScanLine(y));
+    const auto *next = reinterpret_cast<const QRgb *>(b.constScanLine(std::min(y+1,b.height()-1)));
+    const auto *screen = reinterpret_cast<const QRgb *>(a.constScanLine(y));
+    const auto *translated = reinterpret_cast<const QRgb *>(a.constScanLine(y + d));
+    for (int x = content.left(); x <= content.right(); ++x) {
+      auto &count = counts[x];
+      const int screenError = difference(current[x], screen[x]);
+      const bool detail = difference(current[x],next[x]) > 8 ||
+          difference(current[x],current[std::min(x+1,content.right())]) > 8;
+      count.changed += detail && screenError > 6;
+      count.translating += detail && screenError > 6 && difference(current[x], translated[x]) <= 3;
+      if (detail && screenError <= 3 && difference(current[x], translated[x]) > 8) {
+        ++count.stationary;
+        count.first = std::min(count.first, y);
+        count.last = y;
+      }
+    }
+  }
+  for (int x = content.left(); x <= content.right(); ++x) {
+    const auto &count = counts[x];
+    result[x] = {count.changed <= std::max(2, (bottom - top) / rowStep / 200) &&
+                     count.stationary >= 8 && count.last - count.first >= (bottom - top) / 5,
+                 count.changed > 2, count.translating >= 8 && count.translating >= count.changed * .9 && count.stationary < count.translating / 4};
+  }
+  return result;
+}
+// Verify foreground at native resolution after removing slow illumination.
+// Cropping away newly opaque chrome must not turn the remaining translucent
+// wallpaper tiles into false mismatches or matches for a repeated comment.
+bool verifyBody(const QImage &a, const QImage &b, QRect rect, int d) {
+  return verify(foregroundDetail(gray(a.copy(rect))),
+                foregroundDetail(gray(b.copy(rect))),d,true)<1e8;
+}
+Match registerBody(const QImage &a, const QImage &b, QRect rect) {
+  const auto first = compact(gray(a.copy(rect))), second = compact(gray(b.copy(rect)));
+  auto raw = match(first, second);
+  if (raw.found && exactOverlap(a, b, rect, raw.position)) return raw;
+  auto detail = match(foregroundDetail(first), foregroundDetail(second), true);
+  if (detail.found && verifyBody(a, b, rect, detail.position)) return detail;
+  if (raw.found && verifyOriginalPixels(a, b, rect, raw.position) &&
+      verifyBody(a, b, rect, raw.position)) return raw;
+  return {0, false, raw.ambiguous || detail.ambiguous};
+}
 } // namespace
 ScrollStitcher::ScrollStitcher() = default;
 ScrollStitcher::ScrollStitcher(Limits limits) : m_limits(limits) {}
+ScrollLayout ScrollStitcher::layout() const {
+  auto result=m_layout;
+  result.initialContent=m_layoutLocked?m_initialContent:m_layout.content;
+  result.topOcclusion=m_topOcclusion;
+  result.bottomOcclusion=m_bottomOcclusion;
+  result.panels=m_releasedPanels;
+  for (const auto &side:m_pinnedSides)
+    result.panels.push_back({side.rect,side.documentY,side.sourceTop,
+                            side.image[0].height(),side.seam,m_layout.maximumY,true});
+  return result;
+}
+void ScrollStitcher::updateColumns(const QImage &frame, const QImage &original,
+                                   const QImage &hdr, int displacement) {
+  const auto old = m_layout.content;
+  // Emerging top chrome can change every column once, including otherwise
+  // blank document gutters. Keep edge chrome out of side-motion history even
+  // before its row mask has accumulated enough stationary observations.
+  const int inset = std::max(m_topOcclusion, std::min(64, old.height()/4));
+  const auto evidenceRect = m_initialContent.adjusted(0, inset, 0, 0);
+  const auto evidence = columnEvidence(m_previous, frame, evidenceRect, displacement);
+  // Only forward growth can release a section panel. Revisiting old, pre-pin
+  // captures must not reinterpret their motion as a new unsticky section.
+  if (m_layout.viewportY + displacement > m_layout.maximumY) {
+    QRect widened = old;
+    std::vector<QRect> released;
+    for (const auto &side : m_pinnedSides) {
+      int translating = 0, changed = 0;
+      for (int x=side.rect.left(); x<=side.rect.right(); ++x) {
+        translating += evidence[x].translating;
+        changed += evidence[x].changed;
+      }
+      if (translating >= 8 && translating >= changed * .8) {
+        widened = widened.united(side.rect);
+        released.push_back(side.rect);
+        m_releasedPanels.push_back({side.rect,side.documentY,side.sourceTop,
+                                   side.image[0].height(),side.seam,m_layout.maximumY,false});
+      }
+    }
+    if (widened != old) {
+      // Materialize the composed history before releasing its overlay. This
+      // retains the prefix and single pinned panel in all native planes.
+      const std::array<QImage,3> history{image(),originalImage(),hdrImage()};
+      const std::array<QImage,3> incoming{frame,original.convertToFormat(QImage::Format_ARGB32),hdr};
+      const std::array<std::vector<Strip>*,3> strips{&m_strips,&m_originalStrips,&m_hdrStrips};
+      for (int plane=0;plane<3;++plane) {
+        if (strips[plane]->empty()) continue;
+        QImage body = history[plane].copy(widened.x(),old.y(),widened.width(),
+                          old.height()+m_layout.maximumY-m_layout.minimumY);
+        QPainter p(&body); p.setCompositionMode(QPainter::CompositionMode_Source);
+        const int position=m_layout.viewportY+displacement;
+        for (const auto &rect : released)
+          p.drawImage(rect.x()-widened.x(),position-m_layout.minimumY,
+                      incoming[plane].copy(rect));
+        p.end();
+        // Keep source-row provenance for native corner recovery. A single
+        // document-height strip would mislabel interior rows as viewport edges.
+        for (auto &strip : *strips[plane])
+          strip.image=body.copy(0,strip.y-m_layout.minimumY,widened.width(),strip.image.height());
+      }
+      std::erase_if(m_pinnedSides,[&](const PinnedSide& side) {
+        return std::find(released.begin(),released.end(),side.rect)!=released.end();
+      });
+      m_layout.content = widened;
+      for (const auto &rect : released)
+        for (int x=rect.left();x<=rect.right();++x) m_columns[x] = {};
+      return;
+    }
+  }
+  if (m_columns.empty()) m_columns.resize(frame.width());
+  int firstMoving = old.right() + 1, lastMoving = old.left() - 1;
+  for (int x = old.left(); x <= old.right(); ++x) {
+    auto &column = m_columns[x];
+    // Observed screen changes distinguish a newly pinned panel from an
+    // always-stationary backdrop beneath scrolling translucent foreground.
+    column.changeAge = evidence[x].changed ? 0 : std::min(65,column.changeAge+1);
+    column.changed = column.changeAge <= std::max(6,64/std::max(1,std::abs(displacement)));
+    column.translated |= evidence[x].translating;
+    if (evidence[x].stationary) {
+      if (!column.stationaryFrames) column.stationaryStart = m_layout.viewportY;
+      ++column.stationaryFrames;
+      column.stationaryTravel += std::abs(displacement);
+    } else {
+      column.stationaryFrames = column.stationaryTravel = 0;
+    }
+  }
+  // A thin moving scrollbar beside a pinned panel is not a scrolling
+  // document column. Require local horizontal support before treating motion
+  // as a barrier; preserve the actual classified edge and its blank gutter.
+  for (int x = old.left(); x <= old.right(); ++x) {
+    if (!evidence[x].changed) continue;
+    int support = 0;
+    for (int i = std::max(old.left(), x-16); i <= std::min(old.right(), x+16); ++i)
+      support += evidence[i].changed;
+    if (support >= 8) {
+      firstMoving = std::min(firstMoving, x);
+      lastMoving = x;
+    }
+  }
+  if (firstMoving > lastMoving || lastMoving - firstMoving + 1 < 64) return;
+  cv::Mat frameGray;
+  const auto pinned = [&](int from, int to, bool left) {
+    int votes = 0, edge = left ? from - 1 : to;
+    for (int x = from; x < to; ++x) {
+      const auto &column = m_columns[x];
+      if (!(column.changed && column.stationaryFrames >= 3 && column.stationaryTravel >= 6)) continue;
+      if (!column.translated) {
+        if (frameGray.empty()) frameGray=gray(frame);
+        if (texturedBackdrop(frameGray,QRect(std::max(from,std::min(x,to-4)),old.y()+inset,std::min(4,to-from),old.height()-inset))) continue;
+      }
+      {
+        ++votes;
+        edge = left ? std::max(edge,x) : std::min(edge,x);
+      }
+    }
+    return votes >= std::max(8, frame.width() / 100) ? edge : -1;
+  };
+  auto content = old;
+  // Unknown blank gutters remain document pixels. A gap between text and a
+  // pinned panel must not become part of the panel merely for lacking motion.
+  if (const int edge = pinned(old.left(), firstMoving, true); edge >= 0)
+    content.setLeft(edge + 1);
+  if (const int edge = pinned(lastMoving + 1, old.right() + 1, false); edge >= 0)
+    content.setRight(edge - 1);
+  if (content == old) return;
+
+  const std::array<QImage, 3> incoming{
+      frame, original.convertToFormat(QImage::Format_ARGB32), hdr};
+  const auto remember = [&](QRect newlyPinned) {
+    PinnedSide side;
+    side.rect = newlyPinned;
+    side.prefixY = m_layout.minimumY;
+    int start = m_layout.viewportY;
+    for (int x = newlyPinned.left(); x <= newlyPinned.right(); ++x)
+      if (m_columns[x].stationaryFrames >= 3)
+        start = std::min(start, m_columns[x].stationaryStart);
+    const std::array<const std::vector<Strip> *, 3> planes{
+        &m_strips, &m_originalStrips, &m_hdrStrips};
+    // Register the pinned viewport against observed pre-pin sidebar history.
+    // Its scroll offset is independent of the main column after it pins (a
+    // wheel step may even cross the threshold part-way). Keep the prefix.
+    const int historyHeight = old.height() + std::max(0, start - m_layout.minimumY);
+    std::array<QImage, 3> history;
+    for (int plane = 0; plane < 3; ++plane) {
+      if (incoming[plane].isNull()) continue;
+      history[plane] = QImage(newlyPinned.width(), historyHeight, incoming[plane].format());
+      history[plane].fill(Qt::transparent);
+      QPainter painter(&history[plane]);
+      painter.setCompositionMode(QPainter::CompositionMode_Source);
+      for (const auto &strip : *planes[plane])
+        painter.drawImage(0, strip.y - m_layout.minimumY,
+            strip.image.copy(newlyPinned.x() - old.x(), 0,
+                             newlyPinned.width(), strip.image.height()));
+      side.image[plane] = incoming[plane].copy(newlyPinned);
+    }
+    side.sourceTop = m_topOcclusion;
+    for (auto &image : side.image)
+      if (!image.isNull() && side.sourceTop)
+        image = image.copy(0,side.sourceTop,image.width(),image.height()-side.sourceTop);
+    const auto visible = compact(gray(side.image[0]));
+    // Prefer the first viewport: late history can already contain a few
+    // duplicated bottom slices while the stationary vote is accumulating.
+    const auto initialSide = m_initial.copy(newlyPinned);
+    auto baseline = compact(gray(initialSide));
+    std::vector<int> exactPositions;
+    for (int d = std::max(0, m_layout.minimumY)+side.sourceTop; d <= std::min(start, old.height()*3/4)+side.sourceTop; ++d)
+      if (exactOverlap(initialSide, side.image[0], initialSide.rect(), d)) exactPositions.push_back(d);
+    auto alignment = exactPositions.size() == 1 ? Match{exactPositions.front(),true,false}
+        : match(foregroundDetail(baseline), foregroundDetail(visible), true);
+    if (!alignment.found) alignment = match(baseline, visible);
+    bool initialAnchor = alignment.found;
+    if (!alignment.found) {
+      baseline = compact(gray(history[0]));
+      alignment = match(foregroundDetail(baseline), foregroundDetail(visible), true);
+      if (!alignment.found) alignment = match(baseline, visible);
+    }
+    const int documentY = (initialAnchor ? 0 : m_layout.minimumY) + alignment.position - side.sourceTop;
+    if (alignment.found && documentY >= m_layout.minimumY && documentY <= start) {
+      side.documentY = documentY;
+      // Recover occluded top rows from their earlier, unobstructed captures.
+      const int prefixHeight = documentY + side.sourceTop - m_layout.minimumY;
+      for (int plane = 0; plane < 3; ++plane)
+        if (!history[plane].isNull()) {
+          if (prefixHeight)
+            side.prefix[plane] = history[plane].copy(0, 0, newlyPinned.width(), prefixHeight);
+          // A top bar can settle later than this sidebar. Keep only the
+          // earlier unobstructed rows it could subsequently occlude.
+          side.underlay[plane] = history[plane].copy(0,documentY-m_layout.minimumY,
+              newlyPinned.width(),old.height()/4);
+        }
+    } else {
+      // Missing/ambiguous side motion must never discard the captured top
+      // items. Keep the earliest complete observed sidebar as a safe source.
+      side.documentY = side.sourceTop = 0;
+      // The initial viewport starts at zero; negative captured rows precede it.
+      for (int plane=0;plane<3;++plane)
+        if (!history[plane].isNull() && m_layout.minimumY<0)
+          side.prefix[plane]=history[plane].copy(0,0,newlyPinned.width(),-m_layout.minimumY);
+      const std::array<QImage, 3> initial{m_initial, m_originalInitial, m_hdrInitial};
+      for (int plane = 0; plane < 3; ++plane)
+        if (!initial[plane].isNull()) side.image[plane] = initial[plane].copy(newlyPinned);
+    }
+    side.seam = sidebarSeam(gray(side.image[0]), side.image[0].rect());
+    if (side.seam < 0) {
+      // No quiet band: extend background after the complete panel, not labels.
+      for (int plane = 0; plane < 3; ++plane)
+        if (!side.image[plane].isNull())
+          side.fill[plane] = QImage(newlyPinned.width(), 1, side.image[plane].format());
+      for (int x = 0; x < newlyPinned.width(); ++x) {
+        std::map<QRgb, int> colors;
+        int count = 0, sample = 0;
+        for (int y = 0; y < side.image[0].height(); ++y) {
+          auto &color = colors[side.image[0].pixel(x, y)];
+          if (++color > count) { count = color; sample = y; }
+        }
+        for (int plane = 0; plane < 3; ++plane) {
+          if (side.image[plane].isNull()) continue;
+          const int bytes = plane == 2 ? 8 : 4;
+          std::memcpy(side.fill[plane].scanLine(0) + x * bytes,
+                      side.image[plane].constScanLine(sample) + x * bytes, bytes);
+        }
+      }
+    }
+    m_pinnedSides.push_back(std::move(side));
+  };
+  if (content.left() != old.left())
+    remember({old.left(), old.y(), content.left() - old.left(), old.height()});
+  if (content.right() != old.right())
+    remember({content.right() + 1, old.y(), old.right() - content.right(), old.height()});
+  // Remove even the pre-pin slices from history. All planes keep identical
+  // strip coordinates/heights/source rows, including native corner recovery.
+  const auto narrow = [&](std::vector<Strip> &strips) {
+    for (auto &strip : strips)
+      strip.image = strip.image.copy(content.x() - old.x(), 0,
+                                      content.width(), strip.image.height());
+  };
+  narrow(m_strips);
+  narrow(m_originalStrips);
+  narrow(m_hdrStrips);
+  m_layout.content = content;
+}
+void ScrollStitcher::updateTop(const QImage &frame, int d) {
+  const auto c = m_layout.content;
+  if (d > 0 && m_topOcclusion && d < c.height()-m_topOcclusion) {
+    int moving=0, translated=0;
+    for(int y=c.top();y<c.top()+m_topOcclusion;++y) {
+      const auto *a=reinterpret_cast<const QRgb*>(m_previous.constScanLine(y));
+      const auto *shifted=reinterpret_cast<const QRgb*>(m_previous.constScanLine(y+d));
+      const auto *b=reinterpret_cast<const QRgb*>(frame.constScanLine(y));
+      for(int x=c.left();x<=c.right();++x) {
+        const auto error=[](QRgb a,QRgb b) {return std::max({std::abs(qRed(a)-qRed(b)),std::abs(qGreen(a)-qGreen(b)),std::abs(qBlue(a)-qBlue(b))});};
+        moving += error(a[x],b[x])>6;
+        translated += error(a[x],b[x])>6 && error(shifted[x],b[x])<=3;
+      }
+    }
+    if(moving>c.width()*m_topOcclusion/20 && translated>=moving*.6) {
+      m_topOcclusion=0;
+      for(auto& row:m_rows) row={};
+    }
+  }
+  if (d < 0 && m_topOcclusion && m_layout.viewportY + d < m_topPinnedAt) {
+    int changed = 0;
+    for (int y=c.top();y<c.top()+m_topOcclusion;++y) {
+      const auto *a=reinterpret_cast<const QRgb *>(m_previous.constScanLine(y));
+      const auto *b=reinterpret_cast<const QRgb *>(frame.constScanLine(y));
+      for (int x=c.left();x<=c.right();++x)
+        changed += std::max({std::abs(qRed(a[x])-qRed(b[x])),std::abs(qGreen(a[x])-qGreen(b[x])),
+                             std::abs(qBlue(a[x])-qBlue(b[x])),std::abs(qAlpha(a[x])-qAlpha(b[x]))})>6;
+    }
+    // The full title has re-entered the page; previously hidden top rows are
+    // visible document data again, including prepends above the first capture.
+    if (changed > c.width()*m_topOcclusion/20) {
+      m_topOcclusion=0;
+      for (auto &row:m_rows) row.stationaryFrames=row.stationaryTravel=0;
+    }
+  }
+  if (d <= 0) return;
+  if (m_rows.empty()) m_rows.resize(frame.height());
+  const int columnStep=std::max(1,(c.width()+511)/512);
+  const int samples=(c.width()+columnStep-1)/columnStep;
+  const int bottom = std::min(c.top() + c.height() / 4, c.bottom() + 1 - d);
+  int fixedRows = 0, lastFixed = c.top() - 1, firstMoving = bottom;
+  for (int y = c.top(); y < bottom; ++y) {
+    const auto *a = reinterpret_cast<const QRgb *>(m_previous.constScanLine(y));
+    const auto *shifted = reinterpret_cast<const QRgb *>(m_previous.constScanLine(y + d));
+    const auto *b = reinterpret_cast<const QRgb *>(frame.constScanLine(y));
+    int changed = 0, stationary = 0, translating = 0, first = c.right(), last = c.left();
+    const auto error = [](QRgb a, QRgb b) {
+      return std::max({std::abs(qRed(a)-qRed(b)), std::abs(qGreen(a)-qGreen(b)),
+                       std::abs(qBlue(a)-qBlue(b)), std::abs(qAlpha(a)-qAlpha(b))});
+    };
+    for (int sample=0,begin=c.left();begin<=c.right();begin+=columnStep,++sample) {
+      const int x=std::min(c.right(),begin+sample%columnStep);
+      const int screenError = error(a[x], b[x]);
+      changed += screenError > 6;
+      // Smooth wallpaper/illumination is not stationary *document* detail.
+      const bool detail = error(b[x], b[std::min(x+1,c.right())]) > 8;
+      translating += detail && screenError>6 && error(shifted[x],b[x])<=3;
+      if (detail && screenError <= 3 && error(shifted[x], b[x]) > 8) {
+        ++stationary; first = std::min(first, x); last = x;
+      }
+    }
+    auto &row = m_rows[y];
+    row.changeAge=changed>std::max(2,samples/100)?0:std::min(65,row.changeAge+1);
+    row.changed=row.changeAge<=std::max(6,64/d);
+    row.translated |= translating>=8 && translating>=changed*.9;
+    if (changed <= std::max(2, samples / 100) && stationary >= 8 &&
+        last - first >= c.width() / 3) {
+      if (!row.stationaryFrames) row.stationaryStart=m_layout.viewportY;
+      ++row.stationaryFrames; row.stationaryTravel += d;
+    } else row.stationaryFrames = row.stationaryTravel = 0;
+    if (changed > std::max(2, samples / 100) && y >= c.top() + m_topOcclusion)
+      firstMoving = std::min(firstMoving, y);
+    if (y < firstMoving && row.changed && row.stationaryFrames >= 3 && row.stationaryTravel >= 6 &&
+        (row.translated || stationary<samples*.7)) {
+      ++fixedRows; lastFixed = y;
+    }
+    // A moving body row is a barrier: an interior stationary widget cannot
+    // turn the preceding scrolling document into header chrome.
+    // Still update lower rows' history, so a subsequently appearing header
+    // can be identified as a change from formerly scrolling pixels.
+  }
+  if (fixedRows >= 8 && lastFixed - c.top() >= 12) {
+    if (!m_topOcclusion) m_topPinnedAt=m_rows[lastFixed].stationaryStart;
+    // Include quiet padding/background beneath the stationary glyphs, up to
+    // the first positively moving body row. Otherwise opaque header padding
+    // would still be copied into a pinned sidebar's source/native planes.
+    m_topOcclusion = std::max(m_topOcclusion, firstMoving - c.top());
+    for (auto &side : m_pinnedSides) {
+      // Revisit already selected sources too: the side panel may have pinned
+      // while the top bar was still animating and had not earned a row mask.
+      if (side.underlay[0].isNull()) continue;
+      const int top=std::min(m_topOcclusion,side.underlay[0].height());
+      const int extra=top-side.sourceTop;
+      if (extra<=0) continue;
+      for(int plane=0;plane<3;++plane) {
+        if(side.image[plane].isNull()) continue;
+        QImage prefix(side.rect.width(),side.prefix[plane].height()+extra,side.image[plane].format());
+        prefix.fill(Qt::transparent);
+        QPainter painter(&prefix);painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.drawImage(0,0,side.prefix[plane]);
+        painter.drawImage(0,side.prefix[plane].height(),side.underlay[plane].copy(
+            0,side.sourceTop,side.rect.width(),extra));
+        painter.end();
+        side.prefix[plane]=std::move(prefix);
+        side.image[plane]=side.image[plane].copy(0,extra,side.rect.width(),side.image[plane].height()-extra);
+      }
+      if(side.seam>=0) side.seam-=extra;
+      side.sourceTop=top;
+    }
+  }
+}
+// Small screen-fixed occluders need source masks, not column classification.
+// In translated coordinates the residual contains the object and its shifted
+// ghost. Screen-fixed detail identifies the real component; moving document
+// detail agrees with the translation and cannot qualify. No shape assumptions.
+void ScrollStitcher::updateFloating(const QImage &frame, const QImage &original, int d) {
+  if (d <= 0) return;
+  const auto c=m_layout.content;
+  if (d>=c.height()-96) return;
+  const auto error=[](QRgb a,QRgb b) {
+    return std::max({std::abs(qRed(a)-qRed(b)),std::abs(qGreen(a)-qGreen(b)),
+                     std::abs(qBlue(a)-qBlue(b)),std::abs(qAlpha(a)-qAlpha(b))});
+  };
+  // Prefer native uncomposited pixels: backdrop illumination cannot provide
+  // evidence for a document occluder. Without them, require a clean SDR body.
+  QImage first=original.isNull()?m_previous:m_originalPrevious;
+  QImage second=original.isNull()?frame:original;
+  const auto clean=[&]() {
+    int changed=0,samples=0;
+    const int stride=std::max(1,c.width()/512);
+    for(int y=c.top();y<=c.bottom()-d;++y) {
+      const auto *a=reinterpret_cast<const QRgb*>(first.constScanLine(y+d));
+      const auto *b=reinterpret_cast<const QRgb*>(second.constScanLine(y));
+      for(int x=c.left();x<=c.right();x+=stride) {
+        if(!m_columns.empty() && m_columns[x].stationaryFrames) continue;
+        ++samples;changed+=error(a[x],b[x])>3;
+      }
+    }
+    return samples && changed<=samples*.08;
+  };
+  if(!clean()) {m_floatingCandidates.clear();return;}
+  std::vector<FloatingCandidate> candidates;
+  for(bool top : {false,true}) {
+    const int begin=top?c.top():c.top()+c.height()/3;
+    const int end=top?c.top()+c.height()/4:c.bottom()+1;
+    cv::Mat residual(end-begin,c.width(),CV_8U,cv::Scalar(0));
+    cv::Mat fixed(residual.size(),CV_8U,cv::Scalar(0));
+    for(int y=begin;y<end;++y) {
+      const int shiftedY=top?y+d:y-d;
+      if(shiftedY<c.top() || shiftedY>c.bottom()) continue;
+      const auto *a=reinterpret_cast<const QRgb*>(first.constScanLine(y));
+      const auto *b=reinterpret_cast<const QRgb*>(second.constScanLine(y));
+      const auto *shifted=reinterpret_cast<const QRgb*>(
+          (top?first:second).constScanLine(shiftedY));
+      for(int x=c.left();x<=c.right();++x) {
+        // Find contrast support first; padding below covers antialiasing and
+        // soft shadows without making wallpaper noise an occluder.
+        const bool mismatch=error(top?b[x]:a[x],shifted[x])>6;
+        residual.at<uchar>(y-begin,x-c.left())=mismatch?255:0;
+        const bool detail=error(a[x],a[std::min(x+1,c.right())])>8 ||
+            error(a[x],first.pixel(x,std::min(y+1,c.bottom())))>8;
+        fixed.at<uchar>(y-begin,x-c.left())=mismatch && detail && error(a[x],b[x])<=3?255:0;
+      }
+    }
+    // Join antialiased edges/icon fragments, without making sparse detail a
+    // full-height sidebar. Padding keeps soft shadows out of strip sources.
+    cv::Mat joined,labels,stats,centers;
+    cv::dilate(residual,joined,cv::getStructuringElement(cv::MORPH_RECT,{5,5}));
+    const int count=cv::connectedComponentsWithStats(joined,labels,stats,centers);
+    for(int id=1;id<count;++id) {
+      QRect r(c.x()+stats.at<int>(id,cv::CC_STAT_LEFT),begin+stats.at<int>(id,cv::CC_STAT_TOP),
+              stats.at<int>(id,cv::CC_STAT_WIDTH),stats.at<int>(id,cv::CC_STAT_HEIGHT));
+      if(r.width()<16 || r.height()<16 || r.width()>c.width()/3 || r.height()>c.height()/3+d) continue;
+      int columnSupport=0;
+      for(int x=r.left();x<=r.right();++x)
+        columnSupport+=!m_columns.empty() && m_columns[x].stationaryFrames>0;
+      // Independently distributed side evidence belongs to the panel layer,
+      // even while it is still accumulating its three-frame pin threshold.
+      if(columnSupport>=8) continue;
+      int support=0;
+      for(int y=r.top();y<=r.bottom();++y) for(int x=r.left();x<=r.right();++x)
+        support+=labels.at<int>(y-begin,x-c.left())==id && fixed.at<uchar>(y-begin,x-c.left());
+      int observations=1;
+      for(const auto& previous:m_floatingCandidates)
+        if(previous.top==top && std::abs(previous.rect.left()-r.left())<=2 &&
+           std::abs(previous.rect.right()-r.right())<=2 && std::abs(previous.rect.top()-r.top())<=2 &&
+           std::abs(previous.rect.bottom()-r.bottom())<=2)
+          observations=std::max(observations,previous.observations+1);
+      candidates.push_back({r,top,observations});
+      // An animated fill may have no invariant pixels. Require its compact
+      // residual to recur at the same screen bounds on independent scrolls.
+      if(support<8 && observations<2) continue;
+      if(top) {
+        m_topOcclusion=std::max(m_topOcclusion,std::min(c.height()/4,r.bottom()+7-c.top()));
+      } else {
+        m_bottomOcclusion=std::max(m_bottomOcclusion,c.bottom()+1-std::max(c.top(),r.top()-6));
+      }
+    }
+  }
+  m_floatingCandidates=std::move(candidates);
+}
 bool ScrollStitcher::stable(const QImage &a, const QImage &b) {
   if (a.isNull() || a.size() != b.size())
     return false;
@@ -364,7 +1037,9 @@ bool ScrollStitcher::stable(const QImage &a, const QImage &b) {
          static_cast<size_t>(cv::countNonZero(diff.reshape(1) > 12)) <=
              diff.total() / 1000;
 }
-ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage &original, const QImage &hdr) {
+ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage &sourceOriginal, const QImage &sourceHdr) {
+  QImage original=sourceOriginal, hdr=sourceHdr;
+  original.setDevicePixelRatio(1); hdr.setDevicePixelRatio(1);
   if ((!hdr.isNull() && (hdr.size() != source.size() || hdr.format() != QImage::Format_RGBA16FPx4_Premultiplied)) ||
       (!empty() && hdr.isNull() != m_hdrInitial.isNull())) return {Status::InvalidFrame};
   if ((!original.isNull() && original.size() != source.size()) ||
@@ -376,10 +1051,15 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (source.height() > m_limits.maxHeight ||
       qint64(source.width()) * source.height() > m_limits.maxPixels)
     return {Status::LimitReached};
-  const auto frame = source.convertToFormat(QImage::Format_ARGB32);
+  auto frame = source.convertToFormat(QImage::Format_ARGB32);
+  frame.setDevicePixelRatio(1);
+  // Window captures without a backdrop often share the exact source image.
+  // Normalize that storage once and retain the identity for geometry checks.
+  original = !original.isNull() && sourceOriginal.cacheKey()==source.cacheKey()
+      ? frame : original.convertToFormat(QImage::Format_ARGB32);
   if (empty()) {
     m_initial = m_previous = frame;
-    m_originalInitial = original.convertToFormat(QImage::Format_ARGB32);
+    m_originalPrevious = m_originalInitial = original;
     m_hdrInitial = hdr;
     m_layout = {frame.rect(), frame.size()};
     m_frames = 1;
@@ -390,17 +1070,29 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   if (stable(m_previous, frame))
     return {Status::Unchanged};
   const auto previous = gray(m_previous), current = gray(frame);
-  QRect content =
-      m_layoutLocked ? m_layout.content : detectContent(previous, current);
+  // Uncomposited geometry keeps screen-fixed backdrop gradients from making
+  // translucent document gutters look like fixed sidebars or footers.
+  QRect content = m_layoutLocked
+      ? m_layout.content.adjusted(0, m_topOcclusion, 0, -m_bottomOcclusion)
+      : original.isNull() || (m_originalInitial.cacheKey()==m_previous.cacheKey() &&
+                              original.cacheKey()==frame.cacheKey())
+          ? detectContent(previous, current)
+          : detectContent(gray(m_originalInitial), gray(original));
   if (content.width() < 64 || content.height() < 96)
     return {Status::NoOverlap};
   const auto previousCompact = compact(crop(previous, content));
   const auto currentCompact = compact(crop(current, content));
   const auto rawAlignment = match(previousCompact, currentCompact);
   auto alignment = rawAlignment;
+  bool consensusMotion = false;
+  bool sparseMotion = false;
   // Opaque documents usually have a byte-identical overlap. This stronger,
   // inexpensive check avoids filtering full-resolution frames on that path.
-  if (!alignment.found || !exactOverlap(m_previous, frame, content, alignment.position)) {
+  const bool smallInferredContent = !m_layoutLocked &&
+      (content.width() < frame.width() * .6 || content.height() < frame.height() * .6);
+  const bool exactMotion = alignment.found &&
+      exactOverlap(m_previous, frame, content, alignment.position);
+  if (!exactMotion) {
     alignment = match(foregroundDetail(previousCompact), foregroundDetail(currentCompact), true);
     if (alignment.found &&
         !verifyOriginalPixels(m_previous, frame, content, alignment.position, true))
@@ -415,11 +1107,65 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       // The sparse-patch fallback is only evidence for a stationary textured
       // backdrop. Repeated terminal phrases alone can vote for a false shift.
       if (!alignment.found && !alignment.ambiguous &&
-          texturedFrames(crop(previous, content), crop(current, content)))
+          texturedFrames(crop(previous, content), crop(current, content))) {
         alignment = matchForeground(previousCompact, currentCompact);
+        sparseMotion = alignment.found;
+      }
       if (!alignment.found)
         alignment.ambiguous |= detailAmbiguous;
     }
+  }
+  // When chrome appears mid-capture, registration's old rectangle still
+  // includes it. Retry only the broadly changing body. Unlike byte-consensus,
+  // this verifies native foreground detail as well as template alignment, and never
+  // overrides a successfully verified foreground alignment.
+  if (!alignment.found || alignment.position == 0 || sparseMotion) {
+    const auto body = detectContent(previous, current).intersected(content);
+    if (body != content && body.width() >= std::max(64, content.width() / 3) &&
+        body.height() >= std::max(96, content.height() * 3 / 5)) {
+      const bool sparseRejected = sparseMotion &&
+          !verifyOriginalPixels(m_previous, frame, body, alignment.position, true);
+      if (!alignment.found || alignment.position == 0 || sparseRejected) {
+        const auto registration = registerBody(m_previous, frame, body);
+        if (registration.found && registration.position != 0) {
+          alignment = registration;
+          sparseMotion = false;
+        } else if (sparseRejected) alignment.found = false;
+      }
+    }
+  }
+  if (!alignment.found || alignment.position == 0 || sparseMotion) {
+    // The very first frame of newly appearing chrome is not stationary yet.
+    // Broad interior bodies exclude top chrome, one side, or bottom chrome.
+    // Require independently verified translations; conflicts stay ambiguous.
+    std::set<int> translations;
+    for (const auto rect : {content.adjusted(0, content.height()/4, -content.width()/3, 0),
+                            content.adjusted(content.width()/3, content.height()/4, 0, 0),
+                            content.adjusted(0, content.height()/4, 0, -content.height()/4),
+                            content.adjusted(0, 0, -content.width()/3, -content.height()/4),
+                            content.adjusted(content.width()/3, 0, 0, -content.height()/4)}) {
+      if (rect.width() < 64 || rect.height() < 96) continue;
+      const auto candidate = registerBody(m_previous, frame, rect);
+      if (candidate.found && candidate.position) translations.insert(candidate.position);
+    }
+    if (translations.size() == 1) alignment = {*translations.begin(), true, false};
+    else if (translations.size() > 1) alignment = {0, false, true};
+  }
+  if (!alignment.found || alignment.position == 0 || smallInferredContent) {
+    // Preserve master's foreground-registration precedence. Native consensus
+    // is a fallback; it cannot override found translucent detail alignment.
+    const auto consensus = matchConsensus(m_previous, frame,
+        m_layoutLocked ? content : frame.rect());
+    if (consensus.found || consensus.ambiguous) {
+      alignment = consensus;
+      consensusMotion = consensus.found && consensus.position != 0;
+    }
+    else if (smallInferredContent) alignment.found = false;
+  }
+  if (alignment.found && alignment.position == 0) {
+    // Keep the last registered anchor. Unmatched animation must not replace
+    // it (or silently rebase a moving region whose motion was not observed).
+    return {Status::Unchanged};
   }
   int position = m_layout.viewportY + alignment.position;
   if (!alignment.found && !alignment.ambiguous && m_layoutLocked) {
@@ -430,15 +1176,20 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     const bool foreground = alignment.found;
     if (!alignment.found && !alignment.ambiguous)
       alignment = match(history, visible);
-    position = m_layout.minimumY + alignment.position;
+    bool consensus = false;
+    const auto visibleFrame = frame.copy(content);
+    if (!alignment.found && !alignment.ambiguous) {
+      alignment = matchConsensus(body, visibleFrame, visibleFrame.rect(), true);
+      consensus = alignment.found;
+    }
+    position = m_layout.minimumY + alignment.position - m_topOcclusion;
     // Relocation may only land wholly within retained history. A lost gap
     // must not create an unobserved interval in the output.
-    if (position < m_layout.minimumY || position > m_layout.maximumY)
+    if (position + m_topOcclusion < m_layout.minimumY || position > m_layout.maximumY)
       alignment.found = false;
-    if (alignment.found) {
+    if (alignment.found && !consensus) {
       const auto retained = body.copy(0, alignment.position,
                                       content.width(), content.height());
-      const auto visibleFrame = frame.copy(content);
       if (!verifyOriginalPixels(retained, visibleFrame, visibleFrame.rect(), 0, foreground))
         alignment.found = false;
     }
@@ -497,9 +1248,9 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     if (const int edge = translatedSide(0, content.left(), true); edge >= 0) content.setLeft(edge);
     if (const int edge = translatedSide(content.right()+1, frame.width()-content.right()-1, false); edge >= 0) content.setRight(edge);
   }
-  const int minY = std::min(m_layout.minimumY, position),
-            maxY = std::max(m_layout.maximumY, position);
-  const int added = (maxY - minY) - (m_layout.maximumY - m_layout.minimumY);
+  int minY = std::min(m_layout.minimumY, position + m_topOcclusion);
+  const int maxY = std::max(m_layout.maximumY, position);
+  int added = (maxY - minY) - (m_layout.maximumY - m_layout.minimumY);
   const qint64 height = frame.height() + maxY - minY;
   if (height > m_limits.maxHeight ||
       height * frame.width() > m_limits.maxPixels ||
@@ -525,6 +1276,7 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     m_layout.leftTiled = leftTile;
     m_layout.rightTiled = rightTile;
     m_layout.content = content;
+    m_initialContent = content;
     m_layout.leftSeam = left;
     m_layout.rightSeam = right;
     m_layoutLocked = true;
@@ -532,6 +1284,83 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     if (!hdr.isNull()) m_hdrStrips.push_back({0, m_hdrInitial.copy(content)});
     if (!original.isNull())
       m_originalStrips.push_back({0, m_originalInitial.copy(content), content.y()});
+  }
+  // Only accepted, overlapping motion contributes evidence. Rejects, idle
+  // frames and lost-overlap history jumps cannot change sidebar sources.
+  const int displacement = position - m_layout.viewportY;
+  const int oldBottomOcclusion=m_bottomOcclusion;
+  content = m_layout.content;
+  if (displacement && std::abs(displacement) <= content.height() - 96) {
+    updateTop(frame, displacement);
+    updateColumns(frame, original, hdr, displacement);
+    if (!exactMotion) updateFloating(frame, original, displacement);
+    else m_floatingCandidates.clear();
+    content = m_layout.content;
+  }
+  minY = std::min(m_layout.minimumY, position + m_topOcclusion);
+  added = (maxY - minY) - (m_layout.maximumY - m_layout.minimumY);
+  if (minY < m_layout.minimumY) {
+    const std::array<QImage,3> incoming{frame,original.convertToFormat(QImage::Format_ARGB32),hdr};
+    for (auto &side:m_pinnedSides) {
+      const int count=side.prefixY-minY;
+      if (count<=0) continue;
+      for (int plane=0;plane<3;++plane) {
+        if (incoming[plane].isNull()) continue;
+        QImage prefix(side.rect.width(),count+side.prefix[plane].height(),incoming[plane].format());
+        prefix.fill(Qt::transparent);
+        QPainter painter(&prefix);painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.drawImage(0,0,incoming[plane].copy(side.rect.x(),content.y()+minY-position,side.rect.width(),count));
+        painter.drawImage(0,count,side.prefix[plane]);
+        side.prefix[plane]=std::move(prefix);
+      }
+      side.prefixY=minY;
+    }
+  }
+  int prependTo = m_layout.minimumY;
+  int appendFrom = m_layout.maximumY + content.height() - m_bottomOcclusion;
+  if(m_bottomOcclusion>oldBottomOcclusion && maxY>m_layout.maximumY)
+    appendFrom=std::min(appendFrom,position+m_topOcclusion);
+  if (m_bottomOcclusion && maxY > m_layout.maximumY) {
+    const auto trimTail=[&](std::vector<Strip>& strips) {
+      std::erase_if(strips,[&](const Strip& s){return s.y>=appendFrom;});
+      for(auto& s:strips) if(s.y+s.image.height()>appendFrom)
+        s.image=s.image.copy(0,0,s.image.width(),appendFrom-s.y);
+    };
+    trimTail(m_strips); trimTail(m_originalStrips); trimTail(m_hdrStrips);
+  }
+  if (consensusMotion && added) {
+    const int from = std::max(position + m_topOcclusion, m_layout.minimumY);
+    const int to = std::min(position + content.height() - m_bottomOcclusion, appendFrom);
+    QImage retained(content.width(), to - from, QImage::Format_ARGB32);
+    for (const auto &strip : m_strips)
+      for (int y = std::max(from, strip.y);
+           y < std::min(to, strip.y + strip.image.height()); ++y)
+        std::memcpy(retained.scanLine(y - from), strip.image.constScanLine(y - strip.y),
+                    size_t(content.width()) * 4);
+    const auto incoming = frame.copy(content.x(), content.y() + from - position,
+                                      content.width(), to - from);
+    const bool down = maxY > m_layout.maximumY;
+    const int seam = from + coherentSeam(retained, incoming, down);
+    const auto trim = [&](std::vector<Strip> &strips) {
+      std::erase_if(strips, [&](const Strip &strip) {
+        return down ? strip.y >= seam : strip.y + strip.image.height() <= seam;
+      });
+      for (auto &strip : strips) {
+        if (down && strip.y + strip.image.height() > seam)
+          strip.image = strip.image.copy(0, 0, content.width(), seam - strip.y);
+        else if (!down && strip.y < seam) {
+          const int cut = seam - strip.y;
+          strip.image = strip.image.copy(0, cut, content.width(), strip.image.height() - cut);
+          strip.sourceTop += cut;
+          strip.y = seam;
+        }
+      }
+    };
+    trim(m_strips);
+    trim(m_originalStrips);
+    trim(m_hdrStrips);
+    if (down) appendFrom = seam;
+    else prependTo = seam;
   }
   // Native window corners are clipped in every source viewport. Once that
   // viewport edge becomes an interior seam, a later overlapping frame can
@@ -545,13 +1374,20 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       const int from = std::max(raw.y,position), to = std::min(raw.y+raw.image.height(),position+content.height());
       for (int documentY=from; documentY<to; ++documentY) {
         const int storedY=documentY-raw.y, sourceY=content.y()+documentY-position;
+        if (sourceY < content.y() + m_topOcclusion || sourceY > content.bottom()-m_bottomOcclusion) continue;
         const auto* sourceRaw=reinterpret_cast<const QRgb*>(incoming.constScanLine(sourceY))+content.x();
         const auto* storedRaw=reinterpret_cast<const QRgb*>(raw.image.constScanLine(storedY));
         for (int x=0;x<content.width();++x) {
           const int oldEdge=std::min(raw.sourceTop+storedY,frame.height()-1-raw.sourceTop-storedY);
           const int newEdge=std::min(sourceY,frame.height()-1-sourceY);
           const bool recoverCorner=oldEdge<64 && newEdge>=64 && qAlpha(sourceRaw[x])>=qAlpha(storedRaw[x]);
-          if (!recoverCorner && qAlpha(sourceRaw[x])<=qAlpha(storedRaw[x])+2) continue;
+          if (!recoverCorner) {
+            if (qAlpha(sourceRaw[x])<=qAlpha(storedRaw[x])+2) continue;
+            // Byte-exact document motion proves that an edge sample belongs
+            // to the page too. For uncertain translucent alignment, retain
+            // the edge guard until stationary chrome has earned its mask.
+            if (!exactMotion && (newEdge<64 || sourceY<content.y()+std::max(64,content.height()/4))) continue;
+          }
           raw.image.setPixel(x,storedY,sourceRaw[x]);
           // setPixel may detach the original plane; refresh its read pointer.
           storedRaw=reinterpret_cast<const QRgb*>(raw.image.constScanLine(storedY));
@@ -564,41 +1400,46 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   }
   if (minY < m_layout.minimumY)
     m_strips.push_back(
-        {minY, frame.copy(content.x(), content.y(), content.width(),
-                          m_layout.minimumY - minY)});
+        {minY, frame.copy(content.x(), content.y() + minY - position, content.width(),
+                          prependTo - minY)});
   if (maxY > m_layout.maximumY) {
-    const int count = maxY - m_layout.maximumY;
-    m_strips.push_back({m_layout.maximumY + content.height(),
-                        frame.copy(content.x(), content.bottom() + 1 - count,
+    const int count = position + content.height() - m_bottomOcclusion - appendFrom;
+    m_strips.push_back({appendFrom,
+                        frame.copy(content.x(), content.bottom() + 1 - m_bottomOcclusion - count,
                                    content.width(), count)});
   }
   // Retain uncomposited pixels using the same accepted alignment. This avoids
   // a second matcher and allows background changes after capture.
   if (!original.isNull()) {
     if (minY < m_layout.minimumY)
-      m_originalStrips.push_back({minY, original.copy(content.x(), content.y(),
-          content.width(), m_layout.minimumY - minY).convertToFormat(QImage::Format_ARGB32), content.y()});
+      m_originalStrips.push_back({minY, original.copy(content.x(), content.y() + minY - position,
+          content.width(), prependTo - minY).convertToFormat(QImage::Format_ARGB32), content.y()});
     if (maxY > m_layout.maximumY) {
-      const int count = maxY - m_layout.maximumY;
-      m_originalStrips.push_back({m_layout.maximumY + content.height(),
-          original.copy(content.x(), content.bottom() + 1 - count,
-                        content.width(), count).convertToFormat(QImage::Format_ARGB32), content.bottom()+1-count});
+      const int count = position + content.height() - m_bottomOcclusion - appendFrom;
+      m_originalStrips.push_back({appendFrom,
+          original.copy(content.x(), content.bottom() + 1 - m_bottomOcclusion - count,
+                        content.width(), count).convertToFormat(QImage::Format_ARGB32), content.bottom()+1-m_bottomOcclusion-count});
     }
   }
   if (!hdr.isNull()) {
     if (minY < m_layout.minimumY)
-      m_hdrStrips.push_back({minY, hdr.copy(content.x(), content.y(), content.width(), m_layout.minimumY - minY)});
+      m_hdrStrips.push_back({minY, hdr.copy(content.x(), content.y() + minY - position, content.width(), prependTo - minY)});
     if (maxY > m_layout.maximumY) {
-      const int count = maxY - m_layout.maximumY;
-      m_hdrStrips.push_back({m_layout.maximumY + content.height(),
-          hdr.copy(content.x(), content.bottom() + 1 - count, content.width(), count)});
+      const int count = position + content.height() - m_bottomOcclusion - appendFrom;
+      m_hdrStrips.push_back({appendFrom,
+          hdr.copy(content.x(), content.bottom() + 1 - m_bottomOcclusion - count, content.width(), count)});
     }
+  }
+  if (m_bottomOcclusion && position >= m_layout.maximumY) {
+    const QRect tail(content.x(),content.bottom()+1-m_bottomOcclusion,content.width(),m_bottomOcclusion);
+    m_bottomTail={frame.copy(tail),original.convertToFormat(QImage::Format_ARGB32).copy(tail),hdr.copy(tail)};
   }
   const int delta = position - m_layout.viewportY;
   m_layout.minimumY = minY;
   m_layout.maximumY = maxY;
   m_layout.viewportY = position;
   m_previous = frame;
+  m_originalPrevious = original;
   if (added)
     ++m_frames;
   return {added ? Status::Appended : Status::Relocated, added, delta};
@@ -615,76 +1456,83 @@ QImage ScrollStitcher::bodyImage() const {
   return result;
 }
 void ScrollStitcher::paint(QPainter &p, int plane) const {
-  const auto& initial = plane == 2 ? m_hdrInitial : plane == 1 && !m_originalInitial.isNull() ? m_originalInitial : m_initial;
-  const auto& strips = plane == 2 ? m_hdrStrips : plane == 1 && !m_originalInitial.isNull() ? m_originalStrips : m_strips;
-  if (!m_layoutLocked) {
-    p.drawImage(0, 0, initial);
-    return;
-  }
+  const int channel = plane == 1 && m_originalInitial.isNull() ? 0 : plane;
+  const auto &initial = channel == 2 ? m_hdrInitial : channel == 1 ? m_originalInitial : m_initial;
+  const auto &strips = channel == 2 ? m_hdrStrips : channel == 1 ? m_originalStrips : m_strips;
+  if (!m_layoutLocked) { p.drawImage(0, 0, initial); return; }
   const auto c = m_layout.content;
-  // Preserve sidebar objects above/below a quiet band. The inserted span
-  // is a per-column linear gradient; glyphs and icons are never stretched.
   const int growth = m_layout.maximumY - m_layout.minimumY;
-  const auto sidebar = [&](int x, int width, int seam) {
-    if (width <= 0)
-      return;
+  const auto expand = [&](const QImage &source, QRect rect, int x, int y,
+                          int extra, int seam, bool tiled, const QImage &fill = QImage{}) {
+    if (rect.isEmpty()) return;
+    const int width = rect.width(), height = rect.height();
     if (seam < 0) {
-      // A dense, stationary background may repeat in source-pixel blocks.
-      const int tile = std::min(64, c.height());
-      p.drawImage(QRect(x, c.y(), width, c.height()), initial,
-                  QRect(x, c.y(), width, c.height()));
-      for (int y = c.bottom() + 1; y < c.bottom() + 1 + growth; y += tile)
-        p.drawImage(
-            QRect(x, y, width, std::min(tile, c.bottom() + 1 + growth - y)),
-            initial,
-            QRect(x, c.bottom() + 1 - tile, width,
-                  std::min(tile, c.bottom() + 1 + growth - y)));
+      p.drawImage(QRect(x, y, width, height), source, rect);
+      if (extra <= 0) return;
+      if (!fill.isNull()) {
+        p.drawImage(QRect(x, y + height, width, extra), fill);
+      } else if (tiled) {
+        const int tile = std::min(64, height);
+        for (int i = 0; i < extra; i += tile)
+          p.drawImage(QRect(x, y + height + i, width, std::min(tile, extra-i)), source,
+                      QRect(rect.x(), rect.bottom()+1-tile, width, std::min(tile, extra-i)));
+      }
       return;
     }
-    p.drawImage(QRect(x, c.y(), width, seam - c.y()), initial,
-                QRect(x, c.y(), width, seam - c.y()));
-    p.drawImage(QRect(x, seam + growth, width, c.bottom() + 1 - seam),
-                initial, QRect(x, seam, width, c.bottom() + 1 - seam));
-    if (growth <= 0)
-      return;
-    if (plane == 2) {
-      // QColor/8-bit gradients clip highlights. Interpolate premultiplied
-      // floating-point samples directly, including alpha and out-of-gamut RGB.
-      // A thumbnail only needs device-resolution samples of this gradient.
-      // Full-size exports keep the original per-pixel interpolation unchanged.
-      const auto device=p.worldTransform().mapRect(QRectF(x,seam,width,growth)).size();
-      const int bandWidth=std::min(width,std::max(1,int(std::ceil(device.width()))));
-      const int bandHeight=std::min(growth,std::max(1,int(std::ceil(device.height()))));
+    p.drawImage(QRect(x, y, width, seam), source,
+                QRect(rect.x(), rect.y(), width, seam));
+    p.drawImage(QRect(x, y + seam + extra, width, height - seam), source,
+                QRect(rect.x(), rect.y() + seam, width, height - seam));
+    if (extra <= 0) return;
+    if (channel == 2) {
+      const auto device = p.worldTransform().mapRect(QRectF(x,y+seam,width,extra)).size();
+      const int bandWidth = std::min(width,std::max(1,int(std::ceil(device.width()))));
+      const int bandHeight = std::min(extra,std::max(1,int(std::ceil(device.height()))));
       QImage band(bandWidth,bandHeight,QImage::Format_RGBA16FPx4_Premultiplied);
-      const auto* above = reinterpret_cast<const qfloat16*>(initial.constScanLine(seam - 1)) + x * 4;
-      const auto* below = reinterpret_cast<const qfloat16*>(initial.constScanLine(seam)) + x * 4;
-      for (int y = 0; y < bandHeight; ++y) {
-        auto* row = reinterpret_cast<qfloat16*>(band.scanLine(y));
-        const float t = (y + .5f) / bandHeight;
-        for (int i=0;i<bandWidth;++i) {
-          const int source=std::min(width-1,int((i+.5)*width/bandWidth))*4;
-          for(int c=0;c<4;++c) row[i*4+c]=qfloat16(float(above[source+c])*(1-t)+float(below[source+c])*t);
+      const auto *above = reinterpret_cast<const qfloat16 *>(source.constScanLine(rect.y()+seam-1)) + rect.x()*4;
+      const auto *below = reinterpret_cast<const qfloat16 *>(source.constScanLine(rect.y()+seam)) + rect.x()*4;
+      for (int row = 0; row < bandHeight; ++row) {
+        auto *out = reinterpret_cast<qfloat16 *>(band.scanLine(row));
+        const float t = (row+.5f)/bandHeight;
+        for (int i = 0; i < bandWidth; ++i) {
+          const int sample = std::min(width-1,int((i+.5)*width/bandWidth))*4;
+          for (int component = 0; component < 4; ++component)
+            out[i*4+component] = qfloat16(float(above[sample+component])*(1-t)+float(below[sample+component])*t);
         }
       }
-      p.drawImage(QRect(x,seam,width,growth),band);
-      return;
-    }
-    for (int i = 0; i < width; ++i) {
-      QLinearGradient gradient(0, seam, 0, seam + growth);
-      gradient.setColorAt(0, initial.pixelColor(x + i, seam - 1));
-      gradient.setColorAt(1, initial.pixelColor(x + i, seam));
-      p.fillRect(QRect(x + i, seam, 1, growth), gradient);
+      p.drawImage(QRect(x,y+seam,width,extra),band);
+    } else {
+      for (int i = 0; i < width; ++i) {
+        QLinearGradient gradient(0,y+seam,0,y+seam+extra);
+        gradient.setColorAt(0,source.pixelColor(rect.x()+i,rect.y()+seam-1));
+        gradient.setColorAt(1,source.pixelColor(rect.x()+i,rect.y()+seam));
+        p.fillRect(QRect(x+i,y+seam,1,extra),gradient);
+      }
     }
   };
-  sidebar(0, c.x(), m_layout.leftSeam);
-  sidebar(c.right() + 1, initial.width() - c.right() - 1, m_layout.rightSeam);
-  p.drawImage(QRect(0, 0, initial.width(), c.y()), initial,
-              QRect(0, 0, initial.width(), c.y()));
-  const int footer = initial.height() - c.bottom() - 1;
-  p.drawImage(QRect(0, size().height() - footer, initial.width(), footer),
-              initial, QRect(0, c.bottom() + 1, initial.width(), footer));
+  // Initial fixed sidebars retain their original geometry and sources.
+  const auto original = m_initialContent;
+  expand(initial, {0,c.y(),original.x(),c.height()}, 0,c.y(),growth,
+         m_layout.leftSeam < 0 ? -1 : m_layout.leftSeam-c.y(), m_layout.leftTiled);
+  expand(initial, {original.right()+1,c.y(),initial.width()-original.right()-1,c.height()},
+         original.right()+1,c.y(),growth,
+         m_layout.rightSeam < 0 ? -1 : m_layout.rightSeam-c.y(), m_layout.rightTiled);
+  for (const auto &side : m_pinnedSides) {
+    // Pre-pin document rows + one pinned viewport; expand only the background
+    // below/between them. No Assignees/Labels/Projects rows are discarded.
+    p.drawImage(side.rect.x(),c.y()+side.prefixY-m_layout.minimumY,side.prefix[channel]);
+    expand(side.image[channel],side.image[channel].rect(),side.rect.x(),
+           c.y()+side.documentY+side.sourceTop-m_layout.minimumY,
+           m_layout.maximumY-side.documentY,side.seam,false,side.fill[channel]);
+  }
+  p.drawImage(QRect(0,0,initial.width(),c.y()),initial,QRect(0,0,initial.width(),c.y()));
+  const int footer = initial.height()-c.bottom()-1;
+  p.drawImage(QRect(0,size().height()-footer,initial.width(),footer),initial,
+              QRect(0,c.bottom()+1,initial.width(),footer));
   for (const auto &strip : strips)
-    p.drawImage(c.x(), c.y() + strip.y - m_layout.minimumY, strip.image);
+    p.drawImage(c.x(),c.y()+strip.y-m_layout.minimumY,strip.image);
+  if(m_bottomOcclusion)
+    p.drawImage(c.x(),c.y()+c.height()+growth-m_bottomOcclusion,m_bottomTail[channel]);
 }
 QImage ScrollStitcher::image() const {
   if (empty())

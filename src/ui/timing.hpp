@@ -16,7 +16,7 @@ inline bool timingEnabled() {
     return qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING") || qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING_FILE");
 }
 
-inline void traceTiming(const QString& event, qint64 elapsedMs = -1) {
+inline void traceTiming(const QString& event, qint64 elapsedMs = -1, qint64 elapsedUs = -1) {
     if (!timingEnabled())
         return;
     const auto monotonicUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -27,6 +27,8 @@ inline void traceTiming(const QString& event, qint64 elapsedMs = -1) {
                        .arg(monotonicUs);
     if (elapsedMs >= 0)
         line += QStringLiteral(" elapsed_ms=%1").arg(elapsedMs);
+    if (elapsedUs >= 0)
+        line += QStringLiteral(" elapsed_us=%1").arg(elapsedUs);
     line += QLatin1Char('\n');
     const QString path = qEnvironmentVariable("HYPRCAPTURE_TIMING_FILE");
     if (!path.isEmpty()) {
@@ -45,8 +47,10 @@ class ScopedUiTiming {
             m_started = std::chrono::steady_clock::now();
     }
     ~ScopedUiTiming() {
-        if (m_enabled)
-            traceTiming(m_event, std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - m_started).count());
+        if (m_enabled) {
+            const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - m_started).count();
+            traceTiming(m_event, us / 1000, us);
+        }
     }
   private:
     QString m_event;

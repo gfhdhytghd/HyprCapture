@@ -4,6 +4,7 @@
 #include <string>
 
 namespace hyprcapture {
+void stopRecordingForSessionLock();
 
 struct LaunchResult;
 

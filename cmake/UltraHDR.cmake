@@ -1,6 +1,6 @@
 # Keep gain-map HEIF support private: released system libheif lacks tmap.
-# Offline packagers can supply FETCHCONTENT_SOURCE_DIR_ULTRAHDR, or a
-# gain-map-enabled libuhdr >= 2 through pkg-config.
+# Offline packagers can supply FETCHCONTENT_SOURCE_DIR_ULTRAHDR plus a
+# checksum-checked HYPRCAPTURE_LIBHEIF_URL archive, or a patched system libuhdr.
 option(HYPRCAPTURE_USE_SYSTEM_ULTRAHDR "Use a packager-provided libuhdr with the HEIC matrix/alpha fixes" OFF)
 if(HYPRCAPTURE_USE_SYSTEM_ULTRAHDR)
   pkg_check_modules(ULTRAHDR REQUIRED IMPORTED_TARGET libuhdr>=2.0.2)
@@ -14,9 +14,15 @@ else()
   function(hyprcapture_build_ultrahdr)
     set(BUILD_SHARED_LIBS OFF)
     set(CMAKE_AUTOMOC OFF)
-    set(UHDR_BUILD_DEPS ON)
+    # Resolve JPEG before upstream narrows library suffixes to static archives.
+    find_package(JPEG REQUIRED)
+    set(UHDR_BUILD_DEPS OFF)
+    set(HYPRCAPTURE_BUILD_HEIF ON)
     set(UHDR_BUILD_EXAMPLES OFF)
     set(UHDR_BUILD_TESTS OFF)
+    set(UHDR_BUILD_BENCHMARK OFF)
+    set(UHDR_BUILD_FUZZERS OFF)
+    unset(UHDR_SANITIZE_OPTIONS)
     set(UHDR_ENABLE_INSTALL OFF)
     set(UHDR_ENABLE_HEIF ON)
     set(UHDR_WRITE_ISO ON)

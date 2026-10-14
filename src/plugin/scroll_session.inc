@@ -109,6 +109,7 @@ bool scrollTargetAlive(ScrollSession &s) {
   return scrollContains(monitorRect(s.monitor), s.target);
 }
 void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
+  if (sessionLocked()) return;
   auto window = s.window
                     ? s.window
                     : Desktop::viewState()->hitTest().windowAt(
@@ -154,13 +155,15 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
         input.event.source, input.event.relativeDirection);
     g_pSeatManager->sendPointerFrame();
   }
-  // Keep pointer focus through incidental motion during a touchpad gesture.
-  // Clicks and motion outside the capture restore normal overlay hit testing.
+  // Keep pointer focus through a touchpad gesture: restoring the overlay after
+  // every event splits the gesture. Clicks and motion outside the capture
+  // restore overlay hit testing, and a session lock stops the scroll session.
 }
 void scrollInput(ScrollSession &s, ScrollInput input) {
-  if (s.failed || s.paused)
+  if (sessionLocked() || s.failed || s.paused)
     return;
   if (!s.active) {
+    traceTiming("scroll.input_begin");
     s.active = true;
     s.started = Time::steadyNow();
     scrollNotify(s, {{"event", "begin"}});
@@ -177,6 +180,7 @@ void scrollInput(ScrollSession &s, ScrollInput input) {
     scrollDeliver(s, input);
 }
 int scrollControlReadable(int fd, uint32_t mask, void *data) {
+  if (sessionLocked()) return 0;
   auto &s = *static_cast<ScrollSession *>(data);
   if (mask & (WL_EVENT_HANGUP | WL_EVENT_ERROR)) {
     s.failed = true;
@@ -217,6 +221,7 @@ int scrollControlReadable(int fd, uint32_t mask, void *data) {
       if (type == "baseline") {
         if (!s.baseline || s.released)
           continue;
+        traceTiming("scroll.baseline_ack");
         s.released = true;
         if (!s.pending.empty()) {
           s.draining = true;
@@ -295,6 +300,7 @@ int scrollControlReadable(int fd, uint32_t mask, void *data) {
   return 0;
 }
 void scrollTick(SP<CEventLoopTimer> timer) {
+  if (sessionLocked()) { stopScrollSession(); return; }
   auto *s = g_scrollSession.get();
   if (!s || s->timer != timer)
     return;
@@ -352,6 +358,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     glPixelStorei(GL_PACK_ALIGNMENT, previousAlignment);
   };
   LinearCaptureScope linearCapture;
+  ScopedTiming tickTiming("scroll.tick");
   auto &pbo = s->pbo;
   if (auto ready = takeReadyWindowStreamPboFrames(pbo)) {
     auto &f = ready->frame;
@@ -382,6 +389,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
       f.metadata.stride = raw.width * 4;
       f.metadata.payloadBytes = f.rgba.size();
     }
+    traceTiming(std::format("scroll.submit seq={} hdr={} bytes={}", f.metadata.sequence, s->hdr, f.metadata.payloadBytes));
     if (s->sender->submit(f.metadata, std::move(f.rgba)))
       s->baseline = true;
   }
@@ -390,6 +398,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     restore();
     return;
   }
+  traceTiming(std::format("scroll.capture_begin seq={} hdr={}", s->sequence + 1, s->hdr));
   const auto timeNs = static_cast<uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           Time::steadyNow().time_since_epoch())
@@ -479,6 +488,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                                  .stride = uint32_t(width * 4),
                                  .format = hdr ? WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR : WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN,
                                  .payloadBytes = uint64_t(width) * height * (hdr ? 12 : 4)};
+  traceTiming(std::format("scroll.readback_issue seq={} hdr={} bytes={}", meta.sequence, hdr, meta.payloadBytes));
   if (pbo.bytes != meta.payloadBytes || !issueWindowStreamPboReadback(pbo, meta, s->id, *readFramebuffer, cropX,
                                     cropTop, artifact, artifact, hdr ? pbo.framebuffer.get() : nullptr))
     s->failed = true;
@@ -487,6 +497,8 @@ void scrollTick(SP<CEventLoopTimer> timer) {
 } // namespace
 
 LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
+  ScopedTiming timing("scroll.request_setup");
+  if (sessionLocked()) return {.success = false, .error = "session locked"};
   const auto raw = readPrivateRequestFile(path);
   if (!raw || g_scrollSession || !g_pEventLoopManager || !g_pSeatManager)
     return {.success = false, .error = "scroll session unavailable"};
@@ -563,14 +575,15 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
     auto *ptr = s.get();
     if (s->window)
       s->unmap = s->window->m_events.unmap.listen([ptr] {
+        if (sessionLocked()) return;
         ptr->paused = true;
         scrollNotify(*ptr, {{"event", "stopped"},
                             {"reason", "Target closed; finish or cancel"}});
       });
     s->button = Event::bus()->m_events.input.mouse.button.listen(
         [ptr](IPointer::SButtonEvent, Event::SCallbackInfo &) {
-          // A scroll frame keeps target focus until the receiver consumes it.
-          // A later click must re-hit-test the annotation layer first.
+          if (sessionLocked()) return;
+          // Re-hit-test the annotation layer before a later click.
           if (ptr->active && !ptr->replaying && !ptr->failed) {
             ptr->refocusing = true;
             g_pInputManager->simulateMouseMovement();
@@ -579,6 +592,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
         });
     s->motion = Event::bus()->m_events.input.mouse.move.listen(
         [ptr](Vector2D, Event::SCallbackInfo &info) {
+          if (sessionLocked()) return;
           if (!ptr->active || ptr->replaying || ptr->refocusing || ptr->failed ||
               ptr->paused || g_pInputManager->hasHeldButtons())
             return;
@@ -601,6 +615,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
         });
     s->axis = Event::bus()->m_events.input.mouse.axis.listen(
         [ptr](IPointer::SAxisEvent e, Event::SCallbackInfo &info) {
+          if (sessionLocked()) return;
           if (ptr->replaying || ptr->failed || ptr->paused ||
               (g_pInputManager->getModsFromAllKBs() & Input::HL_MODIFIER_CTRL) ||
               g_pInputManager->hasHeldButtons())

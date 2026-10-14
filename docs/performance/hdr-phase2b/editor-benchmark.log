@@ -1,0 +1,14 @@
+********* Start testing of InPlaceEditorTest *********
+Config: Using QtTest library 6.12.0, Qt 6.12.0 (x86_64-little_endian-lp64 shared (dynamic) release build; by GCC 16.2.1 20260810), arch unknown
+PASS   : InPlaceEditorTest::initTestCase()
+QWARN  : InPlaceEditorTest::hdrEditorCompositionBenchmark() layershellqt: QWidgetWindow(0x558b2d2a1ad0, name="CaptureOverlayClassWindow") is not a wayland window. Not creating zwlr_layer_surface
+trial,sdr_render_ms,hdr_render_ms,editor_begin_ms
+0,60.974,56.006,51.750
+1,37.448,52.185,38.473
+2,37.456,48.001,38.442
+3,43.756,48.341,40.494
+4,39.988,46.318,38.026
+PASS   : InPlaceEditorTest::hdrEditorCompositionBenchmark()
+PASS   : InPlaceEditorTest::cleanupTestCase()
+Totals: 3 passed, 0 failed, 0 skipped, 0 blacklisted, 2333ms
+********* Finished testing of InPlaceEditorTest *********
