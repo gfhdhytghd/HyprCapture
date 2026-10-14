@@ -78,7 +78,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
     export HOME="$TMPDIR/hyprcapture-test-home"
     mkdir -m 700 -p "$HOME"
     export QT_QPA_PLATFORM=offscreen
-    export HYPRCAPTURE_TEST_HOME_ROOT="$PWD"
+    export HYPRCAPTURE_TEST_HOME="$PWD"
   '';
 
   meta = {
