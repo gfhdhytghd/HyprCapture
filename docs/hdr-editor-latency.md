@@ -44,7 +44,7 @@
 
 Release + BUILD_TESTING，HEIC OFF：完整构建通过；最后一轮 CTest 注册 48 项，47 项通过，1 项 scroll-live 跳过（48.02s）。新增测试涵盖被阻塞的 HDR worker 下编辑器可用、SDR 不计算 HDR、冻结快照 copy-on-write、过期任务丢弃、HDR 导出等待、关闭不 join，以及 real-background 中高光/负通道/透明和半透明前景的已知浮点结果。HEIC OFF 构建不能证明 HEIC 编码；完整编码由用户的 full build 验证。
 
-现场脚本使用新目录 `/home/wilf/.cache/hyprcapture-hdr-phase2b-20261013-final/`：`activate-before.sh`（与 Phase 1 副本 SHA 一致的原同步 helper）、`activate-after.sh`（2A + 2B）、`activate-cpu.sh`（关闭 monitor FP16，隔离 2B）、`restore.sh`。只切换 helper 与独立 timing 路径，不 unload/load 插件。保存原 helper/timing/timing_file，激活前验证二进制 SHA 与注册 handle。若在线插件被用户更换，需在新目录重新 prepare。
+现场脚本使用新目录 `~/.cache/hyprcapture-hdr-phase2b-20261013-final/`：`activate-before.sh`（与 Phase 1 副本 SHA 一致的原同步 helper）、`activate-after.sh`（2A + 2B）、`activate-cpu.sh`（关闭 monitor FP16，隔离 2B）、`restore.sh`。只切换 helper 与独立 timing 路径，不 unload/load 插件。保存原 helper/timing/timing_file，激活前验证二进制 SHA 与注册 handle。若在线插件被用户更换，需在新目录重新 prepare。
 
 关闭 overlay 后运行 `activate-before.sh` 或 `activate-after.sh`，随后在 repo 根目录运行：
 

@@ -633,7 +633,8 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
       mark.end();
       QWidget* top = window(); top->winId();
       if (!m_hdrPreviewBackdrop) m_hdrPreviewBackdrop = std::make_unique<HdrBackdrop>(top->windowHandle(), true);
-      if (m_hdrPreviewBackdrop->setImage(hdrPreview, QRect(m_preview->mapTo(top, QPoint{}), m_preview->size()), 203)) m_preview->clear();
+      m_hdrPreviewBackdrop->setReadyCallback([this](bool ready) { if (ready) m_preview->clear(); });
+      if (m_hdrPreviewBackdrop->setImage(hdrPreview, QRect(m_preview->mapTo(top, QPoint{}), m_preview->size()), 203) && m_hdrPreviewBackdrop->ready()) m_preview->clear();
     }
     emit progress(QSize(layout.frameSize.width(), layout.outputHeight()),
                   captures);

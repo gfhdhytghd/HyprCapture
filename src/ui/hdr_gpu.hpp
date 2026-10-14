@@ -19,6 +19,8 @@ class HdrUpload {
 public:
   enum class State { Pending, Ready, Failed };
   static void prewarm();
+  static void setMainDevice(uint64_t device);
+  static int openRenderNode();
   static std::shared_ptr<HdrUpload> request(const QImage &,
                                             float referenceNits);
   State state() const;
@@ -28,6 +30,11 @@ public:
   // Deterministic stalled-driver injection, compiled only in test builds.
   static std::shared_ptr<HdrUpload> pendingForTest(const QImage &);
   void failForTest();
+  static bool rendererStartedForTest();
+  static bool gpuSupportedForTest();
+  static void forceNonLinearForTest();
+  static bool allocationFallbackForTest();
+  static unsigned nonLinearFallbacksForTest();
 #endif
   struct Impl;
 

@@ -69,7 +69,7 @@
   "original_plugin_sha256": "88c6d02ac2edfdcfcc3f438cbd24fa0dca71af13b991459a7b5aa3d04cf391f1",
   "active_plugin_handle": "560cf46017c0",
   "all_identified_module_mappings": [
-    "/home/wilf/data/issue-worktrees/hyprcapture-sticky/build-sticky/libhyprcapture.so",
+    "~/data/issue-worktrees/hyprcapture-sticky/build-sticky/libhyprcapture.so",
     "/tmp/claude-1000/-home-wilf-data-hyprland-plugins/a6543793-e8bf-47a1-8f97-56a68d358a1b/scratchpad/hc-touchpad.so"
   ],
   "new_plugin_sha256": "1505490680941c1e7ad7e0f36399ba55fb9f2cbc71997f044619a7bae800b632",

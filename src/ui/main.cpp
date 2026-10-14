@@ -812,12 +812,9 @@ int main(int argc, char** argv) {
     LayerShellQt::Shell::useLayerShell();
 #endif
 
-    if (hasArgument(argc, argv, "--session-json-stdin") || hasArgument(argc, argv, "--session-json-file"))
-        hyprcapture::ui::HdrBackdrop::prewarm();
     hyprcapture::ui::traceTiming(QStringLiteral("ui.entry"));
     hyprcapture::ui::SessionLockApplication app(argc, argv);
     QApplication::setApplicationName("hyprcapture-ui");
-    hyprcapture::ui::HdrBackdrop::prewarmWayland();
     hyprcapture::ui::traceTiming(QStringLiteral("ui.app_ready"));
 
     QCommandLineParser parser;

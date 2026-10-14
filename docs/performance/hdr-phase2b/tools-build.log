@@ -2,7 +2,7 @@
 [ 20%] Automatic MOC for target editor-background-benchmark
 [ 20%] Built target editor-background-benchmark_autogen
 [ 40%] Building CXX object CMakeFiles/editor-background-benchmark.dir/editor-background-benchmark_autogen/mocs_compilation.cpp.o
-[ 60%] Building CXX object CMakeFiles/editor-background-benchmark.dir/home/wilf/data/issue-worktrees/hyprcapture-hdr-perf/src/ui/hdr_image.cpp.o
+[ 60%] Building CXX object CMakeFiles/editor-background-benchmark.dir/<home>/data/issue-worktrees/hyprcapture-hdr-perf/src/ui/hdr_image.cpp.o
 [ 80%] Building CXX object CMakeFiles/editor-background-benchmark.dir/editor-background-benchmark.cpp.o
 [100%] Linking CXX executable editor-background-benchmark
 [100%] Built target editor-background-benchmark

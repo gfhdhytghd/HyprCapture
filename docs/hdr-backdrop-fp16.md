@@ -32,6 +32,6 @@ GPU 导出后经 EGL 再导入读回，与真实 `hdrToPq10` 比较：80/203/252
 
 ## 现场切换准备
 
-已准备 `/home/wilf/.cache/hyprcapture-hdr-phase2a-20261013-final/` 的 SHA 校验副本及脚本：`activate-before.sh`（原 helper）、`activate-cpu.sh`（新 helper 禁用 FP16）、`activate-after.sh`（启用 FP16）、`restore.sh`（还原准备时的 helper）。脚本仅切换 helper，不替换 compositor 插件或修改插件计时配置；此阶段尚未执行。`state.json` 保存原设置与副本哈希。
+已准备 `~/.cache/hyprcapture-hdr-phase2a-20261013-final/` 的 SHA 校验副本及脚本：`activate-before.sh`（原 helper）、`activate-cpu.sh`（新 helper 禁用 FP16）、`activate-after.sh`（启用 FP16）、`restore.sh`（还原准备时的 helper）。脚本仅切换 helper，不替换 compositor 插件或修改插件计时配置；此阶段尚未执行。`state.json` 保存原设置与副本哈希。
 
 测量需要区分原 helper 的启动基线与新 helper 的 instrumented PQ baseline。`hdr.presented` 使用 clock=1 的 CLOCK_MONOTONIC presentation timestamp，不能以日志投递时间代替；map/paint 也不能代替屏幕呈现。WAYLAND_DEBUG 的父子首个 buffer commit 检查单独进行，不混入性能样本。Phase 2B 将按其独立授权继续现场验证。

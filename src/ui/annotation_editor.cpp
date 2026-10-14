@@ -405,9 +405,10 @@ protected:
         if (!backdrop && window()->windowHandle() && window()->windowHandle()->isExposed())
             backdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(window()->windowHandle(), true);
         if (backdrop) {
-            if (upload) { nativeReady = backdrop->setImage(ramp, destination, 203); upload = false; }
+            backdrop->setReadyCallback([this](bool ready) { nativeReady = ready; update(); });
+            if (upload) { nativeReady = backdrop->setImage(ramp, destination, 203) && backdrop->ready(); upload = false; }
             backdrop->setGeometry(destination);
-            backdrop->setVisible(isVisible() && nativeReady);
+            backdrop->setVisible(isVisible());
         }
         setProperty("hdrPreviewAvailable", nativeReady);
         if (!nativeReady) {

@@ -54,9 +54,16 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  int fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
-  if (fd < 0)
+  if (!ui::HdrUpload::allocationFallbackForTest()) {
+    fprintf(stderr, "FP16 allocation fallback failed\n");
+    return 1;
+  }
+  puts("FP16 allocation fallback: driver rejection retried with RENDERING");
+  int fd = ui::HdrUpload::openRenderNode();
+  if (fd < 0) {
+    fprintf(stderr, "No accessible DRM render node; GPU test unsupported\n");
     return 77;
+  }
   auto *gbm = gbm_create_device(fd);
   if (!gbm)
     return 77;
@@ -83,6 +90,7 @@ int main(int argc, char **argv) {
   auto ctx = eglCreateContext(display, config, EGL_NO_CONTEXT, ctxAttrs);
   if (!eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, ctx))
     return 77;
+  ui::HdrUpload::forceNonLinearForTest();
   auto original = fixture();
   for (float reference : {80.F, 203.F, 252.F})
     for (bool premultiplied : {false, true}) {
@@ -170,6 +178,10 @@ int main(int argc, char **argv) {
       glDeleteTextures(1, &texture);
       destroy(display, eglImage);
     }
+  if (!ui::HdrUpload::nonLinearFallbacksForTest()) {
+    fprintf(stderr, "non-linear allocation fallback was not exercised\n");
+    return 1;
+  }
   // Cancellation does not wait for driver execution; only weak queued jobs
   // remain.
   auto image = original.scaled(2880, 1800);

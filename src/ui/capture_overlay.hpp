@@ -195,9 +195,13 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     std::function<QImage()> windowResultRenderer(const WindowArtifact& window, bool hdr) const;
     std::function<QImage()> hdrResultRenderer() const;
     void queueHdrEditBase();
+    void startHdrEditBase();
     void invalidateHdrEditBase();
     quint64 m_hdrBaseGeneration = 0;
     bool m_hdrBasePending = false;
+    bool m_hdrBaseRunning = false;
+    bool m_hdrBaseFailed = false;
+    std::function<QImage()> m_hdrBaseLatest;
     bool m_firstEditorPaintPending = false;
     bool m_hdrExportPending = false;
     std::shared_ptr<std::atomic_bool> m_hdrBaseCancelled;

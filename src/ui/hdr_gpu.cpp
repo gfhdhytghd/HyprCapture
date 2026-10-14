@@ -17,11 +17,115 @@
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
 // clang-format on
+#include "linux-dmabuf-client.h"
+#include <cstring>
 #include <drm_fourcc.h>
 #include <fcntl.h>
 #include <gbm.h>
+#include <sys/stat.h>
+#include <wayland-client.h>
+#include <xf86drm.h>
 #endif
 namespace hyprcapture::ui {
+namespace {
+std::atomic<uint64_t> mainDevice{0};
+#ifdef HYPRCAPTURE_HDR_TESTING
+std::atomic_bool rendererStarted{false}, forceNonLinear{false};
+std::atomic_uint nonLinearFallbacks{0};
+#endif
+} // namespace
+void HdrUpload::setMainDevice(uint64_t device) { mainDevice.store(device); }
+int HdrUpload::openRenderNode() {
+#ifdef HYPRCAPTURE_HDR_DMABUF
+  if (!mainDevice.load()) {
+    // Query on a private connection: renderer initialization runs off the UI
+    // thread and does not create Qt's HDR globals or an event-drain timer.
+    struct Feedback {
+      zwp_linux_dmabuf_v1 *dma = nullptr;
+      zwp_linux_dmabuf_feedback_v1 *feedback = nullptr;
+      bool done = false;
+    } state;
+    if (auto *display = wl_display_connect(nullptr)) {
+      auto *registry = wl_display_get_registry(display);
+      static const wl_registry_listener listener{
+          [](void *p, wl_registry *r, uint32_t id, const char *name,
+             uint32_t version) {
+            auto &s = *static_cast<Feedback *>(p);
+            if (strcmp(name, "zwp_linux_dmabuf_v1") || version < 4 || s.dma)
+              return;
+            s.dma = static_cast<zwp_linux_dmabuf_v1 *>(
+                wl_registry_bind(r, id, &zwp_linux_dmabuf_v1_interface, 4));
+            s.feedback = zwp_linux_dmabuf_v1_get_default_feedback(s.dma);
+            static const zwp_linux_dmabuf_feedback_v1_listener feedback{
+                [](void *p, zwp_linux_dmabuf_feedback_v1 *) {
+                  static_cast<Feedback *>(p)->done = true;
+                },
+                [](void *, zwp_linux_dmabuf_feedback_v1 *, int32_t fd,
+                   uint32_t) { close(fd); },
+                [](void *, zwp_linux_dmabuf_feedback_v1 *, wl_array *a) {
+                  if (a->size == sizeof(dev_t)) {
+                    dev_t device;
+                    memcpy(&device, a->data, sizeof(device));
+                    HdrUpload::setMainDevice(device);
+                  }
+                },
+                [](void *, zwp_linux_dmabuf_feedback_v1 *) {},
+                [](void *, zwp_linux_dmabuf_feedback_v1 *, wl_array *) {},
+                [](void *, zwp_linux_dmabuf_feedback_v1 *, wl_array *) {},
+                [](void *, zwp_linux_dmabuf_feedback_v1 *, uint32_t) {}};
+            zwp_linux_dmabuf_feedback_v1_add_listener(s.feedback, &feedback, p);
+          },
+          [](void *, wl_registry *, uint32_t) {}};
+      wl_registry_add_listener(registry, &listener, &state);
+      if (wl_display_roundtrip(display) >= 0 && state.feedback) {
+        wl_display_flush(display);
+        while (!state.done && wl_display_dispatch(display) >= 0) {
+        }
+      }
+      if (state.feedback)
+        zwp_linux_dmabuf_feedback_v1_destroy(state.feedback);
+      if (state.dma)
+        zwp_linux_dmabuf_v1_destroy(state.dma);
+      wl_registry_destroy(registry);
+      wl_display_disconnect(display);
+    }
+  }
+  drmDevicePtr devices[64]{};
+  const int count = drmGetDevices2(0, devices, 64);
+  if (count < 0)
+    return -1;
+  const auto preferred = mainDevice.load();
+  int selected = -1;
+  // A feedback main_device may name the primary node. Match either node of
+  // the same DRM device before considering an arbitrary accessible renderer.
+  for (bool match : {true, false}) {
+    for (int i = 0; i < count; ++i) {
+      const auto *device = devices[i];
+      if (!(device->available_nodes & (1 << DRM_NODE_RENDER)))
+        continue;
+      bool same = false;
+      for (int n = 0; n < DRM_NODE_MAX; ++n) {
+        struct stat st{};
+        if ((device->available_nodes & (1 << n)) &&
+            stat(device->nodes[n], &st) == 0 &&
+            uint64_t(st.st_rdev) == preferred)
+          same = true;
+      }
+      if (match && (!preferred || !same))
+        continue;
+      selected = open(device->nodes[DRM_NODE_RENDER], O_RDWR | O_CLOEXEC);
+      if (selected >= 0)
+        break;
+    }
+    if (selected >= 0)
+      break;
+  }
+  drmFreeDevices(devices, count);
+  return selected;
+#else
+  return -1;
+#endif
+}
 HdrGpuFrame::~HdrGpuFrame() {
   if (fd >= 0)
     close(fd);
@@ -51,6 +155,22 @@ bool HdrUpload::waitUntil(
 }
 #ifdef HYPRCAPTURE_HDR_DMABUF
 namespace {
+gbm_bo *allocateFp16(gbm_device *device, int w, int h,
+                     decltype(&gbm_bo_create) create = gbm_bo_create) {
+  gbm_bo *bo = nullptr;
+#ifdef HYPRCAPTURE_HDR_TESTING
+  if (!forceNonLinear.load())
+#endif
+    bo = create(device, w, h, DRM_FORMAT_ABGR16161616F,
+                GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+  if (!bo) {
+#ifdef HYPRCAPTURE_HDR_TESTING
+    ++nonLinearFallbacks;
+#endif
+    bo = create(device, w, h, DRM_FORMAT_ABGR16161616F, GBM_BO_USE_RENDERING);
+  }
+  return bo;
+}
 struct Slot {
   gbm_bo *bo = nullptr;
   EGLImageKHR image = EGL_NO_IMAGE_KHR;
@@ -114,7 +234,7 @@ class Renderer {
   }
   void initialize() {
     ScopedUiTiming timing("hdr.gpu.initialize");
-    node = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+    node = HdrUpload::openRenderNode();
     if (node < 0)
       return;
     device = gbm_create_device(node);
@@ -160,8 +280,7 @@ class Renderer {
     auto s = std::make_unique<Slot>();
     s->width = w;
     s->height = h;
-    s->bo = gbm_bo_create(device, w, h, DRM_FORMAT_ABGR16161616F,
-                          GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+    s->bo = allocateFp16(device, w, h);
     if (!s->bo)
       return {};
     int fd = gbm_bo_get_fd(s->bo);
@@ -347,6 +466,9 @@ class Renderer {
 
 public:
   Renderer() {
+#ifdef HYPRCAPTURE_HDR_TESTING
+    rendererStarted = true;
+#endif
     std::thread([this] {
       try {
         initialize();
@@ -427,6 +549,47 @@ std::shared_ptr<HdrUpload> HdrUpload::pendingForTest(const QImage &image) {
   auto s = std::make_shared<Impl>();
   s->image = image;
   return std::shared_ptr<HdrUpload>(new HdrUpload(s));
+}
+bool HdrUpload::rendererStartedForTest() { return rendererStarted.load(); }
+bool HdrUpload::gpuSupportedForTest() {
+#ifdef HYPRCAPTURE_HDR_DMABUF
+  return true;
+#else
+  return false;
+#endif
+}
+void HdrUpload::forceNonLinearForTest() {
+  nonLinearFallbacks = 0;
+  forceNonLinear = true;
+}
+bool HdrUpload::allocationFallbackForTest() {
+#ifdef HYPRCAPTURE_HDR_DMABUF
+  struct Driver {
+    int calls = 0;
+    bool valid = true;
+  } driver;
+  auto create = [](gbm_device *device, uint32_t w, uint32_t h, uint32_t format,
+                   uint32_t flags) -> gbm_bo * {
+    auto &driver = *reinterpret_cast<Driver *>(device);
+    ++driver.calls;
+    driver.valid &= w == 96 && h == 48 && format == DRM_FORMAT_ABGR16161616F;
+    if (driver.calls == 1) {
+      driver.valid &= flags == (GBM_BO_USE_RENDERING | GBM_BO_USE_LINEAR);
+      return nullptr; // the NVIDIA allocation failure
+    }
+    driver.valid &= driver.calls == 2 && flags == GBM_BO_USE_RENDERING;
+    return reinterpret_cast<gbm_bo *>(device);
+  };
+  auto *device = reinterpret_cast<gbm_device *>(&driver);
+  return allocateFp16(device, 96, 48, create) ==
+             reinterpret_cast<gbm_bo *>(device) &&
+         driver.valid && driver.calls == 2;
+#else
+  return false;
+#endif
+}
+unsigned HdrUpload::nonLinearFallbacksForTest() {
+  return nonLinearFallbacks.load();
 }
 void HdrUpload::failForTest() {
   std::lock_guard l(m->mutex);

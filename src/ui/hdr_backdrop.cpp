@@ -24,10 +24,15 @@
 #include "viewporter-client.h"
 #include <qpa/qplatformnativeinterface.h>
 #include <sys/mman.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <wayland-client.h>
 #endif
 namespace hyprcapture::ui {
+#ifdef HYPRCAPTURE_HDR_TESTING
+static unsigned globalsRequests = 0;
+unsigned HdrBackdrop::globalsRequestsForTest() { return globalsRequests; }
+#endif
 QImage hdrToPq10(const QImage &image, float *peakNits, float referenceNits) {
   if (!isHdrImage(image))
     return {};
@@ -121,6 +126,11 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
        parametric = false, luminances = false, rgb30 = false,
        perceptual = false, closed = false;
   std::set<std::pair<uint32_t, uint64_t>> modifiers;
+  struct Format {
+    uint32_t format, padding;
+    uint64_t modifier;
+  };
+  std::vector<Format> formatTable;
   struct Description {
     wp_image_description_v1 *object = nullptr;
     bool done = false, ready = false;
@@ -131,6 +141,42 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   std::map<void *, std::function<void()>> clients;
   std::map<zwp_linux_buffer_params_v1 *, std::function<void()>> pendingImports;
   QTimer *timer = nullptr;
+  wl_callback *initialSync = nullptr;
+  zwp_linux_dmabuf_feedback_v1 *dmaFeedback = nullptr;
+  bool globalsReady = false, managerDone = false;
+  std::map<void *, std::function<void()>> progress;
+  std::shared_ptr<NativeGlobals> draining;
+  void updateTimer() {
+    const bool active =
+        !clients.empty() || !buffers.empty() || !pendingImports.empty();
+    if (active && !closed) {
+      draining = shared_from_this();
+      timer->start();
+    } else {
+      timer->stop();
+      draining.reset();
+    }
+  }
+  void awaitGlobals(bool bound = false) {
+    initialSync = wl_display_sync(display);
+    wl_proxy_set_queue(reinterpret_cast<wl_proxy *>(initialSync), queue);
+    static const wl_callback_listener first{
+        [](void *p, wl_callback *c, uint32_t) {
+          auto &s = *static_cast<NativeGlobals *>(p);
+          wl_callback_destroy(c);
+          s.initialSync = nullptr;
+          s.awaitGlobals(true);
+        }};
+    static const wl_callback_listener second{
+        [](void *p, wl_callback *c, uint32_t) {
+          auto &s = *static_cast<NativeGlobals *>(p);
+          wl_callback_destroy(c);
+          s.initialSync = nullptr;
+          s.globalsReady = true;
+        }};
+    wl_callback_add_listener(initialSync, bound ? &second : &first, this);
+    wl_display_flush(display);
+  }
   bool sync(Deadline deadline) {
     if (!display || closed || std::chrono::steady_clock::now() >= deadline)
       return false;
@@ -166,6 +212,10 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   void drain() {
     if (display && !closed)
       wl_display_dispatch_queue_pending(display, queue);
+    const auto callbacks = progress;
+    for (const auto &[key, f] : callbacks)
+      if (progress.contains(key))
+        f();
     std::erase_if(buffers, [](const auto &b) {
       if (!b->retired || b->busy)
         return false;
@@ -173,6 +223,7 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
         wl_buffer_destroy(b->buffer);
       return true;
     });
+    updateTimer();
   }
   void retire(NativeBuffer *b) {
     if (!b)
@@ -221,10 +272,12 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
             s.bt2020 |= v == WP_COLOR_MANAGER_V1_PRIMARIES_BT2020;
             s.srgb |= v == WP_COLOR_MANAGER_V1_PRIMARIES_SRGB;
           },
-          [](void *, wp_color_manager_v1 *) {}};
+          [](void *p, wp_color_manager_v1 *) {
+            static_cast<NativeGlobals *>(p)->managerDone = true;
+          }};
       wp_color_manager_v1_add_listener(s.manager, &l, p);
     } else if (!strcmp(name, "zwp_linux_dmabuf_v1") && v >= 3) {
-      BIND(dma, zwp_linux_dmabuf_v1, 3);
+      BIND(dma, zwp_linux_dmabuf_v1, 4);
       static const zwp_linux_dmabuf_v1_listener l{
           [](void *, zwp_linux_dmabuf_v1 *, uint32_t) {},
           [](void *d, zwp_linux_dmabuf_v1 *, uint32_t f, uint32_t hi,
@@ -233,6 +286,45 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
                 {f, (uint64_t(hi) << 32) | lo});
           }};
       zwp_linux_dmabuf_v1_add_listener(s.dma, &l, p);
+      if (v >= 4) {
+        s.dmaFeedback = zwp_linux_dmabuf_v1_get_default_feedback(s.dma);
+        static const zwp_linux_dmabuf_feedback_v1_listener feedback{
+            [](void *, zwp_linux_dmabuf_feedback_v1 *) {},
+            [](void *p, zwp_linux_dmabuf_feedback_v1 *, int32_t fd,
+               uint32_t size) {
+              auto &s = *static_cast<NativeGlobals *>(p);
+              if (size && size % sizeof(Format) == 0) {
+                void *data = mmap(nullptr, size, PROT_READ, MAP_PRIVATE, fd, 0);
+                if (data != MAP_FAILED) {
+                  const auto *formats = static_cast<const Format *>(data);
+                  s.formatTable.assign(formats,
+                                       formats + size / sizeof(Format));
+                  munmap(data, size);
+                }
+              }
+              ::close(fd);
+            },
+            [](void *, zwp_linux_dmabuf_feedback_v1 *, wl_array *a) {
+              if (a->size == sizeof(dev_t)) {
+                dev_t device;
+                memcpy(&device, a->data, sizeof(device));
+                HdrUpload::setMainDevice(device);
+              }
+            },
+            [](void *, zwp_linux_dmabuf_feedback_v1 *) {},
+            [](void *, zwp_linux_dmabuf_feedback_v1 *, wl_array *) {},
+            [](void *p, zwp_linux_dmabuf_feedback_v1 *, wl_array *a) {
+              auto &s = *static_cast<NativeGlobals *>(p);
+              const auto *indices = static_cast<const uint16_t *>(a->data);
+              for (size_t i = 0; i < a->size / sizeof(uint16_t); ++i)
+                if (indices[i] < s.formatTable.size()) {
+                  const auto &f = s.formatTable[indices[i]];
+                  s.modifiers.insert({f.format, f.modifier});
+                }
+            },
+            [](void *, zwp_linux_dmabuf_feedback_v1 *, uint32_t) {}};
+        zwp_linux_dmabuf_feedback_v1_add_listener(s.dmaFeedback, &feedback, p);
+      }
     } else if (!strcmp(name, "wp_presentation")) {
       BIND(presentation, wp_presentation, 1);
       static const wp_presentation_listener l{
@@ -249,7 +341,10 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   }
   bool fp16() const {
     return common() && dma && linear && bt2020 &&
-           modifiers.contains({WL_SHM_FORMAT_ABGR16161616F, 0}) &&
+           std::ranges::any_of(modifiers,
+                               [](const auto &m) {
+                                 return m.first == WL_SHM_FORMAT_ABGR16161616F;
+                               }) &&
            qEnvironmentVariable("HYPRCAPTURE_HDR_DMABUF") != "0";
   }
   wp_image_description_v1 *description(bool fp16, float peak, float reference,
@@ -306,6 +401,7 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   void close() {
     if (closed)
       return;
+    closed = true;
     // Destruction happens before Qt tears down its wl_display. Retired busy
     // BOs are never recycled without release, even during application shutdown.
     if (timer)
@@ -329,6 +425,10 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
     descriptions.clear();
     if (presentation)
       wp_presentation_destroy(presentation);
+    if (initialSync)
+      wl_callback_destroy(initialSync);
+    if (dmaFeedback)
+      zwp_linux_dmabuf_feedback_v1_destroy(dmaFeedback);
     if (dma)
       zwp_linux_dmabuf_v1_destroy(dma);
     if (manager)
@@ -345,11 +445,18 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
       wl_registry_destroy(registry);
     if (queue)
       wl_event_queue_destroy(queue);
-    closed = true;
     display = nullptr;
+    draining.reset();
   }
-  ~NativeGlobals() { close(); }
+  ~NativeGlobals() {
+    close();
+    if (timer)
+      timer->deleteLater();
+  }
   static std::shared_ptr<NativeGlobals> get() {
+#ifdef HYPRCAPTURE_HDR_TESTING
+    ++globalsRequests;
+#endif
     static std::weak_ptr<NativeGlobals> cached;
     if (auto c = cached.lock())
       return c;
@@ -368,17 +475,20 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
     static const wl_registry_listener l{global,
                                         [](void *, wl_registry *, uint32_t) {}};
     wl_registry_add_listener(c->registry, &l, c.get());
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(12);
-    c->sync(deadline);
-    c->sync(deadline);
+    c->awaitGlobals();
     c->timer = new QTimer(QCoreApplication::instance());
+    c->timer->setObjectName("hyprcaptureHdrDrain");
     c->timer->setInterval(4);
-    QObject::connect(c->timer, &QTimer::timeout, c->timer, [c] { c->drain(); });
-    c->timer->start();
+    const std::weak_ptr<NativeGlobals> weak = c;
+    QObject::connect(c->timer, &QTimer::timeout, c->timer, [weak] {
+      if (auto c = weak.lock())
+        c->drain();
+    });
     QObject::connect(QCoreApplication::instance(),
-                     &QCoreApplication::aboutToQuit, c->timer,
-                     [c] { c->close(); });
+                     &QCoreApplication::aboutToQuit, c->timer, [weak] {
+                       if (auto c = weak.lock())
+                         c->close();
+                     });
     cached = c;
     return c;
   }
@@ -386,6 +496,10 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
 } // namespace
 #endif
 struct HdrBackdrop::Impl {
+  std::function<void(bool)> completed;
+#ifdef HYPRCAPTURE_HDR_TESTING
+  bool testReady = false;
+#endif
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   std::shared_ptr<NativeGlobals> globals;
   wl_surface *surface = nullptr;
@@ -398,6 +512,49 @@ struct HdrBackdrop::Impl {
   QRect destination, clippedDestination;
   QSize imageSize;
   QPointer<QWindow> parent;
+  bool aboveParent = false, synchronized = false;
+  std::function<void()> pending;
+  QRect pendingDestination;
+  bool requestedVisible = true;
+  void activate() {
+    auto &g = *globals;
+    if (g.clients.contains(this))
+      return;
+    g.clients[this] = [this] { close(); };
+    g.progress[this] = [this] {
+      createSurface();
+      if (auto retry = pending)
+        retry();
+    };
+    g.updateTimer();
+  }
+  bool createSurface() {
+    if (surface)
+      return true;
+    if (!parent || !globals || !globals->common())
+      return false;
+    auto *native = QGuiApplication::platformNativeInterface();
+    auto *parentSurface = static_cast<wl_surface *>(
+        native->nativeResourceForWindow("surface", parent));
+    if (!parentSurface)
+      return false;
+    auto &g = *globals;
+    surface = wl_compositor_create_surface(g.compositor);
+    auto *empty = wl_compositor_create_region(g.compositor);
+    wl_surface_set_input_region(surface, empty);
+    wl_region_destroy(empty);
+    subsurface = wl_subcompositor_get_subsurface(g.subcompositor, surface,
+                                                 parentSurface);
+    if (aboveParent)
+      wl_subsurface_place_above(subsurface, parentSurface);
+    else
+      wl_subsurface_place_below(subsurface, parentSurface);
+    if (!synchronized)
+      wl_subsurface_set_desync(subsurface);
+    viewport = wp_viewporter_get_viewport(g.viewporter, surface);
+    colorSurface = wp_color_manager_v1_get_surface(g.manager, surface);
+    return true;
+  }
   void attach() {
     if (!surface || !globals || globals->closed)
       return;
@@ -438,8 +595,16 @@ struct HdrBackdrop::Impl {
     wl_display_flush(globals->display);
   }
   void close() {
-    if (!surface)
+    pending = {};
+    if (globals) {
+      globals->progress.erase(this);
+      globals->clients.erase(this);
+    }
+    if (!surface) {
+      if (globals)
+        globals->updateTimer();
       return;
+    }
     for (auto *f : feedback)
       wp_presentation_feedback_destroy(f);
     feedback.clear();
@@ -456,20 +621,19 @@ struct HdrBackdrop::Impl {
     colorSurface = nullptr;
     globals->retire(buffer);
     buffer = nullptr;
+    globals->updateTimer();
   }
   ~Impl() {
     close();
-    if (globals)
+    if (globals) {
       globals->clients.erase(this);
+      globals->progress.erase(this);
+      globals->updateTimer();
+    }
   }
 #endif
 };
 void HdrBackdrop::prewarm() { HdrUpload::prewarm(); }
-void HdrBackdrop::prewarmWayland() {
-#ifdef HYPRCAPTURE_HDR_WAYLAND
-  (void)NativeGlobals::get();
-#endif
-}
 bool HdrBackdrop::fp16Available() {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   auto g = NativeGlobals::get();
@@ -484,34 +648,43 @@ HdrBackdrop::HdrBackdrop(QWindow *parent, bool aboveParent, bool synchronized)
   if (!parent)
     return;
   m->globals = NativeGlobals::get();
-  if (!m->globals || !m->globals->common())
-    return;
-  auto *native = QGuiApplication::platformNativeInterface();
-  auto *parentSurface = static_cast<wl_surface *>(
-      native->nativeResourceForWindow("surface", parent));
-  if (!parentSurface)
+  if (!m->globals)
     return;
   m->parent = parent;
-  auto &g = *m->globals;
-  m->surface = wl_compositor_create_surface(g.compositor);
-  auto *empty = wl_compositor_create_region(g.compositor);
-  wl_surface_set_input_region(m->surface, empty);
-  wl_region_destroy(empty);
-  m->subsurface = wl_subcompositor_get_subsurface(g.subcompositor, m->surface,
-                                                  parentSurface);
-  if (aboveParent)
-    wl_subsurface_place_above(m->subsurface, parentSurface);
-  else
-    wl_subsurface_place_below(m->subsurface, parentSurface);
-  if (!synchronized)
-    wl_subsurface_set_desync(m->subsurface);
-  m->viewport = wp_viewporter_get_viewport(g.viewporter, m->surface);
-  m->colorSurface = wp_color_manager_v1_get_surface(g.manager, m->surface);
-  g.clients[m.get()] = [p = m.get()] { p->close(); };
+  m->aboveParent = aboveParent;
+  m->synchronized = synchronized;
+  m->activate();
+  m->createSurface();
 #endif
 }
 HdrBackdrop::~HdrBackdrop() = default;
+void HdrBackdrop::setReadyCallback(std::function<void(bool)> callback) {
+  m->completed = std::move(callback);
+}
+#ifdef HYPRCAPTURE_HDR_TESTING
+void HdrBackdrop::setReadyForTest(bool ready) { m->testReady = ready; }
+std::unique_ptr<HdrBackdrop> HdrBackdrop::unavailableForTest(QWindow *parent) {
+#ifdef HYPRCAPTURE_HDR_WAYLAND
+  auto backdrop = std::make_unique<HdrBackdrop>(nullptr);
+  auto g = std::make_shared<NativeGlobals>();
+  g->globalsReady = true; // registry completed without color-management support
+  g->timer = new QTimer(QCoreApplication::instance());
+  g->timer->setObjectName("hyprcaptureHdrDrain");
+  g->timer->setInterval(4);
+  backdrop->m->globals = std::move(g);
+  backdrop->m->parent = parent;
+  backdrop->m->activate();
+  return backdrop;
+#else
+  return {};
+#endif
+}
+#endif
 bool HdrBackdrop::ready() const {
+#ifdef HYPRCAPTURE_HDR_TESTING
+  if (m->testReady)
+    return true;
+#endif
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   return m->surface && m->buffer && m->descriptionReady && m->globals &&
          !m->globals->closed;
@@ -523,6 +696,11 @@ bool HdrBackdrop::setPreparedImage(
     const std::shared_ptr<const HdrGpuFrame> &frame, const QRect &destination,
     std::chrono::steady_clock::time_point deadline) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
+  if (m->globals && !m->globals->closed && !m->surface) {
+    m->activate();
+    m->globals->sync(deadline);
+    m->createSurface();
+  }
   if (!m->surface || !m->globals->fp16() || !frame || frame->fd < 0 ||
       !destination.isValid() ||
       !m->globals->modifiers.contains(
@@ -603,7 +781,7 @@ bool HdrBackdrop::setPreparedImage(
 bool HdrBackdrop::setImage(const QImage &image, const QRect &destination,
                            float reference) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
-  if (!m->surface)
+  if (!m->globals)
     return false;
 #else
   return false;
@@ -615,29 +793,65 @@ bool HdrBackdrop::setImage(const QImage &image, const QRect &destination,
 bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
                              float peak, float reference) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
-  if (!m->surface || pq.isNull() || pq.format() != QImage::Format_RGB30 ||
+  m->pending = {};
+  const auto fail = [&] {
+    setVisible(false);
+    m->descriptionReady = false;
+    m->close();
+    return false;
+  };
+  if (!m->globals || pq.isNull() || pq.format() != QImage::Format_RGB30 ||
       !destination.isValid())
-    return false;
+    return fail();
   auto &g = *m->globals;
-  if (!g.shm || !g.rgb30 || !g.pq || !g.bt2020 || g.closed)
-    return false;
-  auto *desc = g.description(false, peak, reference,
-                             std::chrono::steady_clock::now() +
-                                 std::chrono::milliseconds(12));
-  if (!desc)
-    return false;
+  if (g.closed)
+    return fail();
+  m->activate();
+  m->pendingDestination = destination;
+  const auto defer = [&] {
+    if (m->visible) {
+      m->visible = false;
+      m->attach();
+    }
+    m->descriptionReady = false;
+    m->pending = [this, pq, peak, reference] {
+      const auto destination = m->pendingDestination;
+      const bool accepted = setPqImage(pq, destination, peak, reference);
+      if (!m->pending) {
+        if (m->parent)
+          m->parent->requestUpdate();
+        if (auto callback = m->completed)
+          callback(accepted && ready());
+      }
+    };
+    wl_display_flush(g.display);
+    return true;
+  };
+  if (!g.globalsReady || (g.manager && !g.managerDone))
+    return defer();
+  if (!g.common() || !g.shm || !g.rgb30 || !g.pq || !g.bt2020 || !m->parent)
+    return fail();
+  if (!m->createSurface())
+    return defer();
+  auto *desc =
+      g.description(false, peak, reference, std::chrono::steady_clock::now());
+  if (!desc) {
+    const bool waiting = std::ranges::any_of(
+        g.descriptions, [](const auto &d) { return !d.second->done; });
+    return waiting ? defer() : fail();
+  }
   int fd = memfd_create("hyprcapture-hdr-preview", MFD_CLOEXEC);
   if (fd < 0)
-    return false;
+    return fail();
   auto size = pq.sizeInBytes();
   if (size > INT32_MAX || ftruncate(fd, size) < 0) {
     close(fd);
-    return false;
+    return fail();
   }
   void *memory = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if (memory == MAP_FAILED) {
     close(fd);
-    return false;
+    return fail();
   }
   memcpy(memory, pq.constBits(), size);
   munmap(memory, size);
@@ -654,7 +868,7 @@ bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
       m->colorSurface, desc, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
   m->imageSize = pq.size();
   m->destination = {};
-  m->visible = true;
+  m->visible = m->requestedVisible;
   traceTiming("hdr.attach_ready mode=pq");
   setGeometry(destination);
   return true;
@@ -664,6 +878,8 @@ bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
 }
 void HdrBackdrop::setGeometry(const QRect &destination) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
+  if (destination.isValid() && m->pending)
+    m->pendingDestination = destination;
   if (!m->surface || !m->parent || !destination.isValid() || m->globals->closed)
     return;
   auto clipped = destination.intersected(QRect(QPoint{}, m->parent->size()));
@@ -689,6 +905,7 @@ void HdrBackdrop::setGeometry(const QRect &destination) {
 }
 void HdrBackdrop::setVisible(bool visible) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
+  m->requestedVisible = visible;
   if (!ready() || m->visible == visible)
     return;
   m->visible = visible;

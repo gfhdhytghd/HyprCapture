@@ -53,7 +53,7 @@ HDR 接收映射 0.028 ms；HDR 缩略图 PQ 3.67 ms，不含 Wayland 上传。F
 
 **桌面实测需你执行脚本。** 本阶段没有重载/卸载插件、没有修改 Hyprland 配置。初次核对的模块是临时 `hc-touchpad.so`，而非 hyprpm 缓存；结束时另一个同名二进制也出现于映射中，注册 handle 未变，脚本保存已知原模块并校验 handle/哈希。不能把本工作树构建当作现有插件实测。
 
-请在可以短暂切换插件时，先查看 [`state.json`](/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/state.json)、[`activate.sh`](/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/activate.sh)、[`restore.sh`](/home/wilf/.cache/hyprcapture-hdr-phase1-20261013-final/restore.sh)，关闭覆盖层后自行运行 activate；测完自行 restore。它们保存原二进制和 helper/timing 设置，不编辑配置文件。当前状态若已变化，重新 prepare。
+请在可以短暂切换插件时，先查看 [`state.json`](~/.cache/hyprcapture-hdr-phase1-20261013-final/state.json)、[`activate.sh`](~/.cache/hyprcapture-hdr-phase1-20261013-final/activate.sh)、[`restore.sh`](~/.cache/hyprcapture-hdr-phase1-20261013-final/restore.sh)，关闭覆盖层后自行运行 activate；测完自行 restore。它们保存原二进制和 helper/timing 设置，不编辑配置文件。当前状态若已变化，重新 prepare。
 
 ```sh
 tools/hdr-latency/measure-live.py --out "$HOME/.cache/hyprcapture-hdr-phase1-20261013-final" --record hdr-window --seconds 30
