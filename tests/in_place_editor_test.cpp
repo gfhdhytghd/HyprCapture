@@ -45,9 +45,10 @@ QString writeArtifact(const QImage& image) {
     if (path.isEmpty() || !file.open(QIODevice::WriteOnly | QIODevice::NewOnly) ||
         !file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner))
         return {};
-    const QImage rgba = image.convertToFormat(QImage::Format_RGBA8888);
+    const bool linear = hyprcapture::ui::isHdrImage(image);
+    const QImage rgba = image.convertToFormat(linear ? QImage::Format_RGBA16FPx4 : QImage::Format_RGBA8888);
     for (int y = 0; y < rgba.height(); ++y) {
-        const auto bytes = static_cast<qint64>(rgba.width()) * 4;
+        const auto bytes = static_cast<qint64>(rgba.width()) * (linear ? 8 : 4);
         if (file.write(reinterpret_cast<const char*>(rgba.constScanLine(y)), bytes) != bytes) {
             file.remove();
             return {};
@@ -480,6 +481,101 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(finishing.count(), 0);
         QVERIFY(QDir(output.path()).entryList(QDir::Files).isEmpty());
         QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("clipboard-before-editor"));
+    }
+
+    void transparentClientKeepsRealBackground_data() {
+        QTest::addColumn<bool>("fusion");
+        QTest::addColumn<bool>("linear");
+        QTest::newRow("window-sdr") << false << false;
+        QTest::newRow("fusion-sdr") << true << false;
+        QTest::newRow("window-linear") << false << true;
+        QTest::newRow("fusion-linear") << true << true;
+    }
+    void transparentClientKeepsRealBackground() {
+        // Issue #34: a terminal with background-opacity 0 is alpha 0 nearly
+        // everywhere, including its bottom rows. The independent real
+        // background must show through, not the monitor snapshot.
+        QFETCH(bool, fusion);
+        QFETCH(bool, linear);
+        QTemporaryDir output;
+        QVERIFY(output.isValid());
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = fusion ? hyprcapture::CaptureMode::Region : hyprcapture::CaptureMode::Window;
+        defaults.fushionMode = fusion;
+        defaults.windowBackground = hyprcapture::WindowBackground::Real;
+        defaults.inPlaceEditToolbar = true;
+        defaults.save = true;
+        defaults.saveDir = output.path().toStdString();
+        defaults.clipboard = false;
+        defaults.showThumbnail = false;
+        defaults.screenshotNotification = false;
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults).toStdString());
+        QVERIFY(session);
+        auto& window = session->windows.front();
+        QImage terminal(kWindowPixels, QImage::Format_RGBA8888);
+        terminal.fill(Qt::transparent);
+        const QRect glyphs(16, 16, 60, 12);
+        QPainter(&terminal).fillRect(glyphs, QColor(230, 230, 230));
+        QImage background(kWindowPixels, QImage::Format_RGBA8888);
+        background.fill(QColor(19, 63, 117));
+        const auto artifact = [&](const QImage& image) { return writeArtifact(linear ? hyprcapture::ui::sdrToHdr(image, 80) : image).toStdString(); };
+        QFile::remove(QString::fromStdString(window.artifactPath));
+        window.artifactPath = artifact(terminal);
+        window.realBackgroundPath = artifact(background);
+        window.realBackgroundWidth = background.width();
+        window.realBackgroundHeight = background.height();
+        if (linear) {
+            window.artifactFormat = "rgba16f-linear-srgb";
+            window.artifactReferenceNits = 80;
+        }
+        QVERIFY(!window.artifactPath.empty() && !window.realBackgroundPath.empty());
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+        overlay.show(); QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(150, 150));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor);
+        QVERIFY(overlay.m_mode == hyprcapture::CaptureMode::Window);
+        const auto result = editor->resultImage();
+        QCOMPARE(result.size(), kWindowPixels);
+        for (const QPoint point : {QPoint(200, 120), QPoint(200, 230), QPoint(8, 232)})
+            QCOMPARE(result.pixelColor(point), QColor(19, 63, 117));
+        QCOMPARE(result.pixelColor(glyphs.center()), QColor(230, 230, 230));
+        QCOMPARE(overlay.renderResultImage(), result);
+        QVERIFY(QMetaObject::invokeMethod(editor, "confirmRequested", Qt::DirectConnection));
+        QTRY_VERIFY_WITH_TIMEOUT(!QDir(output.path()).entryList({"*.png"}, QDir::Files).isEmpty(), 5000);
+        const auto saved = output.filePath(QDir(output.path()).entryList({"*.png"}, QDir::Files).front());
+        QTRY_COMPARE_WITH_TIMEOUT(QImage(saved).convertToFormat(result.format()), result, 5000);
+    }
+
+    void missingWindowTailSamplesDesktopAtNativeScale() {
+        // The monitor snapshot is stored at native resolution; the repaired
+        // tail must come from beneath the window, not from logical offsets.
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.fushionMode = false;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        defaults.inPlaceEditToolbar = true;
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults).toStdString());
+        QVERIFY(session);
+        auto& monitor = session->monitors.front();
+        QImage desktop(QSize(kLogicalWidth, kLogicalHeight) * 2, QImage::Format_RGBA8888);
+        desktop.fill(QColor(17, 29, 53));
+        QPainter(&desktop).fillRect(QRect(QPoint(100, 100) * 2, kWindowPixels), QColor(200, 120, 40));
+        QFile::remove(QString::fromStdString(monitor.artifactPath));
+        monitor.artifactPath = writeArtifact(desktop).toStdString();
+        auto& window = session->windows.front();
+        QImage clipped(kWindowPixels, QImage::Format_RGBA8888);
+        clipped.fill(Qt::transparent);
+        QPainter(&clipped).fillRect(QRect(0, 0, kWindowPixels.width(), 200), QColor(34, 149, 98));
+        QFile::remove(QString::fromStdString(window.artifactPath));
+        window.artifactPath = writeArtifact(clipped).toStdString();
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+        overlay.show(); QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(150, 150));
+        const auto result = overlay.renderResultImage();
+        QCOMPARE(result.pixelColor(200, 100), QColor(34, 149, 98));
+        for (const QPoint point : {QPoint(20, 205), QPoint(200, 230), QPoint(380, 236)})
+            QCOMPARE(result.pixelColor(point), QColor(200, 120, 40));
     }
 
     void realBackgroundIsHydratedWithoutReplacingForeground() {

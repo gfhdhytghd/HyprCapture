@@ -75,6 +75,8 @@ class CaptureOverlay final : public QMainWindow {
     void resizeEvent(QResizeEvent* event) override;
 
   private:
+    friend class InPlaceEditorTest;
+
     enum class ConfirmDragMode { None, NewSelection, MoveSelection, ResizeLeft, ResizeTop, ResizeRight, ResizeBottom, ResizeTopLeft, ResizeTopRight, ResizeBottomRight, ResizeBottomLeft };
 
     struct MonitorArtifact {

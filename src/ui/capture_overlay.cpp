@@ -1254,7 +1254,7 @@ void repairMissingWindowTail(QImage& image, const QRect& fullGeometry, const QRe
     visiblePatch.fill(Qt::transparent);
     {
         QPainter patchPainter(&visiblePatch);
-        patchPainter.drawImage(visibleImageRect, desktopImage, QRect(visibleGeometry.topLeft() - desktopGeometry.topLeft(), visibleGeometry.size()));
+        patchPainter.drawImage(visibleImageRect, desktopImage, projectedImageRect(visibleGeometry, desktopGeometry, desktopImage.size()));
     }
 
     const QRect visibleTailRect(visibleImageRect.left(), tailStart, visibleImageRect.width(), visibleImageRect.bottom() - tailStart + 1);
@@ -4456,7 +4456,12 @@ QImage CaptureOverlay::renderResultImage(bool hdr) {
         ensureDesktopImage();
         if (hdr && windowArtifact->hdrImage.isNull() && !m_hasHdrScreen) return {};
         QImage repairedArtifact = hdr ? (windowArtifact->hdrImage.isNull() ? hyprcapture::ui::sdrToHdr(windowArtifact->image) : windowArtifact->hdrImage) : windowArtifact->image;
-        if (!hdr) repairMissingWindowTail(repairedArtifact, windowArtifact->fullGeometry, windowArtifact->visibleGeometry, m_desktopImage, m_desktopGeometry);
+        // Fully transparent rows of a transparent client look like a missing
+        // tail. An independent real background already fills them; patching
+        // from the monitor snapshot would cover it (issue #34).
+        const bool independentBackground = bg == hyprcapture::WindowBackground::Real && !windowArtifact->realBackground.isNull();
+        if (!hdr && !independentBackground)
+            repairMissingWindowTail(repairedArtifact, windowArtifact->fullGeometry, windowArtifact->visibleGeometry, m_desktopImage, m_desktopGeometry);
 
         QImage image = boundedImage(artifactSource.size().expandedTo(QSize(1, 1)), hdr ? QImage::Format_RGBA16FPx4_Premultiplied : QImage::Format_ARGB32_Premultiplied);
         if (image.isNull())
