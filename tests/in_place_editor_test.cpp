@@ -2204,6 +2204,15 @@ int main(int argc, char** argv) {
         fputs("Cannot create clipboard fixture under the test home. Set HYPRCAPTURE_TEST_HOME to a writable directory; clipboard doubles require trusted ancestors.\n", stderr);
         return 1;
     }
+    // Nix sets HOME to an unwritable placeholder. Its check phase provides a
+    // private build directory with a trusted parent chain instead.
+    const QString homeRoot = qEnvironmentVariable("HYPRCAPTURE_TEST_HOME_ROOT", QDir::homePath());
+    QTemporaryDir clipboardHome(homeRoot + QStringLiteral("/.hyprcapture-test-XXXXXX"));
+    if (!clipboardHome.isValid()) {
+        fprintf(stderr, "Cannot create clipboard fixture under %s: %s\n", qPrintable(homeRoot), qPrintable(clipboardHome.errorString()));
+        return 1;
+    }
+>>>>>>> conflict 1 of 1 ends
     const QString bin = clipboardHome.filePath(QStringLiteral(".nix-profile/bin"));
     if (!QDir().mkpath(bin)) return 1;
     const QString clipboardPath = clipboardHome.filePath(QStringLiteral("copied.png"));

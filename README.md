@@ -1,5 +1,11 @@
 # HyprCapture
 
+> [!IMPORTANT]
+> This is the experimental `hyprland-master` branch for Hyprland development/main.
+> Its `flake.lock` pins Hyprland `5a78b5e927345860a27e2893bf894f97ee620c48` for reproducible builds.
+> Use HyprCapture's `master` branch with the latest official Hyprland release for the stable setup.
+> The compositor and plugin must use the same Hyprland revision; newer main commits may require further adaptation.
+
 HyprCapture is a Hyprland-only screenshot tool split into a compositor plugin and a Qt layer-shell helper. The plugin captures frozen compositor artifacts and launches the helper; the helper provides the selection overlay, output rendering, clipboard integration, and result thumbnail.
 
 All Hyprland configuration examples in this document use the Lua config API available in Hyprland 0.56 and later.
@@ -164,16 +170,14 @@ Press **Super + Shift + S**, take a screenshot, and verify saving or copying it.
 
 ### Install on NixOS
 
-Use the [latest official Hyprland release](https://github.com/hyprwm/Hyprland/releases/latest) and pin its release tag in your flake. Hyprland's development `main` branch is not supported. The example below uses `v0.56.2`; update this tag when a newer official release is available. An untagged `github:hyprwm/Hyprland` input tracks the development branch.
-
-Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
+For this development branch, the example below pins the adaptation target. Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
 
 ```nix
 {
   inputs = {
-    hyprland.url = "github:hyprwm/Hyprland/v0.56.2";
+    hyprland.url = "github:hyprwm/Hyprland/5a78b5e927345860a27e2893bf894f97ee620c48";
     hyprcapture = {
-      url = "github:gfhdhytghd/HyprCapture";
+      url = "github:gfhdhytghd/HyprCapture/hyprland-master";
       inputs.hyprland.follows = "hyprland";
     };
   };

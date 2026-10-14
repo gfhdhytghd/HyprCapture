@@ -23,10 +23,13 @@
 #define private public
 #define protected public
 #include <hyprland/src/Compositor.hpp>
+#include <hyprland/src/config/ConfigManager.hpp>
 #include <hyprland/src/config/ConfigValue.hpp>
-#include <hyprland/src/desktop/Workspace.hpp>
+#include <hyprland/src/workspace/HLWorkspace.hpp>
 #include <hyprland/src/desktop/state/FocusState.hpp>
 #include <hyprland/src/desktop/state/WindowState.hpp>
+#include <hyprland/src/desktop/view/window/WindowMetadata.hpp>
+#include <hyprland/src/desktop/view/window/WindowPresentation.hpp>
 #include <hyprland/src/desktop/view/WLSurface.hpp>
 #include <hyprland/src/debug/log/Logger.hpp>
 #include <hyprland/src/errorOverlay/Overlay.hpp>
@@ -85,6 +88,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <unistd.h>
@@ -105,6 +109,9 @@ using Render::RPT_EXPORT;
 using Render::eRenderPassMode;
 using Json = nlohmann::ordered_json;
 
+Render::CRenderContext& renderContext() {
+    return g_pHyprRenderer->context();
+}
 bool g_captureLinear = false;
 PHLMONITOR g_captureMonitor;
 struct LinearCaptureScope {
@@ -348,7 +355,7 @@ void noteWindowStreamDiagnostic(std::string_view reason) {
     if (count >= 6)
         return;
     ++count;
-    Log::logger->log(Log::WARN, "[hyprcapture] window stream diagnostic {} (#{})", reason, count);
+    LOG(Log::WARN, "[hyprcapture] window stream diagnostic {} (#{})", reason, count);
 }
 
 struct WindowStreamSession {
@@ -1515,27 +1522,27 @@ class RealBackgroundCapturePass final : public IPassElement {
   public:
     explicit RealBackgroundCapturePass(RealBackgroundCaptureState* state) : m_state(state) {}
 
-    std::vector<UP<IPassElement>> draw() override {
-        if (!m_state || m_state->captured || !g_pHyprOpenGL || !g_pHyprRenderer->m_renderData.currentFB)
+    std::vector<UP<IPassElement>> draw(Render::CRenderContext& ctx) override {
+        if (!m_state || m_state->captured || !g_pHyprOpenGL || !ctx.m_data.currentFB)
             return {};
 
         ScopedTiming timing("realbg.capture_pass");
         if (m_state->framebuffer) {
             m_state->captured =
-                blitRenderPassFramebufferRegion(*g_pHyprRenderer->m_renderData.currentFB, *m_state->framebuffer, m_state->cropX, m_state->cropY, m_state->width, m_state->height);
+                blitRenderPassFramebufferRegion(*ctx.m_data.currentFB, *m_state->framebuffer, m_state->cropX, m_state->cropY, m_state->width, m_state->height);
         } else {
             m_state->readback =
-                readRenderPassFramebufferRegion(*g_pHyprRenderer->m_renderData.currentFB, m_state->cropX, m_state->cropY, m_state->width, m_state->height);
+                readRenderPassFramebufferRegion(*ctx.m_data.currentFB, m_state->cropX, m_state->cropY, m_state->width, m_state->height);
             m_state->captured = !m_state->readback.pixels.empty();
         }
         return {};
     }
 
-    bool needsLiveBlur() override {
+    bool needsLiveBlur(Render::CRenderContext&) override {
         return false;
     }
 
-    bool needsPrecomputeBlur() override {
+    bool needsPrecomputeBlur(Render::CRenderContext&) override {
         return false;
     }
 
@@ -1547,11 +1554,11 @@ class RealBackgroundCapturePass final : public IPassElement {
         return EK_CUSTOM;
     }
 
-    bool undiscardable() override {
+    bool undiscardable(Render::CRenderContext&) override {
         return true;
     }
 
-    bool disableSimplification() override {
+    bool disableSimplification(Render::CRenderContext&) override {
         return true;
     }
 
@@ -1607,8 +1614,18 @@ struct RealBackgroundRenderHookContext {
     RealBackgroundCaptureState*             activeBlurState = nullptr;
 };
 
-using RenderTextureInternalFn = void (*)(void*, SP<CTexture>, const CBox&, const CHyprOpenGLImpl::STextureRenderData&);
-using RenderTextureWithBlurInternalFn = void (*)(void*, SP<CTexture>, const CBox&, const CHyprOpenGLImpl::STextureRenderData&);
+// Derive the trampoline ABI from the upstream method and check each callback
+// below. A changed Hyprland signature must fail compilation, not corrupt a frame.
+template <typename Method>
+struct HookSignature;
+
+template <typename Class, typename Result, typename... Args>
+struct HookSignature<Result (Class::*)(Args...)> {
+    using Type = Result (*)(void*, Args...);
+};
+
+using RenderTextureInternalFn = HookSignature<decltype(&CHyprOpenGLImpl::renderTextureInternal)>::Type;
+using RenderTextureWithBlurInternalFn = HookSignature<decltype(&CHyprOpenGLImpl::renderTextureWithBlurInternal)>::Type;
 
 RealBackgroundRenderHookContext* g_realBackgroundRenderHookContext = nullptr;
 RenderTextureInternalFn          g_renderTextureInternalOriginal = nullptr;
@@ -1617,10 +1634,10 @@ CFunctionHook*                   g_realBackgroundRenderTextureInternalHook = nul
 CFunctionHook*                   g_realBackgroundRenderTextureWithBlurInternalHook = nullptr;
 std::optional<RealBackgroundRecordingCache> g_realBackgroundRecordingCache;
 
-PHLWINDOW currentRenderWindow() {
+PHLWINDOW currentRenderWindow(Render::CRenderContext& ctx) {
     if (!g_pHyprOpenGL)
         return {};
-    return g_pHyprRenderer->m_renderData.currentWindow.lock();
+    return ctx.m_data.currentWindow.lock();
 }
 
 RealBackgroundCaptureState* findRealBackgroundStateForWindow(PHLWINDOW window) {
@@ -1635,19 +1652,19 @@ RealBackgroundCaptureState* findRealBackgroundStateForWindow(PHLWINDOW window) {
     return nullptr;
 }
 
-bool isActiveBlurBackgroundPass(RealBackgroundCaptureState* state, const CHyprOpenGLImpl::STextureRenderData& data) {
+bool isActiveBlurBackgroundPass(Render::CRenderContext& ctx, RealBackgroundCaptureState* state, const CHyprOpenGLImpl::STextureRenderData& data) {
     if (!state || !state->awaitingBlurBackground || state->blurCaptured || data.blur || data.discardActive || !data.allowCustomUV || !g_pHyprOpenGL ||
-        !g_pHyprRenderer->m_renderData.currentFB)
+        !ctx.m_data.currentFB)
         return false;
 
-    const auto window = currentRenderWindow();
+    const auto window = currentRenderWindow(ctx);
     return window && state->window && window.get() == state->window.get();
 }
 
 // Inspect the completed pass queue instead of hooking renderWindow. Hymission
 // Stage also hooks that function, and Hyprland rejects a second hook on it.
 void queueRealBackgroundCapturePasses(std::vector<RealBackgroundCaptureState>& states) {
-    auto& passes = g_pHyprRenderer->m_renderPass.m_passElements;
+    auto& passes = renderContext().m_pass.m_passElements;
     for (std::size_t i = 0; i < passes.size(); ++i) {
         const auto* surface = dynamic_cast<const CSurfacePassElement*>(passes[i].element.get());
         if (!surface || !surface->m_data.pWindow)
@@ -1665,28 +1682,28 @@ void queueRealBackgroundCapturePasses(std::vector<RealBackgroundCaptureState>& s
     }
 }
 
-void hkRenderTextureInternal(void* openGLThisptr, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
+void hkRenderTextureInternal(void* openGLThisptr, Render::CRenderContext& ctx, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
     if (sessionLocked()) {
-        if (g_renderTextureInternalOriginal) g_renderTextureInternalOriginal(openGLThisptr, texture, box, data);
+        if (g_renderTextureInternalOriginal) g_renderTextureInternalOriginal(openGLThisptr, ctx, texture, box, data);
         return;
     }
     auto* state = g_realBackgroundRenderHookContext ? g_realBackgroundRenderHookContext->activeBlurState : nullptr;
-    const bool captureAfterDraw = isActiveBlurBackgroundPass(state, data);
+    const bool captureAfterDraw = isActiveBlurBackgroundPass(ctx, state, data);
 
     if (g_renderTextureInternalOriginal)
-        g_renderTextureInternalOriginal(openGLThisptr, texture, box, data);
+        g_renderTextureInternalOriginal(openGLThisptr, ctx, texture, box, data);
 
-    if (!captureAfterDraw || !state || !g_pHyprOpenGL || !g_pHyprRenderer->m_renderData.currentFB)
+    if (!captureAfterDraw || !state || !g_pHyprOpenGL || !ctx.m_data.currentFB)
         return;
 
     state->awaitingBlurBackground = false;
     ScopedTiming timing("realbg.blur_capture");
     if (state->framebuffer) {
         state->captured =
-            blitRenderPassFramebufferRegion(*g_pHyprRenderer->m_renderData.currentFB, *state->framebuffer, state->cropX, state->cropY, state->width, state->height);
+            blitRenderPassFramebufferRegion(*ctx.m_data.currentFB, *state->framebuffer, state->cropX, state->cropY, state->width, state->height);
         state->blurCaptured = state->captured;
     } else {
-        auto readback = readRenderPassFramebufferRegion(*g_pHyprRenderer->m_renderData.currentFB, state->cropX, state->cropY, state->width, state->height);
+        auto readback = readRenderPassFramebufferRegion(*ctx.m_data.currentFB, state->cropX, state->cropY, state->width, state->height);
         if (readback.pixels.empty())
             return;
 
@@ -1696,17 +1713,17 @@ void hkRenderTextureInternal(void* openGLThisptr, SP<CTexture> texture, const CB
     }
 }
 
-void hkRenderTextureWithBlurInternal(void* openGLThisptr, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
+void hkRenderTextureWithBlurInternal(void* openGLThisptr, Render::CRenderContext& ctx, SP<CTexture> texture, const CBox& box, const CHyprOpenGLImpl::STextureRenderData& data) {
     if (sessionLocked()) {
-        if (g_renderTextureWithBlurInternalOriginal) g_renderTextureWithBlurInternalOriginal(openGLThisptr, texture, box, data);
+        if (g_renderTextureWithBlurInternalOriginal) g_renderTextureWithBlurInternalOriginal(openGLThisptr, ctx, texture, box, data);
         return;
     }
     auto* context = g_realBackgroundRenderHookContext;
-    auto* state = findRealBackgroundStateForWindow(currentRenderWindow());
+    auto* state = findRealBackgroundStateForWindow(currentRenderWindow(ctx));
 
     if (!context || !state || state->blurCaptured || !g_renderTextureWithBlurInternalOriginal) {
         if (g_renderTextureWithBlurInternalOriginal)
-            g_renderTextureWithBlurInternalOriginal(openGLThisptr, texture, box, data);
+            g_renderTextureWithBlurInternalOriginal(openGLThisptr, ctx, texture, box, data);
         return;
     }
 
@@ -1715,11 +1732,14 @@ void hkRenderTextureWithBlurInternal(void* openGLThisptr, SP<CTexture> texture, 
     context->activeBlurState = state;
     state->awaitingBlurBackground = true;
 
-    g_renderTextureWithBlurInternalOriginal(openGLThisptr, texture, box, data);
+    g_renderTextureWithBlurInternalOriginal(openGLThisptr, ctx, texture, box, data);
 
     state->awaitingBlurBackground = previousAwaitingBlurBackground;
     context->activeBlurState = previousActiveBlurState;
 }
+
+static_assert(std::is_same_v<RenderTextureInternalFn, decltype(&hkRenderTextureInternal)>);
+static_assert(std::is_same_v<RenderTextureWithBlurInternalFn, decltype(&hkRenderTextureWithBlurInternal)>);
 
 void repairTopTransparentSeam(RgbaReadback& readback) {
     if (readback.width <= 0 || readback.height <= 2 || readback.pixels.empty())
@@ -1912,7 +1932,7 @@ void renderTextureWithAlphaMatte(SP<CTexture> texture, const CBox& box, SP<CFram
 
     auto matteTexture = matte->getTexture();
     if (!matteTexture) {
-        g_pHyprOpenGL->renderTextureMatte(texture, box, matte);
+        g_pHyprOpenGL->renderTextureMatte(renderContext(), texture, box, matte);
         return;
     }
 
@@ -1921,7 +1941,7 @@ void renderTextureWithAlphaMatte(SP<CTexture> texture, const CBox& box, SP<CFram
     if (auto* glTexture = dynamic_cast<Render::GL::CGLTexture*>(matteTexture.get()))
         glTexture->swizzle(std::array<GLint, 4>{GL_ALPHA, GL_GREEN, GL_BLUE, GL_ALPHA});
 
-    g_pHyprOpenGL->renderTextureMatte(texture, box, matte);
+    g_pHyprOpenGL->renderTextureMatte(renderContext(), texture, box, matte);
 
     glActiveTexture(GL_TEXTURE0 + 1);
     matteTexture->bind();
@@ -1930,9 +1950,9 @@ void renderTextureWithAlphaMatte(SP<CTexture> texture, const CBox& box, SP<CFram
 }
 
 CBox renderedWindowBox(const PHLWINDOW& window, CBox box) {
-    if (window->m_workspace && !window->m_pinned)
-        box.translate(window->m_workspace->m_renderOffset->value());
-    box.translate(window->m_floatingOffset);
+    const auto presentation = window->presentation().renderPresentation();
+    box.translate(presentation.workspaceOffset);
+    box.translate(presentation.floatingOffset);
     return box;
 }
 
@@ -1945,10 +1965,10 @@ CBox renderedWindowGoalMainSurfaceBox(const PHLWINDOW& window) {
 }
 
 bool isScrollingTiledWindow(const PHLWINDOW& window) {
-    if (!window || window->m_isFloating || !window->m_workspace || !window->m_workspace->m_space)
+    if (!window || window->isFloating() || !window->m_workspace || !window->m_workspace->space())
         return false;
 
-    const auto algorithm = window->m_workspace->m_space->algorithm();
+    const auto algorithm = window->m_workspace->space()->algorithm();
     if (!algorithm || !algorithm->tiledAlgo())
         return false;
 
@@ -2062,7 +2082,7 @@ class HymissionRawWindowRenderScope {
 class InactiveWorkspaceCaptureScope {
   public:
     explicit InactiveWorkspaceCaptureScope(const PHLWINDOW& window) : m_window(window) {
-        if (!window || window->m_pinned || !window->m_workspace || window->m_workspace->isVisible())
+        if (!window || (window->m_state & Desktop::View::WINDOW_STATE_PINNED) || !window->m_workspace || window->m_workspace->visible())
             return;
         m_workspace = window->m_workspace;
         m_offset = m_workspace->m_renderOffset->value();
@@ -2070,7 +2090,7 @@ class InactiveWorkspaceCaptureScope {
         overrideAlpha(m_workspace->m_alpha);
         for (const auto kind : {Desktop::View::WINDOW_ALPHA_LAYOUT, Desktop::View::WINDOW_ALPHA_FULLSCREEN,
                                 Desktop::View::WINDOW_ALPHA_MOVE_TO_WORKSPACE, Desktop::View::WINDOW_ALPHA_MOVE_FROM_WORKSPACE})
-            overrideAlpha(window->alpha(kind));
+            overrideAlpha(window->alpha()[kind]);
     }
     ~InactiveWorkspaceCaptureScope() {
         for (auto& [sample, value] : m_alphas)
@@ -2114,7 +2134,7 @@ class WindowAnimationGoalOverride {
 
         m_window->m_realPosition->value() = m_window->m_realPosition->goal() + offset;
         m_window->m_realSize->value() = m_window->m_realSize->goal();
-        m_window->updateWindowDecos();
+        m_window->presentation().updateDecorations();
     }
 
     ~WindowAnimationGoalOverride() {
@@ -2123,7 +2143,7 @@ class WindowAnimationGoalOverride {
 
         m_window->m_realPosition->value() = m_position;
         m_window->m_realSize->value() = m_size;
-        m_window->updateWindowDecos();
+        m_window->presentation().updateDecorations();
     }
 
     WindowAnimationGoalOverride(const WindowAnimationGoalOverride&) = delete;
@@ -2163,14 +2183,14 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
         return {};
 
     CaptureColorScope captureColor(monitor);
-    const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
-    const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
-    const bool previousTransformDamage = g_pHyprRenderer->m_renderData.transformDamage;
+    const bool previousBlockFeedback = renderContext().m_blockSurfaceFeedback;
+    const bool previousBlockShader = renderContext().m_data.blockScreenShader;
+    const bool previousTransformDamage = renderContext().m_data.transformDamage;
 
     auto restoreRendererState = [&]() {
-        g_pHyprRenderer->m_renderData.transformDamage = previousTransformDamage;
-        g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+        renderContext().m_data.transformDamage = previousTransformDamage;
+        renderContext().m_data.blockScreenShader = previousBlockShader;
+        renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
     };
 
     const int transformedWidth = positiveRoundedIntFromDouble(monitor->m_transformedSize.x);
@@ -2178,26 +2198,26 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     CRegion fakeDamage{0, 0, transformedWidth, transformedHeight};
 
     g_pHyprOpenGL->makeEGLCurrent();
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
     setCaptureImageDescription(framebuffer, monitor);
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
         restoreRendererState();
         return {};
     }
 
+    renderContext().m_blockSurfaceFeedback = true;
     // renderWorkspace emits the workspace render stages, but not RENDER_PRE:
     // that normally comes from renderMonitor. This independent capture pass
     // needs its own reset of frame-local plugin state (e.g. Hymission's Stage
     // pass deduplication). Emit only after beginRender succeeds so listeners
     // see the capture monitor and framebuffer, never a stale desktop target.
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
-    g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
-    g_pHyprRenderer->renderWorkspace(monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(width), static_cast<double>(height)});
+    Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_PRE, .monitor = monitor});
+    g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
+    g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(width), static_cast<double>(height)});
     if (monitor == Desktop::focusState()->monitor())
-        Notification::overlay()->draw(monitor);
+        Notification::overlay()->draw(renderContext(), monitor);
     if (monitor == Desktop::focusState()->monitor())
-        ErrorOverlay::overlay()->draw();
-    g_pHyprRenderer->m_renderData.blockScreenShader = true;
+        ErrorOverlay::overlay()->draw(renderContext());
+    renderContext().m_data.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     restoreRendererState();
 
@@ -2285,13 +2305,13 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
         return false;
 
     CaptureColorScope captureColor(monitor);
-    const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
-    const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
-    const bool previousTransformDamage = g_pHyprRenderer->m_renderData.transformDamage;
+    const bool previousBlockFeedback = renderContext().m_blockSurfaceFeedback;
+    const bool previousBlockShader = renderContext().m_data.blockScreenShader;
+    const bool previousTransformDamage = renderContext().m_data.transformDamage;
     const auto restoreRendererState = [&]() {
-        g_pHyprRenderer->m_renderData.transformDamage = previousTransformDamage;
-        g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+        renderContext().m_data.transformDamage = previousTransformDamage;
+        renderContext().m_data.blockScreenShader = previousBlockShader;
+        renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
     };
 
     const int transformedWidth = positiveRoundedIntFromDouble(monitor->m_transformedSize.x);
@@ -2299,19 +2319,19 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
     CRegion fakeDamage{0, 0, transformedWidth, transformedHeight};
 
     g_pHyprOpenGL->makeEGLCurrent();
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
     setCaptureImageDescription(framebuffer, monitor);
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
         restoreRendererState();
         return false;
     }
 
-    g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
+    renderContext().m_blockSurfaceFeedback = true;
+    g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
     const Vector2D cursorPosition =
         Vector2D{capturedCursorPosition.x, capturedCursorPosition.y} - monitor->m_position;
     const bool forceSoftwareRender = Pointer::mgr()->hasVisibleHWCursor(monitor);
-    Pointer::mgr()->renderSoftwareCursorsFor(monitor, frozenTime, fakeDamage, cursorPosition, forceSoftwareRender);
-    g_pHyprRenderer->m_renderData.blockScreenShader = true;
+    Pointer::mgr()->renderSoftwareCursorsFor(renderContext(), monitor, frozenTime, fakeDamage, cursorPosition, forceSoftwareRender);
+    renderContext().m_data.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     restoreRendererState();
 
@@ -2336,24 +2356,24 @@ WindowCaptureGeometry windowCaptureGeometry(const CBox& bounds, const PHLMONITOR
 class WindowLocalProjectionScope {
   public:
     explicit WindowLocalProjectionScope(const PHLMONITOR& monitor) : m_monitor(monitor), m_transform(monitor->m_transform),
-        m_fbSize(g_pHyprRenderer->m_renderData.fbSize), m_projection(g_pHyprRenderer->m_renderData.targetProjection),
-        m_type(g_pHyprRenderer->m_renderData.projectionType), m_transformDamage(g_pHyprRenderer->m_renderData.transformDamage),
-        m_noSimplify(g_pHyprRenderer->m_renderData.noSimplify) {
+        m_fbSize(renderContext().m_data.fbSize), m_projection(renderContext().m_data.targetProjection),
+        m_type(renderContext().m_data.projectionType), m_transformDamage(renderContext().m_data.transformDamage),
+        m_noSimplify(renderContext().m_data.noSimplify) {
         glGetIntegerv(GL_VIEWPORT, m_viewport.data());
         m_monitor->m_transform = WL_OUTPUT_TRANSFORM_NORMAL;
     }
     void apply(int width, int height) {
-        g_pHyprRenderer->m_renderData.fbSize = Vector2D{width, height};
-        g_pHyprRenderer->setProjectionType(RPT_EXPORT);
-        g_pHyprRenderer->m_renderData.transformDamage = false;
+        renderContext().m_data.fbSize = Vector2D{width, height};
+        g_pHyprRenderer->setProjectionType(renderContext(), RPT_EXPORT);
+        renderContext().m_data.transformDamage = false;
         // Pass simplification clips against the physical monitor's bounds.
         // Export targets can be larger or have a different axis orientation.
-        g_pHyprRenderer->m_renderData.noSimplify = true;
+        renderContext().m_data.noSimplify = true;
         g_pHyprOpenGL->setViewport(0, 0, width, height);
     }
     ~WindowLocalProjectionScope() {
         m_monitor->m_transform = m_transform;
-        auto& data = g_pHyprRenderer->m_renderData;
+        auto& data = renderContext().m_data;
         data.fbSize = m_fbSize;
         data.targetProjection = m_projection;
         data.projectionType = m_type;
@@ -2417,9 +2437,9 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         traceTiming(std::format("window.target.{}x{}", framebufferWidth, framebufferHeight));
 
     CaptureColorScope captureColor(monitor);
-    const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
-    const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
-    const bool previousRenderingSnapshot = g_pHyprRenderer->m_bRenderingSnapshot;
+    const bool previousBlockFeedback = renderContext().m_blockSurfaceFeedback;
+    const bool previousBlockShader = renderContext().m_data.blockScreenShader;
+    const bool previousRenderingSnapshot = renderContext().m_renderingSnapshot;
 
     const auto renderIntoFramebuffer = [&](SP<CFramebuffer> targetFramebuffer, SP<CFramebuffer> backgroundMatte = {}) {
         if (!targetFramebuffer)
@@ -2428,33 +2448,34 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
         g_pHyprOpenGL->makeEGLCurrent();
         WindowLocalProjectionScope projection(monitor);
-        OffscreenRenderScope offscreen(g_pHyprRenderer->m_renderData.renderModif);
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+        OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
+        renderContext().m_blockSurfaceFeedback = true;
         setCaptureImageDescription(targetFramebuffer, monitor);
         if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
-            g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+            renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
             return false;
         }
         projection.apply(framebufferWidth, framebufferHeight);
         offscreen.activate();
 
-        g_pHyprRenderer->m_bRenderingSnapshot = true;
+        renderContext().m_renderingSnapshot = true;
         FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
-        g_pHyprRenderer->draw(CClearPassElement::SClearData{options.clearColor});
-        g_pHyprRenderer->startRenderPass();
+        renderContext().m_blockSurfaceFeedback = true;
+        g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{options.clearColor});
+        g_pHyprRenderer->startRenderPass(renderContext());
         if (options.backgroundTexture) {
             if (backgroundMatte)
                 renderTextureWithAlphaMatte(options.backgroundTexture, renderCropBox, backgroundMatte);
             else
-                g_pHyprOpenGL->renderTexture(options.backgroundTexture, renderCropBox, {.a = 1.0F});
+                g_pHyprOpenGL->renderTexture(renderContext(), options.backgroundTexture, renderCropBox, {.a = 1.0F});
         }
-        g_pHyprRenderer->renderWindow(window, monitor, frozenTime, decorate, RENDER_PASS_ALL, false, false);
-        g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
+        g_pHyprRenderer->renderWindow(renderContext(), window, monitor, window->presentation().renderPresentation(), frozenTime, decorate, RENDER_PASS_ALL, false, false);
+        renderContext().m_renderingSnapshot = previousRenderingSnapshot;
 
-        g_pHyprRenderer->m_renderData.blockScreenShader = true;
+        renderContext().m_data.blockScreenShader = true;
         g_pHyprRenderer->endRender();
-        g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+        renderContext().m_data.blockScreenShader = previousBlockShader;
+        renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
         return true;
     };
 
@@ -2472,27 +2493,28 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
             g_pHyprOpenGL->makeEGLCurrent();
             WindowLocalProjectionScope projection(monitor);
-            OffscreenRenderScope offscreen(g_pHyprRenderer->m_renderData.renderModif);
-            g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+            OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
+            renderContext().m_blockSurfaceFeedback = true;
             setCaptureImageDescription(matteFramebuffer, monitor);
             if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, matteFramebuffer)) {
-                g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+                renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
                 return false;
             }
 
             projection.apply(framebufferWidth, framebufferHeight);
             offscreen.activate();
-            g_pHyprRenderer->m_bRenderingSnapshot = true;
+            renderContext().m_renderingSnapshot = true;
             FullSurfaceVisibleRegionOverride fullVisibleRegion(window);
-            g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
-            g_pHyprRenderer->startRenderPass();
-            g_pHyprRenderer->renderWindow(window, monitor, frozenTime, decorate, RENDER_PASS_ALL, false, false);
-            g_pHyprRenderer->m_bRenderingSnapshot = previousRenderingSnapshot;
+            renderContext().m_blockSurfaceFeedback = true;
+            g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
+            g_pHyprRenderer->startRenderPass(renderContext());
+            g_pHyprRenderer->renderWindow(renderContext(), window, monitor, window->presentation().renderPresentation(), frozenTime, decorate, RENDER_PASS_ALL, false, false);
+            renderContext().m_renderingSnapshot = previousRenderingSnapshot;
 
-            g_pHyprRenderer->m_renderData.blockScreenShader = true;
+            renderContext().m_data.blockScreenShader = true;
             g_pHyprRenderer->endRender();
-            g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
-            g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+            renderContext().m_data.blockScreenShader = previousBlockShader;
+            renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
             return true;
         };
 
@@ -2686,29 +2708,30 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
     };
 
     CaptureColorScope captureColor(monitor);
-    const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
-    const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
+    const bool previousBlockFeedback = renderContext().m_blockSurfaceFeedback;
+    const bool previousBlockShader = renderContext().m_data.blockScreenShader;
     CRegion fakeDamage{0, 0, framebufferWidth, framebufferHeight};
 
     g_pHyprOpenGL->makeEGLCurrent();
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    renderContext().m_blockSurfaceFeedback = true;
     setCaptureImageDescription(framebuffer, monitor);
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+        renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
         clearHookContext();
         return readbacks;
     }
 
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
-    g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
-    g_pHyprRenderer->renderWorkspace(monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
+    renderContext().m_blockSurfaceFeedback = true;
+    Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_PRE, .monitor = monitor});
+    g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
+    g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
     queueRealBackgroundCapturePasses(states);
-    g_pHyprRenderer->m_renderData.blockScreenShader = true;
+    renderContext().m_data.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     clearHookContext();
-    g_pHyprRenderer->m_renderPass.clear();
-    g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+    renderContext().m_pass.clear();
+    renderContext().m_data.blockScreenShader = previousBlockShader;
+    renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
 
     for (std::size_t i = 0; i < states.size(); ++i) {
         auto& state = states[i];
@@ -2768,32 +2791,33 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
     };
 
     CaptureColorScope captureColor(monitor);
-    const bool previousBlockFeedback = g_pHyprRenderer->m_bBlockSurfaceFeedback;
-    const bool previousBlockShader = g_pHyprRenderer->m_renderData.blockScreenShader;
+    const bool previousBlockFeedback = renderContext().m_blockSurfaceFeedback;
+    const bool previousBlockShader = renderContext().m_data.blockScreenShader;
     CRegion    fakeDamage{0, 0, framebufferWidth, framebufferHeight};
 
     g_pHyprOpenGL->makeEGLCurrent();
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = true;
+    renderContext().m_blockSurfaceFeedback = true;
     setCaptureImageDescription(framebuffer, monitor);
     if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
-        g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+        renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
         clearHookContext();
         return false;
     }
 
-    Event::bus()->m_events.render.stage.emit(RENDER_PRE);
-    g_pHyprRenderer->draw(CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
+    renderContext().m_blockSurfaceFeedback = true;
+    Event::bus()->m_events.render.stage.emit(Event::SRenderStageEvent{.stage = RENDER_PRE, .monitor = monitor});
+    g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 1.0}});
     {
         ScopedTiming timing("realbg.render_workspace");
-        g_pHyprRenderer->renderWorkspace(monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
+        g_pHyprRenderer->renderWorkspace(renderContext(), monitor, monitor->m_activeWorkspace, frozenTime, CBox{0, 0, static_cast<double>(framebufferWidth), static_cast<double>(framebufferHeight)});
     }
     queueRealBackgroundCapturePasses(states);
-    g_pHyprRenderer->m_renderData.blockScreenShader = true;
+    renderContext().m_data.blockScreenShader = true;
     g_pHyprRenderer->endRender();
     clearHookContext();
-    g_pHyprRenderer->m_renderPass.clear();
-    g_pHyprRenderer->m_renderData.blockScreenShader = previousBlockShader;
-    g_pHyprRenderer->m_bBlockSurfaceFeedback = previousBlockFeedback;
+    renderContext().m_pass.clear();
+    renderContext().m_data.blockScreenShader = previousBlockShader;
+    renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
 
     return !states.empty() && states.front().captured;
 }
@@ -2835,7 +2859,7 @@ bool shouldCaptureWindow(const PHLWINDOW& window) {
     if (g_pHyprRenderer)
         return g_pHyprRenderer->shouldRenderWindow(window);
 
-    return window->m_pinned || window->m_workspace->isVisible();
+    return (window->m_state & Desktop::View::WINDOW_STATE_PINNED) || window->m_workspace->visible();
 }
 
 bool isLiveWindowCaptureTarget(const PHLWINDOW& window) {
@@ -2850,8 +2874,8 @@ std::vector<PHLWINDOW> windowsInRenderOrder() {
     ordered.reserve(Desktop::windowState()->windows().size());
     const auto appendPass = [&](bool special, bool floating) {
         for (const auto& window : Desktop::windowState()->windows()) {
-            if (!shouldCaptureWindow(window) || (window->m_pinned && window->m_isFloating) || window->onSpecialWorkspace() != special ||
-                window->m_isFloating != floating)
+            if (!shouldCaptureWindow(window) || ((window->m_state & Desktop::View::WINDOW_STATE_PINNED) && window->isFloating()) ||
+                window->onSpecialWorkspace() != special || window->isFloating() != floating)
                 continue;
 
             ordered.push_back(window);
@@ -2864,7 +2888,7 @@ std::vector<PHLWINDOW> windowsInRenderOrder() {
     appendPass(true, true);
 
     for (const auto& window : Desktop::windowState()->windows()) {
-        if (!shouldCaptureWindow(window) || !window->m_pinned || !window->m_isFloating)
+        if (!shouldCaptureWindow(window) || !(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || !window->isFloating())
             continue;
 
         ordered.push_back(window);
@@ -2887,15 +2911,15 @@ void populateWorkspaceWindowMetadata(const PHLMONITOR& monitor, MonitorInfo& inf
         const bool onActiveWorkspace = window->m_workspace == monitor->m_activeWorkspace;
         const bool onActiveSpecialWorkspace =
             monitor->m_activeSpecialWorkspace && window->m_workspace == monitor->m_activeSpecialWorkspace;
-        const bool pinnedOnMonitor = window->m_pinned && windowMonitor && windowMonitor == monitor;
+        const bool pinnedOnMonitor = (window->m_state & Desktop::View::WINDOW_STATE_PINNED) && windowMonitor && windowMonitor == monitor;
         if (onActiveWorkspace || onActiveSpecialWorkspace || pinnedOnMonitor)
             workspaceWindows.push_back(window);
     }
 
     info.workspaceWindowCount = static_cast<int>(std::min(workspaceWindows.size(), MAX_SESSION_WINDOWS));
     if (workspaceWindows.size() == 1) {
-        info.singleWorkspaceWindowClass = boundedString(workspaceWindows.front()->m_class, MAX_WINDOW_METADATA_BYTES);
-        info.singleWorkspaceWindowTitle = boundedString(workspaceWindows.front()->m_title, MAX_WINDOW_METADATA_BYTES);
+        info.singleWorkspaceWindowClass = boundedString(workspaceWindows.front()->metadata().appID(), MAX_WINDOW_METADATA_BYTES);
+        info.singleWorkspaceWindowTitle = boundedString(workspaceWindows.front()->metadata().title(), MAX_WINDOW_METADATA_BYTES);
     }
 }
 
@@ -3011,7 +3035,19 @@ int colorByte(float value) {
 }
 
 ShadowColorBytes shadowColorBytes(const PHLWINDOW& window) {
-    const CHyprColor color = window && !window->m_realShadowColor.m_colors.empty() ? window->m_realShadowColor.m_colors.front() : CHyprColor(0xee1a1a1a);
+    static auto PSHADOWCOL = CConfigValue<Config::IComplexConfigValue>("decoration:shadow:color");
+    static auto PSHADOWCOLINACTIVE = CConfigValue<Config::IComplexConfigValue>("decoration:shadow:color_inactive");
+
+    CHyprColor color(0xee1a1a1a);
+    if (window) {
+        auto* const shadowCol = static_cast<Config::CGradientValueData*>(PSHADOWCOL.ptr());
+        auto* const shadowColInactive = static_cast<Config::CGradientValueData*>(PSHADOWCOLINACTIVE.ptr());
+        const auto* activeGradient = window == Desktop::focusState()->window() ?
+            shadowCol :
+            (Config::mgr()->getConfigValue("decoration:shadow:color_inactive").setByUser ? shadowColInactive : shadowCol);
+        if (activeGradient && !activeGradient->m_colors.empty())
+            color = activeGradient->m_colors.front();
+    }
     return {
         .r = colorByte(color.r),
         .g = colorByte(color.g),
@@ -3120,24 +3156,24 @@ double shadowRoundingPx(const PHLWINDOW& window, double scale) {
     if (!window)
         return 0.0;
 
-    const double borderSize = window->m_X11DoesntWantBorders ? 0.0 : std::max(0, window->getRealBorderSize());
-    const double roundingBase = std::max(0.0F, window->rounding());
-    const double roundingPower = std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0);
+    const double borderSize = window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
+    const double roundingBase = std::max(0.0F, window->presentation().rounding());
+    const double roundingPower = std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
     const double correctionOffset = borderSize * (std::sqrt(2.0) - 1.0) * std::max(2.0 - roundingPower, 0.0);
     const double rounding = roundingBase > 0.0 ? (roundingBase + borderSize) - correctionOffset : 0.0;
     return std::max(0.0, rounding * scale);
 }
 
 double shadowBorderPx(const PHLWINDOW& window, double scale) {
-    if (!window || window->m_X11DoesntWantBorders)
+    if (!window || window->backend().traits().suggestsNoBorder)
         return 0.0;
-    return std::max(0.0, static_cast<double>(std::max(0, window->getRealBorderSize())) * scale);
+    return std::max(0.0, static_cast<double>(std::max(0, window->presentation().borderSize())) * scale);
 }
 
 double windowRoundingPx(const PHLWINDOW& window, double scale) {
     if (!window)
         return 0.0;
-    return std::max(0.0, static_cast<double>(window->rounding()) * scale);
+    return std::max(0.0, static_cast<double>(window->presentation().rounding()) * scale);
 }
 
 int configuredShadowRangePx(double scale) {
@@ -3222,7 +3258,7 @@ std::optional<ShadowRenderGeometry> shadowRenderGeometry(const RgbaReadback& rea
         .range = range,
         .rounding = shadowRoundingPx(window, shadowScale),
         .windowRounding = windowRoundingPx(window, shadowScale),
-        .roundingPower = window ? std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0) : 2.0,
+        .roundingPower = window ? std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0) : 2.0,
         .shadowPower = std::clamp(sc<int>(*PSHADOWPOWER), 1, 4),
         .sharp = configuredShadowSharp(),
     };
@@ -3468,7 +3504,7 @@ void compositeOutsideWindowOverSolidBackground(RgbaReadback& frame,
         return;
 
     const double rounding = windowRoundingPx(window, std::max(scaleX, scaleY));
-    const double roundingPower = window ? std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0) : 2.0;
+    const double roundingPower = window ? std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0) : 2.0;
     for (int y = 0; y < frame.height; ++y) {
         for (int x = 0; x < frame.width; ++x) {
             if (hyprlandPointInRoundedRect(x + 0.5, y + 0.5, visibleLeft, visibleTop, visibleRight, visibleBottom, rounding, roundingPower))
@@ -3788,7 +3824,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     std::vector<Candidate> candidates;
     const auto desktopWindows = windowsInRenderOrder();
     for (const auto& window : desktopWindows)
-        if (!window->m_pinned || !window->m_isFloating)
+        if (!(window->m_state & Desktop::View::WINDOW_STATE_PINNED) || !window->isFloating())
             candidates.push_back({window});
     for (const auto& target : stageTargets) {
         const auto window = findWindowByAddress(target.address);
@@ -3798,7 +3834,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
     // Pinned floating windows are drawn above Stage. Keep separate entries if
     // a window appears both on the desktop and in an active-workspace card.
     for (const auto& window : desktopWindows)
-        if (window->m_pinned && window->m_isFloating)
+        if ((window->m_state & Desktop::View::WINDOW_STATE_PINNED) && window->isFloating())
             candidates.push_back({window});
     int z = 0;
     std::vector<PendingRealBackgroundCapture> pendingRealBackgrounds;
@@ -3835,15 +3871,15 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
             info.selectionClipGeometry = monitorRect(monitor);
         info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
         info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
-        info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
-        info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
+        info.title = boundedString(window->metadata().title(), MAX_WINDOW_METADATA_BYTES);
+        info.appClass = boundedString(window->metadata().appID(), MAX_WINDOW_METADATA_BYTES);
         info.focused = window == Desktop::focusState()->window();
         info.fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
         info.zIndex = z++;
         const bool dontRound = info.fullscreen;
-        info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
-        info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0);
-        info.borderSize = dontRound || window->m_X11DoesntWantBorders ? 0.0 : std::max(0, window->getRealBorderSize());
+        info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding());
+        info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
+        info.borderSize = dontRound || window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
         const std::string artifactId = pointerId(window.get()) + "-" + std::to_string(info.zIndex);
         const auto path = root / ("window-" + artifactId + ".rgba");
         CBox artifactBox;
@@ -3982,15 +4018,15 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
     info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
     info.address = "0x" + pointerId(window.get());
-    info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
-    info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
+    info.title = boundedString(window->metadata().title(), MAX_WINDOW_METADATA_BYTES);
+    info.appClass = boundedString(window->metadata().appID(), MAX_WINDOW_METADATA_BYTES);
     info.focused = window == Desktop::focusState()->window();
     info.fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
     info.zIndex = 0;
     const bool dontRound = info.fullscreen;
-    info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
-    info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->roundingPower()), 1.0, 10.0);
-    info.borderSize = dontRound || window->m_X11DoesntWantBorders ? 0.0 : std::max(0, window->getRealBorderSize());
+    info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding());
+    info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
+    info.borderSize = dontRound || window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
     info.visibleGeometry = toRect(renderedWindowGoalMainSurfaceBox(window));
 
     const bool renderDecorations = request->defaults.windowBorder == DecorationPolicy::Keep || request->defaults.windowShadow == DecorationPolicy::Keep;
@@ -4145,12 +4181,12 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     const CBox sampledBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
     const CBox sampledVisibleBox = renderedWindowGoalMainSurfaceBox(window);
     std::optional<gpuwire::InputGeometry> frozenInput;
-    if (!window->m_isX11 && session.targetSurface && window->getPID() > 0) {
+    if (!window->backend().isX11() && session.targetSurface && window->backend().pid() > 0) {
         const auto size = session.targetSurface->m_current.size;
         frozenInput = gpuwire::InputGeometry{
             .window = reinterpret_cast<std::uintptr_t>(window.get()),
             .surface = reinterpret_cast<std::uintptr_t>(session.targetSurface.get()),
-            .pid = static_cast<std::uint64_t>(window->getPID()),
+            .pid = static_cast<std::uint64_t>(window->backend().pid()),
             .contentX = sampledVisibleBox.x, .contentY = sampledVisibleBox.y,
             .contentWidth = sampledVisibleBox.w, .contentHeight = sampledVisibleBox.h,
             .surfaceWidth = size.x, .surfaceHeight = size.y,

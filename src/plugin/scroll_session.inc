@@ -617,7 +617,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
         [ptr](IPointer::SAxisEvent e, Event::SCallbackInfo &info) {
           if (sessionLocked()) return;
           if (ptr->replaying || ptr->failed || ptr->paused ||
-              (g_pInputManager->getModsFromAllKBs() & HL_MODIFIER_CTRL) ||
+              (g_pInputManager->getModsFromAllKBs() & Input::HL_MODIFIER_CTRL) ||
               g_pInputManager->hasHeldButtons())
             return;
           const auto point = g_pInputManager->getMouseCoordsInternal();
