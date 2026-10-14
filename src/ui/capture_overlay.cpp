@@ -1480,10 +1480,8 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     traceTiming(QStringLiteral("prepare_desktop"), preCaptureTimer.elapsed());
 
     if (!m_quick && m_hasHdrScreen && std::ranges::any_of(m_monitorArtifacts, [](const auto& artifact) { return !artifact.hdrImage.isNull(); })) {
-        hyprcapture::ui::HdrBackdrop::prewarm();
-        m_hdrStartupDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(32);
         for (auto& artifact : m_monitorArtifacts)
-            if (!artifact.hdrImage.isNull())
+            if (artifact.hdrActive && !artifact.hdrImage.isNull())
                 artifact.hdrUpload = hyprcapture::ui::HdrUpload::request(artifact.hdrImage, artifact.referenceNits);
     }
     initializeOverlay(preferredOverlayLogicalGeometry());
@@ -1518,7 +1516,7 @@ CaptureOverlay::CaptureOverlay(const CaptureOverlay& source, const QRect& overla
       m_monitorArtifacts(source.m_monitorArtifacts),
       m_windowArtifacts(source.m_windowArtifacts) {
     m_hasHdrScreen = source.m_hasHdrScreen;
-    m_hdrStartupDeadline = source.m_hdrStartupDeadline;
+    m_hdrNativeWarmup = source.m_hdrNativeWarmup;
     initializeOverlay(overlayGeometry);
 }
 
@@ -1530,6 +1528,11 @@ void CaptureOverlay::initializeOverlay(const QRect& overlayGeometry) {
 
     m_overlayLogicalGeometry = overlayGeometry.isValid() ? overlayGeometry : QRect(0, 0, 1280, 720);
     setGeometry(m_overlayLogicalGeometry);
+    m_hdrStartupWaiting = !m_quick && std::ranges::any_of(m_monitorArtifacts, [this](const auto& a) {
+        return a.hdrActive && a.logicalGeometry.intersects(m_overlayLogicalGeometry);
+    });
+
+    setProperty("hdrFirstFrameMode", m_hdrStartupWaiting ? "waiting" : "sdr");
 
     QElapsedTimer toolbarTimer;
     toolbarTimer.start();
@@ -1554,7 +1557,7 @@ void CaptureOverlay::initializeOverlay(const QRect& overlayGeometry) {
         layerWindow->setDesiredSize(QSize(0, 0));
     }
     if (m_toolbar)
-        m_toolbar->setVisible(m_overlayActive);
+        m_toolbar->setVisible(m_overlayActive && !m_hdrStartupWaiting);
 }
 
 void CaptureOverlay::saveRememberedSettings() {
@@ -1633,7 +1636,7 @@ void CaptureOverlay::setOverlayActive(bool active) {
         m_fullscreenClientSelected = false;
     }
     if (m_toolbar)
-        m_toolbar->setVisible(active);
+        m_toolbar->setVisible(active && !m_hdrStartupWaiting);
     if (m_editor)
         m_editor->setVisible(active && m_editing);
     if (active) {
@@ -1702,7 +1705,7 @@ void CaptureOverlay::adoptInteractionState(const CaptureOverlay& source) {
 bool CaptureOverlay::requestActivation() {
     if (!m_overlayActive)
         emit activationRequested();
-    return m_overlayActive;
+    return m_overlayActive && !m_hdrStartupWaiting;
 }
 
 void CaptureOverlay::parseSessionJson(const QString& json) {
@@ -1713,6 +1716,12 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
 
     m_sessionDecoded = true;
     m_hasHdrScreen = std::ranges::any_of(decoded->monitors, [](const auto& monitor) { return monitor.hdrActive; });
+    // Monitor state is known before loading/converting artifacts. Other helper
+    // modes never construct an overlay; SDR and quick sessions do no warmup.
+    if (!m_quick && m_hasHdrScreen) {
+        traceTiming("overlay.hdr_prewarm");
+        m_hdrNativeWarmup = hyprcapture::ui::HdrBackdrop::prewarm();
+    }
     m_regionCaptureAvailable = decoded->regionCaptureAvailable;
     m_scrollSessionVersion = decoded->scrollSessionVersion;
     m_defaults = decoded->defaults;
@@ -1737,6 +1746,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         artifact.logicalGeometry = protocolRect(info.logicalGeometry);
         artifact.transform = info.transform;
         artifact.focused = info.focused;
+        artifact.hdrActive = info.hdrActive;
         artifact.workspaceWindowCount = info.workspaceWindowCount;
         artifact.singleWorkspaceWindowClass = qString(info.singleWorkspaceWindowClass);
         artifact.singleWorkspaceWindowTitle = qString(info.singleWorkspaceWindowTitle);
@@ -2388,22 +2398,39 @@ void CaptureOverlay::enterEvent(QEnterEvent* event) {
 }
 
 bool CaptureOverlay::event(QEvent* event) {
-    const bool first = m_firstUpdatePending && event->type() == QEvent::UpdateRequest;
-    if (first)
+    const bool update = event->type() == QEvent::UpdateRequest;
+    const bool hadParentFrame = property("hdrFirstParentFrame").toBool();
+    std::optional<ScopedUiTiming> updateTiming;
+    if (m_firstUpdatePending && update) {
         m_firstUpdatePending = false;
-    // QWidget's update processing includes backing-store work, but this is
-    // not a compositor presentation timestamp. Pair it with openlayer externally.
-    if (!first)
-        return QMainWindow::event(event);
-    ScopedUiTiming updateTiming(QStringLiteral("overlay.first_update.%1.%2").arg(x()).arg(y()));
-    return QMainWindow::event(event);
+        updateTiming.emplace(QStringLiteral("overlay.first_update.%1.%2").arg(x()).arg(y()));
+    }
+    const bool handled = QMainWindow::event(event);
+    if (update && !hadParentFrame && property("hdrFirstParentFrame").toBool())
+        traceTiming(QStringLiteral("overlay.first_parent_update_done.%1.%2").arg(x()).arg(y()));
+    // Qt backing-store completion is distinct from Wayland presentation.
+    return handled;
 }
 
 void CaptureOverlay::showEvent(QShowEvent* event) {
     traceTiming(QStringLiteral("overlay.show.%1.%2").arg(x()).arg(y()));
     QMainWindow::showEvent(event);
-    // The Wayland surface may not exist until the layer configure arrives.
-    QTimer::singleShot(0,this,[this]{ prepareHdrBackdrops(); update(); });
+    // Allow the layer configure/transparent buffer commits needed to create
+    // native children, but no frozen SDR desktop or controls during this gate.
+    if (m_hdrStartupWaiting && !m_hdrStartupTimer) {
+        m_hdrStartupDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(100);
+        traceTiming(QStringLiteral("overlay.hdr_gate.begin.%1.%2 max_wait_ms=100").arg(x()).arg(y()));
+        m_hdrStartupTimer = new QTimer(this);
+        m_hdrStartupTimer->setInterval(4);
+        connect(m_hdrStartupTimer, &QTimer::timeout, this, [this] {
+            prepareHdrBackdrops();
+            hdrStartupBlocked();
+            update();
+        });
+        m_hdrStartupTimer->start();
+    }
+    if (m_hdrStartupWaiting)
+        QTimer::singleShot(0, this, [this] { prepareHdrBackdrops(); update(); });
     // A compositor session already initialized hit testing/status from its
     // frozen cursor position. Do not schedule another full-screen repaint
     // immediately after the first frame just to apply the same position.
@@ -3091,66 +3118,88 @@ hyprcapture::DecorationPolicy CaptureOverlay::currentWindowShadow() const {
 }
 
 bool CaptureOverlay::hasHdrBackdrop(const MonitorArtifact& artifact) const {
-    return std::ranges::any_of(m_hdrBackdrops,[&](const auto& b){return b.geometry==artifact.logicalGeometry && b.surface->ready();});
+    return std::ranges::any_of(m_hdrBackdrops,[&](const auto& b){return b.geometry==artifact.logicalGeometry && b.surface && b.surface->ready();});
 }
-void CaptureOverlay::prepareHdrBackdrops() {
-    if (m_hdrBackdropsAttempted || m_quick || !windowHandle() || !windowHandle()->isExposed()) return;
-    m_hdrBackdropsAttempted=true;
-    // Uploads run while toolbar/window construction proceeds. At first paint,
-    // use only the remaining shared startup budget, never a fresh per-output wait.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(4);
-    const auto uploadDeadline = std::min(m_hdrStartupDeadline, deadline);
+bool CaptureOverlay::hdrStartupBlocked() {
+    if (!m_hdrStartupWaiting) return false;
+    const bool ready = std::ranges::all_of(m_monitorArtifacts, [this](const auto& a) {
+        return !a.hdrActive || !a.logicalGeometry.intersects(m_overlayLogicalGeometry) || hasHdrBackdrop(a);
+    });
+    if (!ready && (m_hdrStartupDeadline == std::chrono::steady_clock::time_point{} ||
+                  std::chrono::steady_clock::now() < m_hdrStartupDeadline)) return true;
+    m_hdrStartupWaiting = false;
+    setProperty("hdrFirstFrameMode", ready ? "hdr" : "deadline_fallback");
+    traceTiming(QStringLiteral("overlay.hdr_gate.release.%1.%2 mode=%3").arg(x()).arg(y()).arg(ready ? "hdr" : "sdr_timeout"));
+    if (m_hdrStartupTimer) m_hdrStartupTimer->stop();
+    if (m_toolbar) m_toolbar->setVisible(m_overlayActive);
+    return false;
+}
+
+void CaptureOverlay::queuePqBackdrop(const QRect& geometry) {
+    auto slot = std::ranges::find_if(m_hdrBackdrops, [&](const auto& b) { return b.geometry == geometry; });
+    if (slot == m_hdrBackdrops.end() || slot->pqQueued) return;
+    const auto artifact = std::ranges::find_if(m_monitorArtifacts, [&](const auto& a) { return a.logicalGeometry == geometry; });
+    if (artifact == m_monitorArtifacts.end() || artifact->hdrImage.isNull()) return;
+    slot->pqQueued = true;
     QPointer<CaptureOverlay> overlay(this);
-    for (const auto& artifact:m_monitorArtifacts) {
-        if (artifact.hdrImage.isNull() || !artifact.logicalGeometry.intersects(m_overlayLogicalGeometry)) continue;
-        if (artifact.hdrUpload) {
-            artifact.hdrUpload->waitUntil(uploadDeadline);
-            const auto frame = artifact.hdrUpload->result();
-            if (frame) {
-                auto surface = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), false, true);
-                if (surface->setPreparedImage(frame, globalToLocalRect(artifact.logicalGeometry), deadline)) {
-                    surface->setVisible(m_overlayActive && !m_scrolling);
-                    m_hdrBackdrops.push_back({artifact.logicalGeometry, std::move(surface)});
-                    traceTiming(QStringLiteral("overlay.hdr_first_frame.fp16.%1").arg(artifact.name));
-                    setProperty("hdrFirstFrameMode", "fp16");
-                    continue;
-                }
-            }
-            const bool timedOut = artifact.hdrUpload->state() == hyprcapture::ui::HdrUpload::State::Pending ||
-                std::chrono::steady_clock::now() >= deadline;
-            setProperty("hdrFirstFrameMode", timedOut ? "deadline_fallback" : "upload_fallback");
-            traceTiming(QStringLiteral("overlay.hdr_first_frame.%1.%2").arg(timedOut ? "deadline_fallback" : "upload_fallback").arg(artifact.name));
-        } else {
-            setProperty("hdrFirstFrameMode", "capability_fallback");
-            traceTiming(QStringLiteral("overlay.hdr_first_frame.capability_fallback.%1").arg(artifact.name));
+    QThreadPool::globalInstance()->start(QRunnable::create(
+        [overlay, image = artifact->hdrImage, geometry, reference = artifact->referenceNits] {
+            ScopedUiTiming timing(QStringLiteral("overlay.hdr_backdrop_convert"));
+            float peak = 0;
+            const QImage pq = hyprcapture::ui::hdrToPq10(image, &peak, reference);
+            QMetaObject::invokeMethod(QCoreApplication::instance(), [overlay, pq, geometry, peak, reference] {
+                if (!overlay || pq.isNull() || !overlay->windowHandle()) return;
+                auto* self = overlay.data();
+                auto slot = std::ranges::find_if(self->m_hdrBackdrops, [&](const auto& b) { return b.geometry == geometry; });
+                if (slot == self->m_hdrBackdrops.end()) return;
+                ScopedUiTiming timing(QStringLiteral("overlay.hdr_backdrop_upload"));
+                // PQ must obey the same atomic parent/child commit rule as FP16.
+                auto surface = std::make_unique<hyprcapture::ui::HdrBackdrop>(self->windowHandle(), false, true);
+                surface->setVisible(false);
+                surface->setReadyCallback([overlay](bool) {
+                    if (!overlay) return;
+                    overlay->updateHdrEditBackdrop();
+                    overlay->update();
+                });
+                if (!surface->setPqImage(pq, self->globalToLocalRect(geometry), peak, reference))
+                    qWarning("HyprCapture: native HDR preview unavailable; using SDR preview");
+                slot->surface = std::move(surface);
+                self->update();
+            }, Qt::QueuedConnection);
+        }));
+}
+
+void CaptureOverlay::prepareHdrBackdrops() {
+    if (m_quick || !windowHandle() || !windowHandle()->isExposed()) return;
+    for (const auto& artifact : m_monitorArtifacts) {
+        if (!artifact.hdrActive || !artifact.logicalGeometry.intersects(m_overlayLogicalGeometry)) continue;
+        auto slot = std::ranges::find_if(m_hdrBackdrops, [&](const auto& b) { return b.geometry == artifact.logicalGeometry; });
+        if (slot == m_hdrBackdrops.end()) {
+            m_hdrBackdrops.push_back({artifact.logicalGeometry, {}});
+            slot = std::prev(m_hdrBackdrops.end());
         }
-        // Keep the frozen SDR preview interactive while converting the full
-        // monitor. Workers own shared image data, never widgets or Wayland
-        // objects; closing the overlay does not wait for their conversion.
-        QThreadPool::globalInstance()->start(QRunnable::create(
-            [overlay, image = artifact.hdrImage, geometry = artifact.logicalGeometry, reference = artifact.referenceNits] {
-                ScopedUiTiming timing(QStringLiteral("overlay.hdr_backdrop_convert"));
-                float peak = 0;
-                const QImage pq = hyprcapture::ui::hdrToPq10(image, &peak, reference);
-                QMetaObject::invokeMethod(QCoreApplication::instance(), [overlay, pq, geometry, peak, reference] {
-                    if (!overlay || pq.isNull()) return;
-                    auto* self = overlay.data();
-                    if (!self->windowHandle() || !self->windowHandle()->isExposed()) return;
-                    ScopedUiTiming timing(QStringLiteral("overlay.hdr_backdrop_upload"));
-                    auto surface = std::make_unique<hyprcapture::ui::HdrBackdrop>(self->windowHandle());
-                    surface->setReadyCallback([overlay](bool) {
-                        if (!overlay) return;
-                        overlay->updateHdrEditBackdrop();
-                        overlay->update();
-                    });
-                    if (surface->setPqImage(pq, self->globalToLocalRect(geometry), peak, reference)) {
-                        surface->setVisible(self->m_overlayActive && !self->m_scrolling);
-                        self->m_hdrBackdrops.push_back({geometry, std::move(surface)});
-                        self->updateHdrEditBackdrop();
-                        self->update();
-                    } else qWarning("HyprCapture: native HDR preview unavailable; using SDR preview");
-                }, Qt::QueuedConnection);
-            }));
+        if (slot->fp16Submitted || slot->pqQueued || artifact.hdrImage.isNull()) continue;
+        const auto frame = artifact.hdrUpload ? artifact.hdrUpload->result() : nullptr;
+        if (frame) {
+            slot->fp16Submitted = true;
+            QPointer<CaptureOverlay> overlay(this);
+            auto surface = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), false, true);
+            surface->setVisible(false);
+            surface->setReadyCallback([overlay, geometry = artifact.logicalGeometry](bool ready) {
+                if (!overlay) return;
+                if (!ready) overlay->queuePqBackdrop(geometry);
+                overlay->update();
+            });
+            if (!surface->setPreparedImage(frame, globalToLocalRect(artifact.logicalGeometry)))
+                queuePqBackdrop(artifact.logicalGeometry);
+            slot->surface = std::move(surface);
+        } else if (!artifact.hdrUpload || artifact.hdrUpload->state() == hyprcapture::ui::HdrUpload::State::Failed ||
+                   (m_hdrStartupDeadline != std::chrono::steady_clock::time_point{} &&
+                    std::chrono::steady_clock::now() >= m_hdrStartupDeadline)) {
+            // A stalled GPU cannot leave a polling timer running forever. PQ
+            // remains asynchronous and may recover HDR after the visible timeout.
+            queuePqBackdrop(artifact.logicalGeometry);
+        }
     }
 }
 bool CaptureOverlay::canKeepHdrDesktopInEditor() const {
@@ -3168,7 +3217,7 @@ bool CaptureOverlay::canKeepHdrDesktopInEditor() const {
     // composed. Never substitute this preview for the HDR export pixels.
     QRegion uncovered(m_editor->canvasGeometry());
     for (const auto& backdrop : m_hdrBackdrops)
-        if (backdrop.surface->ready()) uncovered -= QRegion(globalToLocalRect(backdrop.geometry));
+        if (backdrop.surface && backdrop.surface->ready()) uncovered -= QRegion(globalToLocalRect(backdrop.geometry));
     return uncovered.isEmpty();
 }
 
@@ -3323,18 +3372,24 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     std::optional<ScopedUiTiming> paintTiming;
     if (std::exchange(m_firstPaintPending, false) && hyprcapture::ui::timingEnabled())
         paintTiming.emplace(QStringLiteral("overlay.first_paint.%1.%2").arg(x()).arg(y()));
-    std::optional<ScopedUiTiming> visiblePaintTiming;
-    if (m_overlayActive && m_overlayOpacity > 0.0 && std::exchange(m_firstVisiblePaintPending, false) && hyprcapture::ui::timingEnabled())
-        visiblePaintTiming.emplace(QStringLiteral("overlay.first_visible_paint.%1.%2").arg(x()).arg(y()));
     prepareHdrBackdrops();
-    for(auto& b:m_hdrBackdrops) b.surface->setVisible(m_overlayActive && !m_scrolling);
+    const bool startupBlocked = hdrStartupBlocked();
+    std::optional<ScopedUiTiming> visiblePaintTiming;
+    if (!startupBlocked && m_overlayActive && m_overlayOpacity > 0.0 && std::exchange(m_firstVisiblePaintPending, false) && hyprcapture::ui::timingEnabled())
+        visiblePaintTiming.emplace(QStringLiteral("overlay.first_visible_paint.%1.%2").arg(x()).arg(y()));
+    for(auto& b:m_hdrBackdrops) if (b.surface) b.surface->setVisible(!startupBlocked && m_overlayActive && !m_scrolling);
     updateHdrEditBackdrop();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setCompositionMode(QPainter::CompositionMode_Source);
     painter.fillRect(rect(), Qt::transparent);
-    if (!m_overlayActive || m_scrolling)
+    if (startupBlocked || !m_overlayActive || m_scrolling)
         return;
+    if (!property("hdrFirstParentFrame").toBool()) {
+        setProperty("hdrFirstParentFrame", true);
+        traceTiming(QStringLiteral("overlay.first_parent_frame.%1.%2 mode=%3")
+                        .arg(x()).arg(y()).arg(property("hdrFirstFrameMode").toString()));
+    }
     painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
     painter.setOpacity(m_overlayOpacity);
 
@@ -3833,6 +3888,10 @@ void CaptureOverlay::wheelEvent(QWheelEvent* event) {
 }
 
 void CaptureOverlay::keyPressEvent(QKeyEvent* event) {
+    if (m_hdrStartupWaiting && event->key() != Qt::Key_Escape) {
+        event->accept();
+        return;
+    }
     if (m_finishing)
         return;
     if (m_editing) {

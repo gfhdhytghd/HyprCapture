@@ -13,13 +13,13 @@ class HdrBackdrop {
 public:
   explicit HdrBackdrop(QWindow *parent, bool aboveParent = false,
                        bool synchronized = false);
-  static void prewarm();
+  // Call only for an HDR overlay; retain the lease through construction.
+  static std::shared_ptr<void> prewarm();
   static bool fp16Available();
   bool setPreparedImage(const std::shared_ptr<const HdrGpuFrame> &,
-                        const QRect &,
-                        std::chrono::steady_clock::time_point deadline);
+                        const QRect &);
   ~HdrBackdrop();
-  // True accepts the request; a PQ request may become ready asynchronously.
+  // True accepts the request; FP16 and PQ complete asynchronously.
   bool setImage(const QImage &image, const QRect &destination,
                 float referenceNits);
   bool setPqImage(const QImage &image, const QRect &destination, float peakNits,

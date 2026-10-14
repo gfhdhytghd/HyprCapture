@@ -278,13 +278,13 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(hyprcapture::ui::HdrBackdrop::globalsRequestsForTest(), globals);
     }
 
-    void hdrSessionPrewarmsGpuWithoutNativeGlobals() {
+    void hdrSessionPrewarmsGpuAndNativeGlobals() {
         if (!hyprcapture::ui::HdrUpload::gpuSupportedForTest()) QSKIP("Build without dmabuf GPU support");
         const auto globals = hyprcapture::ui::HdrBackdrop::globalsRequestsForTest();
         hyprcapture::CaptureDefaults defaults;
         CaptureOverlay overlay(defaults, false, false, false, hdrSessionJson(defaults, true));
         QVERIFY(hyprcapture::ui::HdrUpload::rendererStartedForTest());
-        QCOMPARE(hyprcapture::ui::HdrBackdrop::globalsRequestsForTest(), globals);
+        QCOMPARE(hyprcapture::ui::HdrBackdrop::globalsRequestsForTest(), globals + 1);
         QVERIFY(qApp->findChildren<QTimer*>("hyprcaptureHdrDrain").empty());
     }
 
@@ -511,27 +511,122 @@ class InPlaceEditorTest final : public QObject {
         }
     }
 
-    void hdrFirstFrameDeadlineAndCapabilityFallback_data() {
-        QTest::addColumn<bool>("pending");
-        QTest::newRow("capability-unavailable") << false;
-        QTest::newRow("driver-missed-deadline") << true;
+    void hdrStartupWaitsForAllBackdropsAndRecoversAfterTimeout_data() {
+        QTest::addColumn<bool>("timeout");
+        QTest::newRow("all-ready-before-deadline") << false;
+        QTest::newRow("late-replies-after-deadline") << true;
     }
-    void hdrFirstFrameDeadlineAndCapabilityFallback() {
-        QFETCH(bool, pending);
-        hyprcapture::CaptureDefaults defaults; defaults.mode=hyprcapture::CaptureMode::Region;
-        CaptureOverlay overlay(defaults,false,false,false,sessionJson(defaults));
-        QVERIFY(!overlay.m_monitorArtifacts.empty());
-        auto& artifact=overlay.m_monitorArtifacts.front();
-        artifact.hdrImage=hyprcapture::ui::sdrToHdr(artifact.image);
-        if(pending)artifact.hdrUpload=hyprcapture::ui::HdrUpload::pendingForTest(artifact.hdrImage);
-        overlay.m_hdrStartupDeadline=std::chrono::steady_clock::now()+std::chrono::milliseconds(2);
-        QElapsedTimer elapsed;elapsed.start();overlay.show();QTest::qWait(20);
-        QCOMPARE(overlay.property("hdrFirstFrameMode").toString(),pending?QString("deadline_fallback"):QString("capability_fallback"));
-        QVERIFY(elapsed.elapsed()<250); // a stalled job cannot hold first paint indefinitely
-        const QImage visible=overlay.grab().toImage();
-        QVERIFY(!visible.isNull());
-        QVERIFY(visible.pixelColor(visible.width()/2,visible.height()/2).alpha()>0);
-        if(pending)artifact.hdrUpload->failForTest();
+    void hdrStartupWaitsForAllBackdropsAndRecoversAfterTimeout() {
+        QFETCH(bool, timeout);
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Region;
+        // Inject stalled protocol/GPU state into a real overlay. Native surface
+        // readiness is controllable offscreen; no driver or sleep is required.
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults, false));
+        auto& first = overlay.m_monitorArtifacts.front();
+        first.hdrActive = true;
+        first.logicalGeometry.setWidth(400);
+        first.hdrImage = hyprcapture::ui::sdrToHdr(first.image);
+        first.hdrUpload = hyprcapture::ui::HdrUpload::pendingForTest(first.hdrImage);
+        auto second = first;
+        second.logicalGeometry.moveLeft(400);
+        overlay.m_monitorArtifacts.push_back(second);
+        overlay.m_hasHdrScreen = true;
+        overlay.m_hdrStartupWaiting = true;
+        auto firstSurface = std::make_unique<hyprcapture::ui::HdrBackdrop>(nullptr);
+        auto secondSurface = std::make_unique<hyprcapture::ui::HdrBackdrop>(nullptr);
+        auto* firstReady = firstSurface.get();
+        auto* secondReady = secondSurface.get();
+        overlay.m_hdrBackdrops.push_back({overlay.m_monitorArtifacts[0].logicalGeometry, std::move(firstSurface), true});
+        overlay.m_hdrBackdrops.push_back({second.logicalGeometry, std::move(secondSurface), true});
+        overlay.m_toolbar->hide();
+        overlay.show();
+        overlay.m_hdrStartupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        const auto parentPixels = [&] {
+            QImage image(overlay.size(), QImage::Format_ARGB32_Premultiplied);
+            image.fill(Qt::transparent);
+            QPainter painter(&image);
+            overlay.render(&painter); // includes child controls
+            return image;
+        };
+        auto transparent = parentPixels();
+        for (int y = 0; y < transparent.height(); ++y)
+            for (int x = 0; x < transparent.width(); ++x)
+                QCOMPARE(transparent.pixelColor(x, y).alpha(), 0);
+        QVERIFY(!overlay.property("hdrFirstParentFrame").toBool());
+        QVERIFY(overlay.m_hdrStartupTimer && overlay.m_hdrStartupTimer->isActive());
+        firstReady->setReadyForTest(true);
+        QVERIFY(overlay.hdrStartupBlocked()); // one monitor still pending
+        QVERIFY(overlay.m_toolbar->isHidden());
+        if (timeout) {
+            overlay.m_hdrStartupDeadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
+            const auto fallback = parentPixels();
+            QVERIFY(!overlay.m_hdrStartupWaiting);
+            QCOMPARE(overlay.property("hdrFirstFrameMode").toString(), QString("deadline_fallback"));
+            // Unready monitor paints the frozen SDR desktop only after timeout.
+            QVERIFY(fallback.pixelColor(600, 100).blue() > 0);
+        }
+        secondReady->setReadyForTest(true);
+        const auto hdrParent = parentPixels();
+        QVERIFY(!overlay.m_hdrStartupWaiting);
+        QVERIFY(!overlay.m_hdrStartupTimer->isActive());
+        QVERIFY(overlay.m_toolbar->isVisible());
+        QVERIFY(overlay.hasHdrBackdrop(overlay.m_monitorArtifacts[1]));
+        // Late HDR readiness also removes SDR desktop pixels from the parent.
+        QCOMPARE(hdrParent.pixelColor(600, 100).blue(), 0);
+        if (!timeout) QCOMPARE(overlay.property("hdrFirstFrameMode").toString(), QString("hdr"));
+        QVERIFY(overlay.property("hdrFirstParentFrame").toBool());
+        overlay.m_monitorArtifacts[0].hdrUpload->failForTest();
+    }
+    void sdrStartupDoesNotWaitOrRequestNativeHdr() {
+        const auto nativeBefore = hyprcapture::ui::HdrBackdrop::globalsRequestsForTest();
+        const auto gpuBefore = hyprcapture::ui::HdrUpload::rendererStartedForTest();
+        hyprcapture::CaptureDefaults defaults;
+        CaptureOverlay overlay(defaults, false, false, false, hdrSessionJson(defaults, false));
+        overlay.show();
+        const auto pixels = overlay.grab().toImage();
+        QVERIFY(pixels.pixelColor(400, 100).alpha() > 0);
+        QVERIFY(!overlay.m_hdrStartupWaiting);
+        QVERIFY(!overlay.m_hdrStartupTimer);
+        QVERIFY(overlay.m_hdrBackdrops.empty());
+        QCOMPARE(hyprcapture::ui::HdrBackdrop::globalsRequestsForTest(), nativeBefore);
+        QCOMPARE(hyprcapture::ui::HdrUpload::rendererStartedForTest(), gpuBefore);
+    }
+    void hdrStartupGateIsEnabledFromSessionAndScopedToOutput() {
+        hyprcapture::CaptureDefaults defaults;
+        CaptureOverlay overlay(defaults, false, false, false, hdrSessionJson(defaults, true));
+        QVERIFY(overlay.m_hdrStartupWaiting);
+        QVERIFY(overlay.m_toolbar->isHidden());
+        CaptureOverlay sdrPeer(overlay, QRect(1000, 0, 800, 600), false);
+        QVERIFY(!sdrPeer.m_hdrStartupWaiting); // HDR output lies outside peer
+        CaptureOverlay hdrPeer(overlay, overlay.m_overlayLogicalGeometry, false);
+        QVERIFY(hdrPeer.m_hdrStartupWaiting);
+    }
+    void hdrStartupTimerReleasesStalledUpload() {
+        hyprcapture::CaptureDefaults defaults;
+        CaptureOverlay overlay(defaults, false, false, false, hdrSessionJson(defaults, true));
+        auto stalled = hyprcapture::ui::HdrUpload::pendingForTest(overlay.m_monitorArtifacts.front().hdrImage);
+        overlay.m_monitorArtifacts.front().hdrUpload = stalled;
+        QElapsedTimer elapsed;
+        elapsed.start();
+        overlay.show();
+        QVERIFY(overlay.m_hdrStartupWaiting);
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrStartupWaiting, 500);
+        QVERIFY(elapsed.elapsed() >= 90 && elapsed.elapsed() < 400);
+        QCOMPARE(overlay.property("hdrFirstFrameMode").toString(), QString("deadline_fallback"));
+        QVERIFY(!overlay.m_hdrStartupTimer->isActive());
+        QVERIFY(overlay.m_hdrBackdrops.front().pqQueued);
+        stalled->failForTest();
+    }
+    void quickHdrSessionDoesNotPrewarmOrWait() {
+        const auto globals = hyprcapture::ui::HdrBackdrop::globalsRequestsForTest();
+        const auto gpu = hyprcapture::ui::HdrUpload::rendererStartedForTest();
+        hyprcapture::CaptureDefaults defaults;
+        CaptureOverlay overlay(defaults, true, false, false, hdrSessionJson(defaults, true));
+        QVERIFY(!overlay.m_hdrStartupWaiting);
+        QVERIFY(!overlay.m_hdrStartupTimer);
+        QCOMPARE(hyprcapture::ui::HdrBackdrop::globalsRequestsForTest(), globals);
+        QCOMPARE(hyprcapture::ui::HdrUpload::rendererStartedForTest(), gpu);
     }
     void hdrCloseBeforeDriverCompletes() {
         hyprcapture::CaptureDefaults defaults;
@@ -589,9 +684,12 @@ class InPlaceEditorTest final : public QObject {
         monitor.artifactPath = path.toStdString();
         monitor.artifactWidth = linear.width(); monitor.artifactHeight = linear.height();
         monitor.artifactFormat = "rgba16f-linear-srgb";
+        monitor.hdrActive = true;
         {
             CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
             QVERIFY(!QFile::exists(path));
+            overlay.m_monitorArtifacts.front().hdrUpload = hyprcapture::ui::HdrUpload::pendingForTest(overlay.m_monitorArtifacts.front().hdrImage);
+            overlay.m_monitorArtifacts.front().hdrUpload->failForTest();
             overlay.show();
             QTRY_VERIFY(overlay.windowHandle() && overlay.windowHandle()->isExposed());
             overlay.repaint();
@@ -709,7 +807,7 @@ class InPlaceEditorTest final : public QObject {
         CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(session)));
         QVERIFY(!QFile::exists(path)); // mapped float pixels must survive unlink
         overlay.show();
-        QTest::qWait(30);
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrStartupWaiting, 500);
         auto* full = modeButton(overlay, "fullscreen");
         QVERIFY(full);
         QTest::mouseClick(full, Qt::LeftButton);

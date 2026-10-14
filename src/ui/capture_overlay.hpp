@@ -31,6 +31,7 @@ class QShowEvent;
 class QWheelEvent;
 class QPropertyAnimation;
 class QScreen;
+class QTimer;
 class InlineSelect;
 class AudioMeter;
 class QSlider;
@@ -95,6 +96,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
         QString name;
         int     transform = 0;
         bool    focused = false;
+        bool    hdrActive = false;
         std::optional<int> workspaceWindowCount;
         QString singleWorkspaceWindowClass;
         QString singleWorkspaceWindowTitle;
@@ -125,12 +127,20 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     };
 
     void prepareHdrBackdrops();
+    void queuePqBackdrop(const QRect& geometry);
+    bool hdrStartupBlocked();
     void updateHdrEditBackdrop();
     bool canKeepHdrDesktopInEditor() const;
     bool hasHdrBackdrop(const MonitorArtifact& artifact) const;
-    struct HdrMonitorBackdrop { QRect geometry; std::unique_ptr<hyprcapture::ui::HdrBackdrop> surface; };
+    struct HdrMonitorBackdrop {
+        QRect geometry;
+        std::unique_ptr<hyprcapture::ui::HdrBackdrop> surface;
+        bool fp16Submitted = false, pqQueued = false;
+    };
     std::vector<HdrMonitorBackdrop> m_hdrBackdrops;
-    bool m_hdrBackdropsAttempted = false;
+    std::shared_ptr<void> m_hdrNativeWarmup;
+    QTimer* m_hdrStartupTimer = nullptr;
+    bool m_hdrStartupWaiting = false;
     std::chrono::steady_clock::time_point m_hdrStartupDeadline{};
     friend class InPlaceEditorTest;
     std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrEditBackdrop;

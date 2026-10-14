@@ -13,7 +13,6 @@
 #include <cstring>
 #include <functional>
 #include <map>
-#include <poll.h>
 #include <set>
 #include <thread>
 #include <vector>
@@ -103,7 +102,6 @@ QImage hdrToPq10(const QImage &image, float *peakNits, float referenceNits) {
 }
 #ifdef HYPRCAPTURE_HDR_WAYLAND
 namespace {
-using Deadline = std::chrono::steady_clock::time_point;
 struct NativeGlobals;
 struct NativeBuffer {
   wl_buffer *buffer = nullptr;
@@ -143,12 +141,14 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   QTimer *timer = nullptr;
   wl_callback *initialSync = nullptr;
   zwp_linux_dmabuf_feedback_v1 *dmaFeedback = nullptr;
-  bool globalsReady = false, managerDone = false;
+  bool globalsReady = false, managerDone = false, prewarming = false, dmaFeedbackDone = false;
   std::map<void *, std::function<void()>> progress;
   std::shared_ptr<NativeGlobals> draining;
   void updateTimer() {
     const bool active =
-        !clients.empty() || !buffers.empty() || !pendingImports.empty();
+        !clients.empty() || !buffers.empty() || !pendingImports.empty() ||
+        (prewarming && (!globalsReady || (manager && !managerDone) ||
+                        (dmaFeedback && !dmaFeedbackDone)));
     if (active && !closed) {
       draining = shared_from_this();
       timer->start();
@@ -176,38 +176,6 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
         }};
     wl_callback_add_listener(initialSync, bound ? &second : &first, this);
     wl_display_flush(display);
-  }
-  bool sync(Deadline deadline) {
-    if (!display || closed || std::chrono::steady_clock::now() >= deadline)
-      return false;
-    bool done = false;
-    auto *callback = wl_display_sync(display);
-    wl_proxy_set_queue(reinterpret_cast<wl_proxy *>(callback), queue);
-    static const wl_callback_listener listener{
-        [](void *p, wl_callback *, uint32_t) {
-          *static_cast<bool *>(p) = true;
-        }};
-    wl_callback_add_listener(callback, &listener, &done);
-    wl_display_flush(display);
-    while (!done && std::chrono::steady_clock::now() < deadline) {
-      if (wl_display_dispatch_queue_pending(display, queue) < 0)
-        break;
-      if (done)
-        break;
-      if (wl_display_prepare_read_queue(display, queue) != 0)
-        continue;
-      const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
-                            deadline - std::chrono::steady_clock::now())
-                            .count();
-      pollfd p{wl_display_get_fd(display), POLLIN, 0};
-      if (left > 0 && poll(&p, 1, int(left)) > 0) {
-        if (wl_display_read_events(display) < 0)
-          break;
-      } else
-        wl_display_cancel_read(display);
-    }
-    wl_callback_destroy(callback);
-    return done;
   }
   void drain() {
     if (display && !closed)
@@ -289,7 +257,9 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
       if (v >= 4) {
         s.dmaFeedback = zwp_linux_dmabuf_v1_get_default_feedback(s.dma);
         static const zwp_linux_dmabuf_feedback_v1_listener feedback{
-            [](void *, zwp_linux_dmabuf_feedback_v1 *) {},
+            [](void *p, zwp_linux_dmabuf_feedback_v1 *) {
+              static_cast<NativeGlobals *>(p)->dmaFeedbackDone = true;
+            },
             [](void *p, zwp_linux_dmabuf_feedback_v1 *, int32_t fd,
                uint32_t size) {
               auto &s = *static_cast<NativeGlobals *>(p);
@@ -347,8 +317,7 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
                                }) &&
            qEnvironmentVariable("HYPRCAPTURE_HDR_DMABUF") != "0";
   }
-  wp_image_description_v1 *description(bool fp16, float peak, float reference,
-                                       Deadline deadline) {
+  wp_image_description_v1 *description(bool fp16, float peak, float reference) {
     const auto ref = uint32_t(std::clamp(reference, 1.F, 10000.F));
     const auto envelope = std::min(
         10000U,
@@ -381,7 +350,7 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
       wp_image_description_v1_add_listener(d->object, &l, d.get());
       i = descriptions.emplace(key, std::move(d)).first;
     }
-    if (!i->second->done && !sync(deadline))
+    if (!i->second->done)
       return nullptr;
     return i->second->ready ? i->second->object : nullptr;
   }
@@ -514,6 +483,7 @@ struct HdrBackdrop::Impl {
   QPointer<QWindow> parent;
   bool aboveParent = false, synchronized = false;
   std::function<void()> pending;
+  std::function<void()> cancelImport;
   QRect pendingDestination;
   bool requestedVisible = true;
   void activate() {
@@ -549,7 +519,9 @@ struct HdrBackdrop::Impl {
       wl_subsurface_place_above(subsurface, parentSurface);
     else
       wl_subsurface_place_below(subsurface, parentSurface);
-    if (!synchronized)
+    if (synchronized)
+      wl_subsurface_set_sync(subsurface);
+    else
       wl_subsurface_set_desync(subsurface);
     viewport = wp_viewporter_get_viewport(g.viewporter, surface);
     colorSurface = wp_color_manager_v1_get_surface(g.manager, surface);
@@ -591,11 +563,17 @@ struct HdrBackdrop::Impl {
     } else
       wl_surface_attach(surface, nullptr, 0, 0);
     wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
+    traceTiming(QStringLiteral("hdr.child_commit mode=%1 visible=%2 synchronized=%3 x=%4 y=%5")
+                    .arg(buffer && buffer->frame ? "fp16" : "pq")
+                    .arg(visible && buffer).arg(synchronized)
+                    .arg(destination.x()).arg(destination.y()));
     wl_surface_commit(surface);
     wl_display_flush(globals->display);
   }
   void close() {
     pending = {};
+    if (auto cancel = std::exchange(cancelImport, {}))
+      cancel();
     if (globals) {
       globals->progress.erase(this);
       globals->clients.erase(this);
@@ -633,7 +611,19 @@ struct HdrBackdrop::Impl {
   }
 #endif
 };
-void HdrBackdrop::prewarm() { HdrUpload::prewarm(); }
+std::shared_ptr<void> HdrBackdrop::prewarm() {
+  HdrUpload::prewarm();
+#ifdef HYPRCAPTURE_HDR_WAYLAND
+  auto g = NativeGlobals::get();
+  if (g) {
+    g->prewarming = true;
+    g->updateTimer();
+  }
+  return g;
+#else
+  return {};
+#endif
+}
 bool HdrBackdrop::fp16Available() {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   auto g = NativeGlobals::get();
@@ -693,24 +683,42 @@ bool HdrBackdrop::ready() const {
 #endif
 }
 bool HdrBackdrop::setPreparedImage(
-    const std::shared_ptr<const HdrGpuFrame> &frame, const QRect &destination,
-    std::chrono::steady_clock::time_point deadline) {
+    const std::shared_ptr<const HdrGpuFrame> &frame, const QRect &destination) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
-  if (m->globals && !m->globals->closed && !m->surface) {
-    m->activate();
-    m->globals->sync(deadline);
-    m->createSurface();
-  }
-  if (!m->surface || !m->globals->fp16() || !frame || frame->fd < 0 ||
-      !destination.isValid() ||
-      !m->globals->modifiers.contains(
-          {WL_SHM_FORMAT_ABGR16161616F, frame->modifier}))
+  m->pending = {};
+  const auto fail = [&] {
+    m->descriptionReady = false;
+    m->close();
     return false;
+  };
+  if (!m->globals || m->globals->closed || !frame || frame->fd < 0 ||
+      !destination.isValid())
+    return fail();
   auto &g = *m->globals;
-  auto *desc =
-      g.description(true, frame->peakNits, frame->referenceNits, deadline);
-  if (!desc)
-    return false;
+  m->activate();
+  m->pendingDestination = destination;
+  const auto defer = [&] {
+    m->pending = [this, frame] {
+      const bool accepted = setPreparedImage(frame, m->pendingDestination);
+      if (!m->pending) {
+        if (m->parent) m->parent->requestUpdate();
+        if (auto callback = m->completed) callback(accepted && ready());
+      }
+    };
+    wl_display_flush(g.display);
+    return true;
+  };
+  if (!g.globalsReady || (g.manager && !g.managerDone) ||
+      (g.dmaFeedback && !g.dmaFeedbackDone)) return defer();
+  if (!g.fp16() || !g.modifiers.contains(
+          {WL_SHM_FORMAT_ABGR16161616F, frame->modifier})) return fail();
+  if (!m->createSurface()) return defer();
+  auto *desc = g.description(true, frame->peakNits, frame->referenceNits);
+  if (!desc) {
+    const bool waiting = std::ranges::any_of(
+        g.descriptions, [](const auto &d) { return !d.second->done; });
+    return waiting ? defer() : fail();
+  }
   struct Import {
     wl_buffer *buffer = nullptr;
     bool done = false, abandoned = false;
@@ -731,10 +739,8 @@ bool HdrBackdrop::setPreparedImage(
         auto *hold = static_cast<std::shared_ptr<Import> *>(p);
         auto &result = **hold;
         result.done = true;
-        if (result.abandoned)
-          wl_buffer_destroy(b);
-        else
-          result.buffer = b;
+        if (result.abandoned) wl_buffer_destroy(b);
+        else result.buffer = b;
         result.owner->pendingImports.erase(params);
         zwp_linux_buffer_params_v1_destroy(params);
         delete hold;
@@ -753,26 +759,37 @@ bool HdrBackdrop::setPreparedImage(
                                  frame->modifier & 0xffffffff);
   zwp_linux_buffer_params_v1_create(params, frame->width, frame->height,
                                     WL_SHM_FORMAT_ABGR16161616F, 0);
-  if (!g.sync(deadline) || !result->done || !result->buffer) {
-    // Late import completion owns its frame and has no pointer to the widget.
-    // Keep the request/listener until its created/failed event, then discard
-    // it.
+  // Retain one import instead of abandoning it at a paint deadline. Late
+  // listeners retain the frame, but never the widget or Impl after close.
+  m->cancelImport = [result] {
     result->abandoned = true;
-    if (result->buffer)
-      wl_buffer_destroy(result->buffer);
-    return false;
-  }
-  auto *buffer = g.own(result->buffer, frame);
-  g.retire(m->buffer);
-  m->buffer = buffer;
-  m->descriptionReady = true;
-  wp_color_management_surface_v1_set_image_description(
-      m->colorSurface, desc, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
-  m->imageSize = {frame->width, frame->height};
-  m->destination = {};
-  m->visible = true;
-  traceTiming("hdr.attach_ready mode=fp16");
-  setGeometry(destination);
+    if (auto *buffer = std::exchange(result->buffer, nullptr))
+      wl_buffer_destroy(buffer);
+  };
+  m->pending = [this, result, desc] {
+    if (!result->done) return;
+    m->pending = {};
+    m->cancelImport = {};
+    if (!result->buffer) {
+      m->close();
+      if (auto callback = m->completed) callback(false);
+      return;
+    }
+    auto &g = *m->globals;
+    g.retire(m->buffer);
+    m->buffer = g.own(std::exchange(result->buffer, nullptr), result->frame);
+    m->descriptionReady = true;
+    wp_color_management_surface_v1_set_image_description(
+        m->colorSurface, desc, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+    m->imageSize = {result->frame->width, result->frame->height};
+    m->destination = {};
+    m->visible = m->requestedVisible;
+    traceTiming("hdr.attach_ready mode=fp16");
+    setGeometry(m->pendingDestination);
+    if (m->parent) m->parent->requestUpdate();
+    if (auto callback = m->completed) callback(true);
+  };
+  wl_display_flush(g.display);
   return true;
 #else
   return false;
@@ -834,7 +851,7 @@ bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
   if (!m->createSurface())
     return defer();
   auto *desc =
-      g.description(false, peak, reference, std::chrono::steady_clock::now());
+      g.description(false, peak, reference);
   if (!desc) {
     const bool waiting = std::ranges::any_of(
         g.descriptions, [](const auto &d) { return !d.second->done; });
