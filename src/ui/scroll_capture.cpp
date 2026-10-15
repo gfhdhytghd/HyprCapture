@@ -241,6 +241,7 @@ void ScrollCaptureController::start() {
       {"controlPath", controlPath},
       {"windowAddress", m_windowAddress},
       {"hdr", m_captureHdr},
+      {"motionMetadata", true},
       {"rect", QJsonArray{m_capture.x(), m_capture.y(), m_capture.width(),
                           m_capture.height()}}};
   QFile file(m_requestPath);
@@ -280,7 +281,7 @@ void ScrollCaptureController::acceptFrames() {
 }
 void ScrollCaptureController::readFrames() {
   for (int count = 0; count < 8; ++count) {
-    unsigned char header[WINDOW_STREAM_FRAME_HEADER_BYTES];
+    unsigned char header[SCROLL_STREAM_FRAME_HEADER_BYTES];
     char ancillary[CMSG_SPACE(sizeof(int) * 4)]{};
     iovec vec{header, sizeof(header)};
     msghdr message{};
@@ -357,7 +358,7 @@ void ScrollCaptureController::readFrames() {
     {
       std::lock_guard lock(m_mutex);
       Frame incoming{frame, geometry, metadata->sequence,
-                     metadata->captureMonotonicNs, m_background, hdr};
+                     metadata->captureMonotonicNs, m_background, hdr, metadata->scrollMotion};
       // Keep intermediate motion while stitching runs independently. Preserve
       // the oldest pending anchors and refresh only the tail under pressure;
       // memory remains bounded even for native HDR window frames.
@@ -525,13 +526,17 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
       ScrollStitcher::Result result;
       {
         ScopedUiTiming appendTiming(QStringLiteral("scroll.append seq=%1").arg(frame->sequence));
-        result = stitcher.append(frame->image, original, frame->hdr);
+        result = stitcher.append(frame->image, original, frame->hdr, frame->scrollMotion ? &*frame->scrollMotion : nullptr, frame->timeNs);
       }
       traceTiming(QStringLiteral("scroll.tracking seq=%1 status=%2 offset=%3 confidence=%4 reason=%5 viewport=%6 top_mask=%7 bottom_mask=%8 content_width=%9 skipped=%10")
                       .arg(frame->sequence).arg(QLatin1String(ScrollStitcher::statusName(result.status))).arg(result.displacement)
                       .arg(result.confidence, 0, 'f', 5).arg(QLatin1String(result.reason))
                       .arg(stitcher.layout().viewportY).arg(stitcher.layout().topOcclusion)
                       .arg(stitcher.layout().bottomOcclusion).arg(stitcher.layout().content.width()).arg(frame->sequence > processedSequence ? frame->sequence-processedSequence-1 : 0));
+      traceTiming(QStringLiteral("scroll.prior seq=%1 input_wheel=%2 input_finger=%3 input_continuous=%4 input_legacy=%5 predicted=%6 tolerance=%7 measured=%8 used=%9 gain_wheel=%10 gain_finger=%11 capture_ns=%12 input_ns=%13")
+          .arg(frame->sequence).arg(result.input[0]).arg(result.input[1]).arg(result.input[2]).arg(result.input[3])
+          .arg(result.predictedOffset).arg(result.priorTolerance).arg(result.displacement).arg(result.priorUsed)
+          .arg(result.gain[0]).arg(result.gain[1]).arg(frame->timeNs).arg(frame->scrollMotion ? frame->scrollMotion->lastInputNs : 0));
       processedSequence = frame->sequence;
       if (timingEnabled()) {
         const auto regions=stitcher.layout();
@@ -679,7 +684,10 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
     if (m_editor)
       m_editor->setAnnotationPresentation(false, 0, 0);
     m_hiddenAnnotations = true;
-    setStatus(tr("Cannot align; scroll back slightly"));
+    setStatus(result.status==ScrollStitcher::Status::Ambiguous &&
+                      std::strcmp(result.reason,"identical-pixels-with-pending-input")==0
+                  ? tr("Waiting for page movement")
+                  : tr("Cannot align; scroll back slightly"));
     if (result.status == ScrollStitcher::Status::LimitReached ||
         result.status == ScrollStitcher::Status::SizeChanged) {
       command({{"command", "pause"}});

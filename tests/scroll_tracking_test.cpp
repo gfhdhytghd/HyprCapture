@@ -101,7 +101,7 @@ int main(int argc, char **argv) {
                  stitcher.layout().viewportY!=y) {
                 std::cerr<<"translucent="<<translucent<<" sticky="<<sticky
                          <<" previous="<<previous<<" next="<<y<<" status="<<int(r.status)
-                         <<" actual="<<stitcher.layout().viewportY<<" reason="<<r.reason<<'\n';
+                         <<" actual="<<stitcher.layout().viewportY<<" reason="<<r.reason<<" top="<<stitcher.layout().topOcclusion<<" bottom="<<stitcher.layout().bottomOcclusion<<" content="<<stitcher.layout().content.x()<<","<<stitcher.layout().content.y()<<","<<stitcher.layout().content.width()<<","<<stitcher.layout().content.height()<<'\n';
                 return 1;
             }
             previous=y;
@@ -124,6 +124,7 @@ int main(int argc, char **argv) {
         const auto before=stitcher.originalImage(), beforeHdr=stitcher.hdrImage();
         const auto [farSdr,farRaw]=frame(4800);
         const auto rejected=stitcher.append(farSdr,farRaw,floatPlane(farRaw));
+        if(rejected.status!=Status::NoOverlap && rejected.status!=Status::Ambiguous) std::cerr<<"far translucent="<<translucent<<" sticky="<<sticky<<" status="<<ScrollStitcher::statusName(rejected.status)<<" reason="<<rejected.reason<<" delta="<<rejected.displacement<<" viewport="<<stitcher.layout().viewportY<<"\n";
         require(rejected.status==Status::NoOverlap || rejected.status==Status::Ambiguous,"insufficient overlap is rejected");
         require(stitcher.originalImage()==before && stitcher.hdrImage()==beforeHdr,"rejection preserves all confirmed planes");
         const auto [backSdr,backRaw]=frame(2400);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "shared/scroll_motion.hpp"
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -14,6 +15,7 @@ namespace hyprcapture {
 // SCM_RIGHTS memfd. Pixels never occupy the socket packet itself.
 constexpr std::size_t WINDOW_STREAM_FRAME_HEADER_BYTES = 96;
 constexpr std::uint16_t WINDOW_STREAM_FRAME_VERSION = 1;
+constexpr std::size_t SCROLL_STREAM_FRAME_HEADER_BYTES = 168;
 constexpr std::uint32_t WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN = 1;
 // Scroll-only paired planes: RGBA8 followed by premultiplied linear sRGB
 // RGBA16F in scRGB units (1.0 = 80 nits), captured under the same PBO fence.
@@ -55,10 +57,12 @@ struct WindowStreamFrameMetadata {
     std::uint32_t stride = 0;
     std::uint32_t format = WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN;
     std::uint64_t payloadBytes = 0;
+    std::optional<ScrollMotionSnapshot> scrollMotion;
 };
 
 bool validWindowStreamFrameMetadata(const WindowStreamFrameMetadata& metadata);
 std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES> encodeWindowStreamFrameHeader(const WindowStreamFrameMetadata& metadata);
+std::array<unsigned char, SCROLL_STREAM_FRAME_HEADER_BYTES> encodeScrollStreamFrameHeader(const WindowStreamFrameMetadata& metadata);
 std::optional<WindowStreamFrameMetadata> decodeWindowStreamFrameHeader(const unsigned char* bytes, std::size_t length);
 
 // The frame owns a payload descriptor. The future worker must create and
