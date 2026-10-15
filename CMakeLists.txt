@@ -425,6 +425,13 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-recording-state-test PRIVATE nlohmann_json::nlohmann_json)
   add_test(NAME hyprcapture-recording-state-test COMMAND hyprcapture-recording-state-test)
 
+  add_executable(hyprcapture-timing-test tests/timing_test.cpp src/plugin/timing.cpp)
+  target_include_directories(hyprcapture-timing-test PRIVATE src)
+  target_link_libraries(hyprcapture-timing-test PRIVATE Threads::Threads)
+  target_compile_options(hyprcapture-timing-test PRIVATE -UNDEBUG)
+  add_test(NAME plugin-timing COMMAND hyprcapture-timing-test)
+  set_tests_properties(plugin-timing PROPERTIES TIMEOUT 15)
+
   add_executable(hyprcapture-recording-codec-test tests/recording_codec_test.cpp)
   target_include_directories(hyprcapture-recording-codec-test PRIVATE src)
   target_compile_options(hyprcapture-recording-codec-test PRIVATE -UNDEBUG)

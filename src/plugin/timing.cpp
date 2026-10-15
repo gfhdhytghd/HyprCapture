@@ -1,9 +1,5 @@
 #include "plugin/timing.hpp"
 
-#include <hyprland/src/config/ConfigManager.hpp>
-#include <hyprland/src/config/shared/Types.hpp>
-#include <hyprland/src/plugins/PluginAPI.hpp>
-
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -13,61 +9,24 @@
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <memory>
+#include <utility>
 #include <string>
 #include <sys/stat.h>
-#include <typeindex>
 #include <unistd.h>
-
-extern HANDLE g_pluginHandle;
 
 namespace hyprcapture {
 namespace {
 
 std::mutex g_timingMutex;
-std::atomic<bool> g_cachedTimingEnabled = false;
-std::atomic<long long> g_nextTimingRefreshNs = 0;
+struct TimingConfig {
+    bool enabled = false;
+    std::string file;
+};
 
-std::string configName(const std::string& suffix) {
-    return "plugin:hyprcapture:" + suffix;
-}
-
-const Config::SConfigOptionReply configOption(const std::string& name) {
-    if (!g_pluginHandle)
-        return {};
-    return Config::mgr()->getConfigValue(name);
-}
-
-bool configBool(const std::string& suffix, bool fallback) {
-    const auto value = configOption(configName(suffix));
-    if (!value.dataptr || !value.type)
-        return fallback;
-
-    const auto type = std::type_index(*value.type);
-    if (type == typeid(Config::BOOL))
-        return **reinterpret_cast<Config::BOOL* const*>(value.dataptr);
-
-    if (type == typeid(Config::INTEGER))
-        return **reinterpret_cast<Config::INTEGER* const*>(value.dataptr) != 0;
-
-    return fallback;
-}
-
-std::string configString(const std::string& suffix) {
-    const auto value = configOption(configName(suffix));
-    if (!value.dataptr || !value.type)
-        return {};
-
-    const auto type = std::type_index(*value.type);
-    if (type == typeid(Config::STRING))
-        return **reinterpret_cast<Config::STRING* const*>(value.dataptr);
-
-    if (type == typeid(Hyprlang::STRING)) {
-        const auto raw = *reinterpret_cast<Hyprlang::STRING const*>(value.dataptr);
-        return raw ? std::string(raw) : std::string{};
-    }
-
-    return {};
-}
+// Readers never reach into the compositor configuration. Publish both values
+// together so an encoder worker sees an immutable, consistent snapshot.
+std::atomic<std::shared_ptr<const TimingConfig>> g_timingConfig{std::make_shared<const TimingConfig>()};
 
 bool runtimeRootMatches(const std::filesystem::path& root, const std::filesystem::path& path) {
     std::error_code ec;
@@ -97,33 +56,24 @@ bool privateTimingPath(const std::filesystem::path& path) {
         runtimeRootMatches(std::filesystem::temp_directory_path() / rootName, path);
 }
 
-std::string timingFilePath() {
-    if (const auto configured = configString("timing_file"); !configured.empty())
-        return configured;
-    if (const char* env = std::getenv("HYPRCAPTURE_TIMING_FILE"); env && *env)
-        return env;
-    return {};
-}
-
 } // namespace
 
+void refreshTimingConfig(bool enabled, std::string file) {
+    if (file.empty()) {
+        if (const char* env = std::getenv("HYPRCAPTURE_TIMING_FILE"); env && *env)
+            file = env;
+    }
+    enabled = enabled || std::getenv("HYPRCAPTURE_TIMING") || std::getenv("HYPRCAPTURE_TIMING_FILE");
+    g_timingConfig.store(std::make_shared<const TimingConfig>(TimingConfig{enabled, std::move(file)}), std::memory_order_release);
+}
+
 bool timingEnabled() {
-    const auto now = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    if (now < g_nextTimingRefreshNs.load(std::memory_order_relaxed))
-        return g_cachedTimingEnabled.load(std::memory_order_relaxed);
-
-    std::lock_guard lock(g_timingMutex);
-    if (now < g_nextTimingRefreshNs.load(std::memory_order_relaxed))
-        return g_cachedTimingEnabled.load(std::memory_order_relaxed);
-
-    const bool enabled = configBool("timing", false) || std::getenv("HYPRCAPTURE_TIMING") || std::getenv("HYPRCAPTURE_TIMING_FILE");
-    g_cachedTimingEnabled.store(enabled, std::memory_order_relaxed);
-    g_nextTimingRefreshNs.store(now + std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::milliseconds(250)).count(), std::memory_order_relaxed);
-    return enabled;
+    return g_timingConfig.load(std::memory_order_acquire)->enabled;
 }
 
 void traceTiming(std::string_view event, long long elapsedUs) {
-    if (!timingEnabled())
+    const auto config = g_timingConfig.load(std::memory_order_acquire);
+    if (!config->enabled)
         return;
 
     const auto now = std::chrono::system_clock::now();
@@ -136,7 +86,7 @@ void traceTiming(std::string_view event, long long elapsedUs) {
     line += "\n";
 
     std::lock_guard lock(g_timingMutex);
-    const auto      path = timingFilePath();
+    const auto&     path = config->file;
     if (!path.empty() && privateTimingPath(path)) {
         std::ofstream out(path, std::ios::app);
         if (out) {
