@@ -184,7 +184,10 @@ void eagainDropsThenDrainingAllowsTheSameConnectionToRecover() {
     assert(sender.submit(metadata(20), std::vector<unsigned char>(8, 20)));
     auto client = acceptClient(listener);
     for (std::uint64_t sequence = 21; sequence < 180; ++sequence) {
-        assert(sender.submit(metadata(sequence), std::vector<unsigned char>(8, static_cast<unsigned char>(sequence))));
+        // submit() may drop on mutex contention by contract. Keep driving
+        // the slow consumer until the socket itself reports backpressure.
+        (void)sender.submit(metadata(sequence), std::vector<unsigned char>(8, static_cast<unsigned char>(sequence)));
+        assert(sender.state() == WindowStreamSenderState::Connected);
         std::this_thread::sleep_for(1ms);
         if (sender.failure() == WindowStreamSenderFailure::SendWouldBlock)
             break;

@@ -483,6 +483,17 @@ if(BUILD_TESTING)
   target_compile_options(hyprcapture-window-stream-sender-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-window-stream-sender-test COMMAND hyprcapture-window-stream-sender-test)
 
+  add_executable(hyprcapture-window-stream-sender-startup-test
+    tests/window_stream_sender_startup_test.cpp
+    src/plugin/window_stream.cpp
+    src/plugin/window_stream_sender.cpp
+  )
+  target_include_directories(hyprcapture-window-stream-sender-startup-test PRIVATE src)
+  target_compile_options(hyprcapture-window-stream-sender-startup-test PRIVATE -UNDEBUG)
+  target_link_libraries(hyprcapture-window-stream-sender-startup-test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+  add_test(NAME window-stream-sender-startup COMMAND hyprcapture-window-stream-sender-startup-test)
+  set_tests_properties(window-stream-sender-startup PROPERTIES TIMEOUT 5)
+
   add_executable(hyprcapture-window-gpu-wire-test
     tests/window_gpu_wire_test.cpp
     src/plugin/window_gpu_wire.cpp
