@@ -684,7 +684,7 @@ class AnnotationCanvas final : public QWidget {
     }
     void restore(const std::shared_ptr<const AnnotationSnapshot>& state) {
         if(!state) return;
-        cancelGesture(); base=state->base; m_annotations=state->annotations; m_history=state->history;
+        cancelGesture(); m_editingTextIndex=-1; base=state->base; m_annotations=state->annotations; m_history=state->history;
         m_historyPosition=state->position; m_selected=state->selected; m_displayRect=state->display; m_zoom=state->zoom; m_pan=state->pan; m_fitToViewport=state->fitToViewport;
         scrollLayout.reset(); fadingLayout.reset(); liveScroll=false; annotationsReady=true; annotationOpacity=1; annotationOffset=0; notify();
     }
@@ -1080,10 +1080,10 @@ class AnnotationCanvas final : public QWidget {
                     index = static_cast<int>(m_annotations.size());
                     m_annotations.push_back(*text);
                     m_editingTextIndex = index;
-                } else if (index >= 0) m_annotations[index] = *text;
+                } else if (index >= 0 && index < static_cast<int>(m_annotations.size())) m_annotations[index] = *text;
                 if (final) {
                     m_editingTextIndex = -1;
-                    if (index >= 0) {
+                    if (index >= 0 && index < static_cast<int>(m_annotations.size())) {
                         m_annotations.erase(m_annotations.begin() + index);
                         if (!text->text.trimmed().isEmpty()) commit({Edit::Kind::Add, index, {}, *text});
                     }
@@ -2473,7 +2473,11 @@ void AnnotationEditor::changeEvent(QEvent* event) {
 }
 
 std::shared_ptr<const AnnotationSnapshot> AnnotationEditor::snapshot() const { return m_impl->canvas->snapshot(); }
-void AnnotationEditor::restore(const std::shared_ptr<const AnnotationSnapshot>& state) { m_impl->canvas->restore(state); }
+void AnnotationEditor::restore(const std::shared_ptr<const AnnotationSnapshot>& state) {
+    if (!state) return;
+    m_impl->finishTextEditing(false);
+    m_impl->canvas->restore(state);
+}
 void AnnotationEditor::setScrollImage(const QImage& image,const hyprcapture::ui::ScrollLayout& layout,bool live) { m_impl->canvas->scrollImage(image,layout,live); }
 void AnnotationEditor::setScrollEnabled(bool enabled) { m_impl->canvas->scrollEnabled=enabled; }
 void AnnotationEditor::setLiveScrollPresentation(bool live) { m_impl->canvas->liveScroll=live; m_impl->canvas->update(); }

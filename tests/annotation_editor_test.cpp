@@ -836,6 +836,87 @@ class AnnotationEditorTest final : public QObject {
         QCOMPARE(cancelled.count(), 1);
     }
 
+    void restoreFinishesActiveText_data() {
+        QTest::addColumn<bool>("existing");
+        QTest::newRow("new") << false;
+        QTest::newRow("existing") << true;
+    }
+
+    void restoreFinishesActiveText() {
+        QFETCH(bool, existing);
+        AnnotationEditor editor;
+        const QImage source = image(QSize(400, 300), Qt::white);
+        initialize(editor, source);
+        selectTool(editor, 7);
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        const QPoint origin = displayed(QPoint(20, 30));
+        if (existing) {
+            QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, origin);
+            editor.findChild<QPlainTextEdit*>("annotationTextInput")->setPlainText("saved text");
+            QTest::keyClick(editor.findChild<QPlainTextEdit*>("annotationTextInput"), Qt::Key_Return, Qt::ControlModifier);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+        const auto restored = editor.resultImage();
+        const auto state = editor.snapshot();
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, origin);
+        auto* input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(input && input->isVisible());
+        input->setPlainText("unfinished changes");
+        editor.restore(state);
+        QVERIFY(!input->isVisible());
+        QVERIFY(canvas->isEnabled());
+        QCOMPARE(editor.resultImage(), restored);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QApplication::processEvents();
+        QCOMPARE(editor.resultImage(), restored);
+
+        // A new session must not retain the old editing index or history.
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(300, 230)));
+        input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(input && input->isVisible());
+        input->setPlainText("new session");
+        QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
+        const auto updated = editor.resultImage();
+        QVERIFY(updated != restored);
+        editor.undo();
+        QCOMPARE(editor.resultImage(), restored);
+        editor.redo();
+        QCOMPARE(editor.resultImage(), updated);
+    }
+
+    void textCompletionAfterAnnotationsCleared_data() {
+        QTest::addColumn<bool>("existing");
+        QTest::newRow("new") << false;
+        QTest::newRow("existing") << true;
+    }
+
+    void textCompletionAfterAnnotationsCleared() {
+        QFETCH(bool, existing);
+        AnnotationEditor editor;
+        const QImage source = image(QSize(400, 300), Qt::white);
+        initialize(editor, source);
+        selectTool(editor, 7);
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        const QPoint origin = displayed(QPoint(20, 30));
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, origin);
+        auto* input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(input && input->isVisible());
+        input->setPlainText("text before clear");
+        if (existing) {
+            QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, origin);
+            input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+            QVERIFY(input && input->isVisible());
+        }
+        editor.clearAnnotations();
+        input->setPlainText("late edit after clear");
+        QTest::keyClick(input, Qt::Key_Return, Qt::ControlModifier);
+        QVERIFY(!input->isVisible());
+        QVERIFY(canvas->isEnabled());
+        QCOMPARE(editor.resultImage(), source);
+    }
+
     void fitBringsOffscreenImageIntoViewport() {
         AnnotationEditor editor;
         editor.resize(600, 400);
