@@ -361,6 +361,14 @@ if(BUILD_TESTING)
   add_test(NAME material-icon COMMAND hyprcapture-material-icon-test)
   set_tests_properties(material-icon PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
 
+  add_executable(hyprcapture-screenshot-notification-test
+    tests/screenshot_notification_test.cpp src/ui/screenshot_notification.cpp src/shared/config.cpp)
+  target_include_directories(hyprcapture-screenshot-notification-test PRIVATE src)
+  target_link_libraries(hyprcapture-screenshot-notification-test PRIVATE Qt6::Gui)
+  target_compile_options(hyprcapture-screenshot-notification-test PRIVATE -UNDEBUG)
+  add_test(NAME screenshot-notification COMMAND hyprcapture-screenshot-notification-test)
+  set_tests_properties(screenshot-notification PROPERTIES TIMEOUT 10)
+
   add_executable(hyprcapture-session-startup-test tests/session_startup_test.cpp)
   target_include_directories(hyprcapture-session-startup-test PRIVATE src)
   add_test(NAME session-startup COMMAND hyprcapture-session-startup-test)

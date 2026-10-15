@@ -75,6 +75,27 @@ with SessionLockFixture() as lock, tempfile.TemporaryDirectory(prefix='hc-transc
     else:
         print('SKIP subcases: mount namespace unavailable for process startup/empty-output checks')
 
+    # The real notify-send must receive the daemon's delayed reply before the
+    # APNG helper exits. Use a private bus; never notify the live desktop.
+    try:
+        from notification_fixture import NotificationFixture
+    except ImportError:
+        NotificationFixture = None
+    if NotificationFixture and shutil.which('notify-send') and shutil.which('dbus-daemon'):
+        with NotificationFixture() as notifications:
+            env['DBUS_SESSION_BUS_ADDRESS'] = notifications.address
+            source.write_bytes(b'not a recording')
+            run()
+            assert len(notifications.acknowledged) == 1, 'helper exited before Notify was acknowledged'
+            notification = notifications.acknowledged[0]
+            assert notification[3] == 'APNG conversion failed', notification
+            assert str(source) in notification[4] and 'retained' in notification[4], notification
+        env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=' + str(root / 'no-bus')
+        source.write_bytes(original)
+        print('PASS: private notification daemon acknowledged recovery path before helper exit')
+    else:
+        print('SKIP subcase: delayed notification reply requires PyGObject, notify-send and dbus-daemon')
+
     run(success=True)
     assert not source.exists(), 'successful conversion consumes the MKV'
     assert output.is_file() and output.stat().st_size > 0
