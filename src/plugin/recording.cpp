@@ -1390,9 +1390,9 @@ void startApngTranscodeFromFinishedRecording(FinishingRawRecording& recording) {
                                                        recording.durationMs);
     if (!result.success) {
         std::error_code ec;
-        std::filesystem::remove(recording.encoderOutputPath, ec);
         std::filesystem::remove(recording.outputPath, ec);
-        notifyRecording("apng transcode helper failed: " + result.error, NotificationLevel::Error, 7000);
+        notifyRecording("apng transcode helper failed: " + result.error + "; recording retained at: " + recording.encoderOutputPath.string(),
+                        NotificationLevel::Error, 10000);
         return;
     }
 
