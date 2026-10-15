@@ -17,6 +17,7 @@
 #include "shared/hdr_color.hpp"
 #include "shared/sdr_resolve_shader.hpp"
 #include "shared/audio_timeline.hpp"
+#include "shared/scroll_pacing.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 
@@ -90,6 +91,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <future>
 #include <utility>
 #include <unistd.h>
 #include <vector>
@@ -351,6 +353,9 @@ struct WindowStreamPboReadbackState {
         std::uint64_t captureMonotonicNs = 0;
     } slotGeometry[BUFFER_COUNT];
     WindowStreamPboMetadataSlots metadataSlots;
+    std::future<std::vector<unsigned char>> copy;
+    std::size_t copyingSlot = 0;
+    std::optional<WindowStreamFrameMetadata> copyingMetadata;
 };
 
 WindowStreamPboReadbackState g_windowStreamPboReadback;
@@ -1135,6 +1140,14 @@ void resetAsyncPboReadback(AsyncPboReadbackState& state) {
 }
 
 void resetWindowStreamPboReadback(WindowStreamPboReadbackState& state = g_windowStreamPboReadback) {
+    // The worker owns only CPU access to this mapped buffer. Keep it alive
+    // until that access ends; all GL operations remain on the compositor.
+    if (state.copy.valid()) {
+        state.copy.wait();
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[state.copyingSlot]);
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    }
     for (auto& fence : state.fences) {
         if (fence)
             glDeleteSync(fence);
@@ -1189,8 +1202,27 @@ struct ReadyWindowStreamPboFrame {
     CBox                      visibleBox;
 };
 
-std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowStreamPboReadbackState& state) {
+std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowStreamPboReadbackState& state, bool asynchronousCopy = false) {
     ScopedTiming takeReadyTiming("window.stream.pbo_take_ready");
+    if (state.copy.valid()) {
+        if (state.copy.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+            return std::nullopt;
+        const auto source = state.copyingSlot;
+        ReadyWindowStreamPboFrame ready{
+            .frame = {.metadata = *state.copyingMetadata, .rgba = state.copy.get()},
+            .fullBox = state.slotGeometry[source].fullBox,
+            .visibleBox = state.slotGeometry[source].visibleBox,
+        };
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, state.buffers[source]);
+        glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
+        glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+        glDeleteSync(state.fences[source]);
+        state.fences[source] = nullptr;
+        state.slotGeometry[source] = {};
+        state.copyingMetadata.reset();
+        --state.pending;
+        return ready;
+    }
     std::size_t completed = 0;
     while (windowStreamPboReady(state, completed))
         ++completed;
@@ -1231,6 +1263,17 @@ std::optional<ReadyWindowStreamPboFrame> takeReadyWindowStreamPboFrames(WindowSt
     }
     std::optional<ReadyWindowStreamPboFrame> newest;
     if (mapped) {
+        if (asynchronousCopy) {
+            state.copyingSlot = source;
+            state.copyingMetadata = *metadata;
+            const auto bytes = state.bytes;
+            state.copy = std::async(std::launch::async, [mapped, bytes] {
+                ScopedTiming timing("window.stream.pbo_worker_copy");
+                return std::vector<unsigned char>(mapped, mapped + bytes);
+            });
+            glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+            return std::nullopt;
+        }
         ScopedTiming mapCopyTiming("window.stream.pbo_map_copy");
         newest = ReadyWindowStreamPboFrame{
             .frame = {.metadata = *metadata, .rgba = std::vector<unsigned char>(mapped, mapped + state.bytes)},
