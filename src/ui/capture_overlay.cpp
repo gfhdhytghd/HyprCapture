@@ -2194,7 +2194,7 @@ void CaptureOverlay::ensureRecordControls() {
     m_recordBackend->setOnChanged(onRecordOptionChanged);
     recordLayout->addWidget(m_recordBackend);
 
-    m_recordCursor = new PillToggle("arrow_selector_tool", "Cursor", m_recordOptions);
+    m_recordCursor = new PillToggle("pointer", "Cursor", m_recordOptions);
     m_recordCursor->setObjectName("recordCursor");
     m_recordCursor->setToolTip(hyprcapture::ui::uiText("Show the mouse pointer in this recording"));
     m_recordCursor->setChecked(m_defaults.includeCursor);
