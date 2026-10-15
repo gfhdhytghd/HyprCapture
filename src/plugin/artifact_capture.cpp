@@ -109,6 +109,16 @@ using Render::RPT_EXPORT;
 using Render::eRenderPassMode;
 using Json = nlohmann::ordered_json;
 
+// SDR white in nits. Hyprland builds with the reworked color pipeline
+// replace the sdr_max_luminance field with referenceLuminance().
+template <typename Monitor>
+int sdrWhiteNits(const Monitor& monitor) {
+    if constexpr (requires { monitor.referenceLuminance(); })
+        return monitor.referenceLuminance();
+    else
+        return monitor.m_sdrMaxLuminance;
+}
+
 Render::CRenderContext& renderContext() {
     return g_pHyprRenderer->context();
 }
@@ -1396,7 +1406,7 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
                 glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFramebuffer);
                 return {};
             }
-            readback.referenceNits = g_captureMonitor ? std::clamp(g_captureMonitor->m_sdrMaxLuminance, 1, 10000) : 80.0F;
+            readback.referenceNits = g_captureMonitor ? std::clamp(sdrWhiteNits(*g_captureMonitor), 1, 10000) : 80.0F;
             readback.linear.assign(region.outputBytes, 0);
             std::vector<std::uint16_t> source;
             if (!canReadDirectly) source.resize(region.sourceBytes);
@@ -1899,7 +1909,7 @@ SP<CFramebuffer> resolveSdrFramebuffer(CFramebuffer& source, const PHLMONITOR& m
     const GLfloat matrix[]{mat[0][0], mat[1][0], mat[2][0], mat[0][1], mat[1][1], mat[2][1], mat[0][2], mat[1][2], mat[2][2]};
     const bool linearHdr = tf == CM_TRANSFER_FUNCTION_EXT_LINEAR;
     const bool pq = tf == CM_TRANSFER_FUNCTION_ST2084_PQ;
-    const float white = std::max(1, monitor->m_sdrMaxLuminance);
+    const float white = std::max(1, sdrWhiteNits(*monitor));
     const float black = linearHdr ? std::max(0.0F, monitor->m_sdrMinLuminance) / color::scRgbNits : 0.0F;
     glUseProgram(g_sdrResolveProgram); glBindVertexArray(g_sdrResolveVao);
     glUniform1i(glGetUniformLocation(g_sdrResolveProgram, "sourceImage"), 0);
@@ -3786,7 +3796,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
             continue;
         MonitorInfo info;
         info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
-        info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
+        info.artifactReferenceNits = std::clamp(sdrWhiteNits(*monitor), 1, 10000);
         info.hdrCapable = monitor->supportsHDR() || monitor->inHDR();
         info.hdrActive = monitor->inHDR();
         info.name = monitor->m_name;
@@ -3870,7 +3880,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         } else if (isScrollingTiledWindow(window))
             info.selectionClipGeometry = monitorRect(monitor);
         info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
-        info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
+        info.artifactReferenceNits = std::clamp(sdrWhiteNits(*monitor), 1, 10000);
         info.title = boundedString(window->metadata().title(), MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->metadata().appID(), MAX_WINDOW_METADATA_BYTES);
         info.focused = window == Desktop::focusState()->window();
@@ -4016,7 +4026,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
 
     WindowInfo info;
     info.artifactFormat = linearCaptureFor(monitor) ? "rgba16f-linear-srgb" : "rgba8";
-    info.artifactReferenceNits = std::clamp(monitor->m_sdrMaxLuminance, 1, 10000);
+    info.artifactReferenceNits = std::clamp(sdrWhiteNits(*monitor), 1, 10000);
     info.address = "0x" + pointerId(window.get());
     info.title = boundedString(window->metadata().title(), MAX_WINDOW_METADATA_BYTES);
     info.appClass = boundedString(window->metadata().appID(), MAX_WINDOW_METADATA_BYTES);
