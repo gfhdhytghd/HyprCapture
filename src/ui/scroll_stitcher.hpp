@@ -44,6 +44,20 @@ public:
     LimitReached,
     InvalidFrame
   };
+  static const char *statusName(Status status) {
+    switch (status) {
+    case Status::Started: return "Started";
+    case Status::Appended: return "Appended";
+    case Status::Relocated: return "Relocated";
+    case Status::Unchanged: return "Unchanged";
+    case Status::NoOverlap: return "NoOverlap";
+    case Status::Ambiguous: return "Ambiguous";
+    case Status::SizeChanged: return "SizeChanged";
+    case Status::LimitReached: return "LimitReached";
+    case Status::InvalidFrame: return "InvalidFrame";
+    }
+    return "Unknown";
+  }
   struct Limits {
     int maxHeight = 32768;
     qint64 maxPixels = 64LL * 1024 * 1024;
@@ -53,6 +67,8 @@ public:
     Status status;
     int addedRows = 0;
     int displacement = 0;
+    double confidence = 0; // Verified correlation; zero when no unique match exists.
+    const char *reason = "frame-validation";
   };
   ScrollStitcher();
   explicit ScrollStitcher(Limits limits);
@@ -76,12 +92,13 @@ private:
     QImage image;
     int sourceTop = 0; // source viewport row, for native corner recovery
   };
-  QImage bodyImage() const;
+  QImage bodyImage(bool original = false) const;
   void paint(QPainter &painter, int plane = 0) const;
   void updateColumns(const QImage &frame, const QImage &original,
                      const QImage &hdr, int displacement);
   void updateTop(const QImage &frame, int displacement);
-  void updateFloating(const QImage &frame, const QImage &original, int displacement);
+  void updateFloating(const QImage &frame, const QImage &original, const QImage &hdr, int displacement, bool edgeMasks);
+  void cleanMarginFloats();
   struct ColumnMotion {
     int stationaryFrames = 0, stationaryTravel = 0;
     int stationaryStart = 0;
@@ -108,6 +125,11 @@ private:
   std::array<QImage, 3> m_bottomTail;
   struct FloatingCandidate { QRect rect; bool top; int observations; };
   std::vector<FloatingCandidate> m_floatingCandidates;
+  struct MarginFloat {
+    QRect rect;
+    std::array<QImage,3> image;
+  };
+  std::vector<MarginFloat> m_marginFloats;
   int m_frames = 0;
   bool m_layoutLocked = false;
 };
