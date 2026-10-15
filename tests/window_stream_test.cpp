@@ -55,6 +55,37 @@ void rejectsInvalidOrUnsealedMetadataHeader() {
     assert((encodeWindowStreamFrameHeader(bad) == std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES>{}));
 }
 
+void scrollMotionHeaderIsOptionalAndCaptureBound() {
+    auto input=metadata(12);
+    ScrollMotionSnapshot motion;
+    motion.amount={3,-.75,0,0};motion.travel={5,1.25,0,0};
+    motion.lastInputNs=input.captureMonotonicNs-1;
+    input.scrollMotion=motion;
+    const auto header=encodeScrollStreamFrameHeader(input);
+    const auto decoded=decodeWindowStreamFrameHeader(header.data(),header.size());
+    assert(decoded && decoded->scrollMotion);
+    assert(decoded->scrollMotion->amount==motion.amount && decoded->scrollMotion->travel==motion.travel);
+    assert(decoded->scrollMotion->lastInputNs==motion.lastInputNs);
+    assert(decoded->captureMonotonicNs==input.captureMonotonicNs);
+    assert(!decodeWindowStreamFrameHeader(header.data(),header.size()-1));
+    auto truncated=header;truncated[5]=1;
+    assert(!decodeWindowStreamFrameHeader(truncated.data(),truncated.size()));
+    input.scrollMotion->travel[0]=1;
+    assert(!validWindowStreamFrameMetadata(input));
+    input.scrollMotion=motion;input.scrollMotion->amount[0]=NAN;
+    assert(!validWindowStreamFrameMetadata(input));
+    input.scrollMotion=motion;input.scrollMotion->lastInputNs=input.captureMonotonicNs+1;
+    assert(!validWindowStreamFrameMetadata(input));
+    WindowStreamPboMetadataSlots slots;
+    input.scrollMotion=motion;
+    assert(slots.issue("scroll",input));
+    const auto captured=slots.mapOldest();
+    assert(captured && captured->scrollMotion->amount==motion.amount);
+    assert(captured->scrollMotion->lastInputNs==motion.lastInputNs);
+    const auto legacy=encodeWindowStreamFrameHeader(metadata(1));
+    assert(!decodeWindowStreamFrameHeader(legacy.data(),legacy.size())->scrollMotion);
+}
+
 void latestSlotDropsReplacedFrameAndPreservesItsOwnTimestamp() {
     int firstPipe[2]{};
     int secondPipe[2]{};
@@ -180,6 +211,7 @@ int main(int argc, char** argv) {
     assert(!validWindowStreamFrameMetadata(paired));
     paired.payloadBytes += 1; paired.format = 99;
     assert(!validWindowStreamFrameMetadata(paired));
+    scrollMotionHeaderIsOptionalAndCaptureBound();
     frameHeaderRoundTripsExactLayout();
     rejectsInvalidOrUnsealedMetadataHeader();
     latestSlotDropsReplacedFrameAndPreservesItsOwnTimestamp();

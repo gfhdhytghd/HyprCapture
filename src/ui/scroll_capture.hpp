@@ -69,6 +69,7 @@ private:
     QRect geometry;
     quint64 sequence = 0, timeNs = 0;
     QImage background, hdr;
+    std::optional<ScrollMotionSnapshot> scrollMotion;
   };
   void acceptFrames();
   void readFrames();

@@ -30,6 +30,8 @@ struct ScrollSession {
   uint32_t replayOriginMs = 0, replayClockOffsetMs = 0;
   bool draining = false, paced = false;
   ScrollPacing pacing;
+  ScrollMotionSnapshot motionTotals;
+  bool motionMetadata = false;
   double safeHeight = 0;
   Time::steady_tp lastDelivered = Time::steadyNow(), lastMovement = Time::steadyNow();
   std::unique_ptr<WindowStreamSender> sender;
@@ -157,6 +159,18 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
         input.event.deltaDiscrete / 120, input.event.deltaDiscrete,
         input.event.source, input.event.relativeDirection);
     g_pSeatManager->sendPointerFrame();
+  }
+  // Stamp only input which was actually forwarded. Browser-generated momentum
+  // has no new event; its pixel motion is handled by the tracker's velocity.
+  if (input.event.axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
+    const int source = input.event.source == WL_POINTER_AXIS_SOURCE_FINGER ? 1 :
+        input.event.source == WL_POINTER_AXIS_SOURCE_CONTINUOUS ? 2 : input.event.deltaDiscrete ? 0 : 3;
+    const double amount = source == 0 ? input.event.deltaDiscrete / 120.0 : input.event.delta;
+    s.motionTotals.amount[source] += amount;
+    s.motionTotals.travel[source] += std::abs(amount);
+    if (amount)
+      s.motionTotals.lastInputNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          Time::steadyNow().time_since_epoch()).count();
   }
   // Keep pointer focus through a touchpad gesture: restoring the overlay after
   // every event splits the gesture. Clicks and motion outside the capture
@@ -566,6 +580,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                                  .stride = uint32_t(width * 4),
                                  .format = hdr ? WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR : WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN,
                                  .payloadBytes = uint64_t(width) * height * (hdr ? 12 : 4)};
+  if(s->motionMetadata) meta.scrollMotion=s->motionTotals;
   traceTiming(std::format("scroll.readback_issue seq={} hdr={} bytes={}", meta.sequence, hdr, meta.payloadBytes));
   if (pbo.bytes != meta.payloadBytes || !issueWindowStreamPboReadback(pbo, meta, s->id, *readFramebuffer, cropX,
                                     cropTop, artifact, artifact, hdr ? pbo.framebuffer.get() : nullptr))
@@ -590,6 +605,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
     s->id = j.at("id").get<std::string>();
     s->windowAddress = j.value("windowAddress", std::string{});
     s->hdr = j.value("hdr", false);
+    s->motionMetadata = j.value("motionMetadata", false);
     if (s->id.empty() || s->id.size() > 96)
       throw std::runtime_error("id");
     const auto r = j.at("rect");

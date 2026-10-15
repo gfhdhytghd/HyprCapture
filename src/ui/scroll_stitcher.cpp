@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstring>
 #include <QByteArray>
+#include <QDebug>
+#include <chrono>
 #include <limits>
 #include <map>
 #include <opencv2/core.hpp>
@@ -14,6 +16,17 @@
 
 namespace hyprcapture::ui {
 namespace {
+class TrackerTiming {
+public:
+  explicit TrackerTiming(const char *stage):m_stage(stage),m_start(std::chrono::steady_clock::now()),
+      m_enabled(qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING_FILE")) {}
+  ~TrackerTiming() {if(m_enabled) qInfo("scroll.stage name=%s elapsed_us=%lld",m_stage,
+      static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-m_start).count()));}
+private:
+  const char *m_stage;
+  std::chrono::steady_clock::time_point m_start;
+  bool m_enabled;
+};
 int quietMarginRow(const QImage &image, QRect body, QRect object) {
   std::map<QByteArray,int> rows;
   int best=0, result=body.top();
@@ -33,13 +46,6 @@ cv::Mat gray(const QImage &input) {
                        image.bytesPerLine()),
                result, cv::COLOR_RGBA2GRAY);
   return result;
-}
-cv::Mat compact(const cv::Mat &input) {
-  if (input.cols <= 320)
-    return input;
-  cv::Mat out;
-  cv::resize(input, out, {320, input.rows}, 0, 0, cv::INTER_AREA);
-  return out;
 }
 // Glyph contrast changes as it moves over a translucent backdrop. Compare
 // detail correlation rather than treating that change as a different glyph.
@@ -95,16 +101,151 @@ struct Match {
   int position = 0;
   bool found = false, ambiguous = false;
   double confidence = 0;
+  bool priorUsed = false;
+  int nativeFirst=-1,nativeLast=-1;
 };
+// Only break a pixel tie when exactly one supported peak lies inside a
+// calibrated prediction interval. A strong conflict or two plausible periods
+// remains ambiguous; input cannot invent a correspondence.
+Match selectPeaks(const std::vector<std::pair<double, int>> &peaks,
+                  const ScrollPrediction &prior, double confidence) {
+  if (peaks.empty())
+    return {};
+  if (peaks.size() == 1)
+    return {peaks.front().second, true, false, confidence};
+  if (prior.valid && prior.resolvesTies) {
+    std::optional<int> chosen;
+    for (const auto &[score, d] : peaks)
+      if (std::abs(d - prior.offset) <= prior.tolerance) {
+        if (chosen && std::abs(*chosen - d) > 2)
+          return {0, false, true};
+        chosen = d;
+      }
+    if (chosen)
+      return {*chosen, true, false, confidence, true};
+  }
+  return {0, false, true};
+}
+// Native row-gradient signatures examine the complete vertical search range
+// and every horizontal pixel. They preserve distinguishing glyphs even on a
+// very wide page. Blank/constant rows do not vote. Hash hits are verified.
+Match nativeRows(const cv::Mat &page, const cv::Mat &frame,
+                 const ScrollPrediction &prior, bool edgeOcclusion = false) {
+  struct Bucket {std::vector<int> positions;bool consistent=true;};
+  std::map<uint64_t, Bucket> rows;
+  const auto sameGradients=[](const cv::Mat &a,int ay,const cv::Mat &b,int by) {
+    const auto *x=a.ptr<uchar>(ay),*y=b.ptr<uchar>(by);
+    const int light=int(x[0])-int(y[0]);
+    for(int i=0;i<a.cols;++i) if(int(x[i])-int(y[i])!=light) return false;
+    return true;
+  };
+  const auto signature = [](const cv::Mat &image, int y) {
+    uint64_t hash = 14695981039346656037ULL;
+    int low = 255, high = 0, previous = image.at<uchar>(y, 0);
+    for (int x = 0; x < image.cols; ++x) {
+      const int v = image.at<uchar>(y, x);
+      low = std::min(low, v);
+      high = std::max(high, v);
+      hash = (hash ^ uint64_t(v - previous + 255)) * 1099511628211ULL;
+      previous = v;
+    }
+    return std::pair{hash, high - low > 8};
+  };
+  for (int y = 0; y < page.rows; ++y) {
+    auto [hash, detail] = signature(page, y);
+    if (detail) {
+      auto &bucket=rows[hash];
+      // Verify repeated rows once against their canonical row. A rare hash
+      // collision retains per-hit native checks; repeated text is not O(H²W).
+      if(bucket.consistent && !bucket.positions.empty() &&
+         !sameGradients(page,bucket.positions.front(),page,y)) bucket.consistent=false;
+      bucket.positions.push_back(y);
+    }
+  }
+  struct Support {
+    int count = 0, first = INT_MAX, last = 0;
+  };
+  std::vector<Support> support(page.rows+frame.rows);
+  std::vector<int> informative(frame.rows + 1);
+  for (int y = 0; y < frame.rows; ++y) {
+    const auto [hash, detail] = signature(frame, y);
+    const auto it = rows.find(hash);
+    const bool repetitive=it!=rows.end() && it->second.positions.size()>size_t(std::max(8,page.rows/4));
+    // Repeated border-only rows carry no offset information. Every remaining
+    // informative row must agree, including a single differing text ID.
+    informative[y + 1] = informative[y] + (detail && !repetitive);
+    if (!detail || repetitive || it == rows.end()) continue;
+    const auto &bucket=it->second;
+    if(bucket.consistent && !sameGradients(page,bucket.positions.front(),frame,y)) continue;
+    for (int from : bucket.positions) {
+      const int d = from - y;
+      if (std::min(frame.rows, page.rows - d) - std::max(0, -d) < 64)
+        continue;
+      if(!bucket.consistent && !sameGradients(page,from,frame,y)) continue;
+      auto &vote = support[d+frame.rows];
+      ++vote.count;
+      vote.first = std::min(vote.first, y);
+      vote.last = std::max(vote.last, y);
+    }
+  }
+  std::vector<std::pair<double, int>> peaks;
+  for (int d=1-frame.rows;d<page.rows;++d) {
+    const auto &v=support[d+frame.rows];
+    if(!v.count) continue;
+    int start = std::max(0, -d), end = std::min(frame.rows, page.rows - d);
+    const int overlap = end - start;
+    if (edgeOcclusion) {
+      if (v.first - start > frame.rows / 3 ||
+          end - 1 - v.last > frame.rows / 3 ||
+          v.last - v.first + 16 < overlap * .60)
+        continue;
+      start = v.first;
+      end = v.last + 1;
+    }
+    const int total = informative[end] - informative[start];
+    if (v.count < 8 || v.last - v.first < 48 || !total || v.count != total)
+      continue;
+    if(overlap<std::max(96,frame.rows/4) &&
+       !(prior.valid && prior.resolvesTies && std::abs(d-prior.offset)<=prior.tolerance)) {
+      // An exact repeated card heading is still a weak position anchor when
+      // it is nearly the entire overlap. Short native overlaps need dense
+      // vertical information (photos/noise/barcodes), not sparse text chrome.
+      const int first=std::max(0,-d),last=std::min(frame.rows,page.rows-d);
+      bool rich=false;
+      for(int x=0;x<frame.cols && !rich;++x) {
+        int changes=0;
+        for(int y=first+1;y<last;++y) {
+          changes+=std::abs(int(frame.at<uchar>(y,x))-int(frame.at<uchar>(y-1,x)))>8;
+          if(changes+last-y-1<(last-first-1)*.8) break;
+        }
+        rich=changes>=(last-first-1)*.8;
+      }
+      if(!rich) continue;
+    }
+    peaks.emplace_back(1. - double(v.count) / total, d);
+  }
+  if (peaks.empty())
+    return {};
+  std::sort(peaks.begin(), peaks.end());
+  std::erase_if(peaks, [&](const auto &p) {
+    return p.first > peaks.front().first + .001;
+  });
+  auto result = selectPeaks(peaks, prior, 1. - peaks.front().first);
+  if (result.found) {
+    result.nativeFirst = support[result.position+frame.rows].first;
+    result.nativeLast = support[result.position+frame.rows].last;
+  }
+  return result;
+}
 // Independent templates vote for a *vertical translation*, not an affine
 // warp. Like multi-template screenshot stitchers, cap each spatial cell at
 // one vote. A detailed GIF cannot buy more votes by containing more corners.
 // Native RGBA checks keep downsampling and repeated text from inventing a
 // correspondence. Stationary cells form a separate zero-motion layer.
 Match matchConsensus(const QImage &first, const QImage &second, QRect content,
-                     bool history = false) {
-  const auto a = compact(gray(history ? first : first.copy(content)));
-  const auto b = compact(gray(second.copy(content)));
+                     bool history = false, const ScrollPrediction& prior = {}) {
+  const auto a = gray(history ? first : first.copy(content));
+  const auto b = gray(second.copy(content));
   cv::Mat aa(first.height(), first.width(), CV_8UC4,
              const_cast<uchar *>(first.constBits()), first.bytesPerLine());
   cv::Mat bb(second.height(), second.width(), CV_8UC4,
@@ -112,7 +253,7 @@ Match matchConsensus(const QImage &first, const QImage &second, QRect content,
   struct Vote { int x, y; };
   std::map<int, std::vector<Vote>> votes;
   constexpr int columns = 6, rows = 12;
-  const int w = std::min(48, b.cols / 2), h = std::min(48, b.rows / 8);
+  const int w = std::min(std::max(48,b.cols*3/20), b.cols / 2), h = std::min(48, b.rows / 8);
   if (w < 8 || h < 8) return {};
   const auto error = [&](int x, int y, int d) {
     const int left = x * content.width() / b.cols;
@@ -190,19 +331,25 @@ Match matchConsensus(const QImage &first, const QImage &second, QRect content,
     if (d == 0 && !history) stationary = true;
     else accepted.push_back(d);
   }
-  if (accepted.size() > 1) return {0, false, true};
-  if (accepted.size() == 1) return {accepted.front(), true, false, 1.0};
+  if (!accepted.empty()) {
+    std::vector<std::pair<double,int>> peaks;for(int d:accepted) peaks.emplace_back(0,d);
+    return selectPeaks(peaks,prior,1.);
+  }
   if (stationary) return {0, true, false, 1.0};
   return {};
 }
-Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false) {
+Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false, const ScrollPrediction& prior = {}) {
+  const auto exact=nativeRows(page,frame,prior);
+  if(exact.found || exact.ambiguous) return exact;
   std::set<int> candidates;
   const int h = std::min(48, frame.rows / 4);
   // Several independent templates, retaining every peak rather than a top-N
   // shortlist: periodic paragraphs must remain ambiguous.
-  const int w = std::min(96, frame.cols);
   bool overwhelmed = false;
-  for (int x : {0, (frame.cols - w) / 2, frame.cols - w}) {
+  // Adjacent native columns retain every glyph, while bounding template FFT
+  // size on wide/translucent windows. All vertical peaks remain candidates.
+  for (int x=0;x<frame.cols;x+=256) {
+    const int w=std::min(256,frame.cols-x);
     std::set<int> columnCandidates;
     for (int y : {0, (frame.rows - h) / 2, frame.rows - h}) {
       const cv::Mat pattern = frame(cv::Rect(x, y, w, h));
@@ -237,7 +384,16 @@ Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false) 
   if (candidates.size() > 192)
     return {0, false, true};
   std::vector<std::pair<double, int>> verified;
-  for (int candidate : candidates) {
+  std::vector<int> search(candidates.begin(),candidates.end());
+  // Centre evaluation on the prior, but still verify the complete native
+  // search window so a unique contradictory pixel match always wins.
+  if(prior.valid) std::stable_sort(search.begin(),search.end(),[&](int a,int b) {return std::abs(a-prior.offset)<std::abs(b-prior.offset);});
+  for (int candidate : search) {
+    // A tiny overlap containing one repeated card header cannot establish a
+    // large reverse jump. Exact native row matches above may prove smaller
+    // overlaps; correlation alone needs at least a quarter of the viewport.
+    const int overlap=std::min(page.rows,candidate+frame.rows)-std::max(0,candidate);
+    if(overlap<std::max(96,frame.rows/4)) continue;
     const auto error = verify(page, frame, candidate, foreground);
     if (error < 1e8)
       verified.emplace_back(error, candidate);
@@ -246,11 +402,10 @@ Match match(const cv::Mat &page, const cv::Mat &frame, bool foreground = false) 
     return {};
   std::sort(verified.begin(), verified.end());
   const auto [best, position] = verified.front();
+  std::vector<std::pair<double,int>> peaks{{best,position}};
   for (const auto &[error, other] : verified)
-    if (std::abs(other - position) > 2 &&
-        error - best < std::max(.025, best * .25))
-      return {0, false, true};
-  return {position, true, false, std::clamp(1.0-best/100.0,0.0,1.0)};
+    if (std::abs(other-position)>2 && error-best<std::max(.025,best*.25)) peaks.emplace_back(error,other);
+  return selectPeaks(peaks,prior,std::clamp(1.-best/100.,0.,1.));
 }
 // A stationary textured backdrop can dominate ordinary registration. Match
 // only edges that changed at their screen position, then verify agreement on
@@ -329,16 +484,48 @@ cv::Mat foregroundDetail(const cv::Mat &input) {
   detail.convertTo(detail, CV_8U, .5, 128);
   return detail;
 }
-bool exactOverlap(const QImage &first, const QImage &second, QRect content, int d) {
+bool exactOverlap(const QImage &first, const QImage &second, QRect content, int d, int tolerance=0) {
   const int top = std::max(0, d), bottom = std::min(content.height(), content.height() + d);
   if (bottom - top < 64)
     return false;
-  for (int y = top; y < bottom; ++y)
-    if (std::memcmp(first.constScanLine(content.y() + y) + 4 * content.x(),
-                    second.constScanLine(content.y() + y - d) + 4 * content.x(),
-                    size_t(content.width()) * 4) != 0)
-      return false;
+  for (int y=top;y<bottom;++y) {
+    const auto* a=first.constScanLine(content.y()+y)+4*content.x();
+    const auto* b=second.constScanLine(content.y()+y-d)+4*content.x();
+    if(!std::memcmp(a,b,size_t(content.width())*4)) continue;
+    if(!tolerance) return false;
+    for(int x=0;x<content.width()*4;++x) if(std::abs(int(a[x])-int(b[x]))>tolerance) return false;
+  }
   return true;
+}
+// A dynamic/fixed edge may obscure part of the pairwise overlap. Pixel-prove
+// a contiguous native run containing the informative row votes, not merely a
+// sparse repeated prefix. Coordinates are relative to the current viewport.
+QRect nativeRun(const QImage &previous, const QImage &current, QRect region,
+                const Match &candidate) {
+  const int d = candidate.position;
+  int start = std::max(0, -d),
+      end = std::min(region.height(), region.height() - d), run = start;
+  for (int y = start; y <= end; ++y) {
+    bool same = y < end;
+    if (same) {
+      const auto *a =
+          previous.constScanLine(region.y() + y + d) + region.x() * 4;
+      const auto *b = current.constScanLine(region.y() + y) + region.x() * 4;
+      if (std::memcmp(a, b, region.width() * 4))
+        for (int x = 0; x < region.width() * 4; ++x)
+          if (std::abs(int(a[x]) - int(b[x])) > 1) {
+            same = false;
+            break;
+          }
+    }
+    if (!same) {
+      if (y - run >= 64 && run <= candidate.nativeFirst &&
+          y > candidate.nativeLast)
+        return {0, run, region.width(), y - run};
+      run = y + 1;
+    }
+  }
+  return {};
 }
 // Once motion is known, source selection is a separate problem. If a changing
 // object crosses the insertion edge, move the cut into an agreeing band in the
@@ -396,6 +583,50 @@ bool verifyOriginalPixels(const QImage &first, const QImage &second,
         ++agree;
     }
   return votes >= 4 && agree >= votes * (foreground ? .95 : fraction);
+}
+// Fixed side columns prevent a full-row hash from matching. Generate native
+// candidates from adjacent columns covering every x, then prove each candidate
+// over a broad body. No glyph is resampled and every vertical offset is searched.
+// Two independently scrolling halves cannot satisfy a two-thirds-width proof.
+Match nativeColumnMotion(const QImage &a, const QImage &b,
+                         const cv::Mat &grayA, const cv::Mat &grayB,
+                         QRect content, const ScrollPrediction &prior, QRect &provenRun) {
+  TrackerTiming timing("native_columns");
+  std::set<int> offsets;
+  for(int x=content.left();x<=content.right();x+=256) {
+    const QRect column(x,content.y(),std::min(256,content.right()+1-x),content.height());
+    if(column.width()<16) continue;
+    const cv::Rect roi(column.x(),column.y(),column.width(),column.height());
+    // A periodic prefix must not nominate a prior-selected offset before
+    // the column containing the distinguishing glyph has been considered.
+    const auto candidate=nativeRows(grayA(roi),grayB(roi),{},true);
+    if(candidate.found && candidate.position) offsets.insert(candidate.position);
+  }
+  std::vector<std::pair<double,int>> verified;
+  std::map<int,QRect> runs;
+  for(int d:offsets) {
+    bool accepted=false;
+    for(const auto region:{content,content.adjusted(0,0,-content.width()/3,0),
+                         content.adjusted(content.width()/3,0,0,0)}) {
+      const cv::Rect roi(region.x(),region.y(),region.width(),region.height());
+      const auto proof=nativeRows(grayA(roi),grayB(roi),prior,true);
+      if(proof.found && proof.position==d) {
+        const auto run=nativeRun(a,b,region,proof);
+        if(!run.isEmpty()) {
+          accepted=true;runs[d]=run.translated(region.topLeft());break;
+        }
+      }
+      // This fast path reports exact native evidence. Majority tile agreement
+      // can hide a differing ID beside repeated cards; leave such frames to
+      // the correlation/ambiguity path instead of reporting confidence one.
+      if(exactOverlap(a,b,region,d)) accepted=true;
+
+    }
+    if(accepted) verified.emplace_back(0,d);
+  }
+  const auto result=verified.empty()?Match{}:selectPeaks(verified,prior,1.);
+  if(result.found) provenRun=runs[result.position];
+  return result;
 }
 QRect detectContent(const cv::Mat &a, const cv::Mat &b) {
   cv::Mat difference;
@@ -585,12 +816,12 @@ bool verifyBody(const QImage &a, const QImage &b, QRect rect, int d) {
   return verify(foregroundDetail(gray(a.copy(rect))),
                 foregroundDetail(gray(b.copy(rect))),d,true)<1e8;
 }
-Match registerBody(const QImage &a, const QImage &b, QRect rect, bool native = false) {
-  const auto first = compact(gray(a.copy(rect))), second = compact(gray(b.copy(rect)));
-  auto raw = match(first, second);
+Match registerBody(const QImage &a, const QImage &b, QRect rect, bool native = false, const ScrollPrediction& prior = {}) {
+  const auto first = gray(a.copy(rect)), second = gray(b.copy(rect));
+  auto raw = match(first, second, false, prior);
   if (raw.found && (exactOverlap(a, b, rect, raw.position) ||
       (native && verifyOriginalPixels(a,b,rect,raw.position,false,.95)))) return raw;
-  auto detail = match(foregroundDetail(first), foregroundDetail(second), true);
+  auto detail = match(foregroundDetail(first), foregroundDetail(second), true, prior);
   if (detail.found && verifyBody(a, b, rect, detail.position) &&
       (!native || verifyOriginalPixels(a,b,rect,detail.position))) return detail;
   if (raw.found && verifyOriginalPixels(a, b, rect, raw.position) &&
@@ -761,11 +992,11 @@ void ScrollStitcher::updateColumns(const QImage &frame, const QImage &original,
     for (auto &image : side.image)
       if (!image.isNull() && side.sourceTop)
         image = image.copy(0,side.sourceTop,image.width(),image.height()-side.sourceTop);
-    const auto visible = compact(gray(side.image[0]));
+    const auto visible = gray(side.image[0]);
     // Prefer the first viewport: late history can already contain a few
     // duplicated bottom slices while the stationary vote is accumulating.
     const auto initialSide = m_initial.copy(newlyPinned);
-    auto baseline = compact(gray(initialSide));
+    auto baseline = gray(initialSide);
     std::vector<int> exactPositions;
     for (int d = std::max(0, m_layout.minimumY)+side.sourceTop; d <= std::min(start, old.height()*3/4)+side.sourceTop; ++d)
       if (exactOverlap(initialSide, side.image[0], initialSide.rect(), d)) exactPositions.push_back(d);
@@ -774,7 +1005,7 @@ void ScrollStitcher::updateColumns(const QImage &frame, const QImage &original,
     if (!alignment.found) alignment = match(baseline, visible);
     bool initialAnchor = alignment.found;
     if (!alignment.found) {
-      baseline = compact(gray(history[0]));
+      baseline = gray(history[0]);
       alignment = match(foregroundDetail(baseline), foregroundDetail(visible), true);
       if (!alignment.found) alignment = match(baseline, visible);
     }
@@ -969,6 +1200,13 @@ void ScrollStitcher::updateTop(const QImage &frame, int d) {
 // detail agrees with the translation and cannot qualify. No shape assumptions.
 void ScrollStitcher::updateFloating(const QImage &frame, const QImage &original, const QImage &hdr, int d, bool edgeMasks) {
   if (d <= 0) return;
+  TrackerTiming timing("floating");
+  // An exact native body translation excludes any new body occluder. Known
+  // edge masks retain their current-frame tail sources below; fixed side
+  // panels outside this body must not trigger a full floating-object scan.
+  const auto body=m_layout.content.adjusted(0,m_topOcclusion,0,-m_bottomOcclusion);
+  if(!original.isNull() && body.height()>std::abs(d)+64 &&
+     exactOverlap(m_originalPrevious,original,body,d)) return;
   // Compact fixed objects can live in a gutter excluded by initial layout
   // detection. Their local sources are independent of the moving column.
   const QRect c(0,m_layout.content.y(),frame.width(),m_layout.content.height());
@@ -1051,17 +1289,27 @@ void ScrollStitcher::updateFloating(const QImage &frame, const QImage &original,
       // have too little per-column history. Distributed stationary detail in
       // the same lane belongs to a side panel, not a compact floating object.
       int firstFixed = c.bottom(), lastFixed = c.top(), fixedBands = 0;
-      for (int y=r.top()>c.top()+c.height()/4?c.top()+c.height()/4:c.top(); y<=std::min(c.bottom()-d,c.bottom()-96); y+=8) {
+      int laneLeft=std::max(c.left(),r.left()-16),laneRight=std::min(c.right(),r.right()+16);
+      // Short labels at the far end of a sticky side panel need the evidence
+      // from their whole side lane. A narrow glyph column alone can look like
+      // a floating button before per-column pin history has accumulated.
+      if(r.left()>=c.left()+c.width()*2/3) laneLeft=c.left()+c.width()*2/3;
+      if(r.right()<c.left()+c.width()/3) laneRight=c.left()+c.width()/3;
+      for (int y=r.top()>c.top()+c.height()/4?c.top()+c.height()/4:c.top(); y<=std::min(c.bottom()-d,c.bottom()-96); ++y) {
         int fixedDetail=0, changed=0, samples=0;
-        for (int x=std::max(c.left(),r.left()-16); x<=std::min(c.right(),r.right()+16); x+=2) {
-          const auto a=first.pixel(x,y), b=second.pixel(x,y);
+        for (int x=laneLeft; x<=laneRight; x+=2) {
+          const auto a=first.pixel(x,y), b=second.pixel(x,y), shifted=first.pixel(x,y+d);
+          // A side lane may include part of the adjacent document. Pixels
+          // already proven to translate with it cannot veto fixed panel detail.
+          if(error(a,b)>3 && error(shifted,b)<=3) continue;
           ++samples; changed += error(a,b)>3;
           // A vertical window border spans every row, but supplies no
           // distributed foreground. Count variation along the scroll axis.
           const bool detail=error(a,first.pixel(x,std::min(y+1,c.bottom())))>8;
-          fixedDetail += detail && error(a,b)<=3 && error(first.pixel(x,y+d),b)>8;
+          fixedDetail += detail && error(a,b)<=3 && error(shifted,b)>8;
         }
         if (fixedDetail>=3 && changed<=std::max(1,samples/100)) { ++fixedBands;firstFixed=std::min(firstFixed,y);lastFixed=y; }
+        if(fixedBands>=3 && lastFixed-firstFixed>std::max(r.height()*3,c.height()/5)) break;
       }
       if (fixedBands>=3 && lastFixed-firstFixed>std::max(r.height()*3,c.height()/5)) continue;
       int support=0;
@@ -1094,13 +1342,14 @@ void ScrollStitcher::updateFloating(const QImage &frame, const QImage &original,
       // at its far side. That tiny edge cannot establish the whole residual
       // as an independent stationary object.
       if(support>=8 && fixedBounds.width()<std::max(4,r.width()/8)) continue;
+      const auto observed=support>=8?fixedBounds:r;
       int observations=1;
       for(const auto& previous:m_floatingCandidates)
-        if(previous.top==top && std::abs(previous.rect.left()-r.left())<=2 &&
-           std::abs(previous.rect.right()-r.right())<=2 && std::abs(previous.rect.top()-r.top())<=2 &&
-           std::abs(previous.rect.bottom()-r.bottom())<=2)
+        if(previous.top==top && std::abs(previous.rect.left()-observed.left())<=2 &&
+           std::abs(previous.rect.right()-observed.right())<=2 && std::abs(previous.rect.top()-observed.top())<=2 &&
+           std::abs(previous.rect.bottom()-observed.bottom())<=2)
           observations=std::max(observations,previous.observations+1);
-      candidates.push_back({r,top,observations});
+      candidates.push_back({observed,top,observations});
       // An animated fill may have no invariant pixels. Require its compact
       // residual to recur at the same screen bounds on independent scrolls.
       if(support<8 && observations<2) continue;
@@ -1169,12 +1418,20 @@ void ScrollStitcher::updateFloating(const QImage &frame, const QImage &original,
            return f.rect.intersects(r) || f.rect.translated(0,d).intersects(r);
          })) continue;
       if(columnSupport>=1) continue;
+      // A coincident glyph/card edge during a fast scroll is not a persistent
+      // middle-screen control. Confirm its native fixed bounds in another
+      // translated frame before reserving a large source band. Bottom-attached
+      // controls can still mask their insertion edge immediately.
+      if(!top && r.bottom()<c.bottom()-c.height()/8 && observations<2) continue;
       // Narrow edge chrome (for example a scrollbar thumb) moves at a
       // different rate from the document. Its overlapping edge pixels must
       // not turn the whole lower viewport into a fixed footer source band.
       const int edge=std::max(8,c.width()/100);
       if(!top && r.bottom()<c.bottom()-c.height()/8 && r.width()<std::max(32,c.width()/40) &&
          (r.left()<=c.left()+edge || r.right()>=c.right()-edge)) continue;
+      if(qEnvironmentVariableIsSet("HYPRCAPTURE_TIMING_FILE"))
+        qInfo("scroll.mask top=%d rect=%d,%d,%d,%d support=%d observations=%d delta=%d",top,
+            r.x(),r.y(),r.width(),r.height(),support,observations,d);
       if(top) {
         m_topOcclusion=std::max(m_topOcclusion,std::min(c.height()/4,r.bottom()+7-c.top()));
       } else {
@@ -1201,7 +1458,32 @@ bool ScrollStitcher::stable(const QImage &a, const QImage &b) {
          static_cast<size_t>(cv::countNonZero(diff.reshape(1) > 12)) <=
              diff.total() / 1000;
 }
-ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage &sourceOriginal, const QImage &sourceHdr) {
+ScrollStitcher::Result
+ScrollStitcher::append(const QImage &frame, const QImage &original,
+                       const QImage &hdr, const ScrollMotionSnapshot *motion,
+                       uint64_t timeNs) {
+  m_prediction = m_motion.begin(motion, timeNs);
+  auto result = appendPixels(frame, original, hdr);
+  const bool accepted =
+      result.status == Status::Started || result.status == Status::Appended ||
+      result.status == Status::Relocated || result.status == Status::Unchanged;
+  const bool identical =
+      std::strcmp(result.reason, "identical-pixels-with-pending-input") == 0;
+  const bool settled =
+      identical && motion && timeNs >= motion->lastInputNs + 200000000;
+  m_motion.confirm(result.displacement, accepted || settled,
+                   !result.priorUsed && !identical);
+  if (m_prediction.valid) {
+    result.predictedOffset = m_prediction.offset;
+    result.priorTolerance = m_prediction.tolerance;
+  }
+  result.input = m_prediction.input;
+  result.gain = m_prediction.gain;
+  if (result.status == Status::Ambiguous && m_prediction.valid && !identical)
+    result.reason = "ambiguous-pixels-outside-prior";
+  return result;
+}
+ScrollStitcher::Result ScrollStitcher::appendPixels(const QImage &source, const QImage &sourceOriginal, const QImage &sourceHdr) {
   QImage original=sourceOriginal, hdr=sourceHdr;
   original.setDevicePixelRatio(1); hdr.setDevicePixelRatio(1);
   if ((!hdr.isNull() && (hdr.size() != source.size() || hdr.format() != QImage::Format_RGBA16FPx4_Premultiplied)) ||
@@ -1231,8 +1513,16 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   }
   if (frame.size() != m_initial.size())
     return {Status::SizeChanged, 0, 0, 0, "frame-size-changed"};
-  if (stable(m_previous, frame))
+  // A tiny changed ID can be the only evidence of a whole line-period
+  // scroll on a wide log. Do not spend a changed-pixel budget here.
+  if (original.isNull() ? m_previous==frame : m_originalPrevious==original) {
+    // A whole-period scroll and a clamped edge can produce identical pixels.
+    // Input alone cannot tell them apart. Retain history and retire that
+    // unobserved input only after settling, without calibrating from it.
+    if(m_prediction.valid && m_prediction.resolvesTies && std::abs(m_prediction.offset)>2)
+      return {Status::Ambiguous,0,0,0,"identical-pixels-with-pending-input"};
     return {Status::Unchanged, 0, 0, 1, "stationary-frame"};
+  }
   const QImage &registrationPrevious = original.isNull() ? m_previous : m_originalPrevious;
   const QImage &registrationCurrent = original.isNull() ? frame : original;
   const auto previous = gray(registrationPrevious), current = gray(registrationCurrent);
@@ -1250,12 +1540,49 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
           : detectContent(gray(m_originalInitial), gray(original));
   if (content.width() < 64 || content.height() < 96)
     return {Status::NoOverlap, 0, 0, 0, "insufficient-content-region"};
-  const auto previousCompact = compact(crop(previous, content));
-  const auto currentCompact = compact(crop(current, content));
-  const auto rawAlignment = match(previousCompact, currentCompact);
+  Match wholeNative;
+  const auto probe=m_layoutLocked?content:frame.rect();
+  const auto edge=nativeRows(crop(previous,probe),crop(current,probe),m_prediction,true);
+  const auto run=edge.found && edge.position?nativeRun(registrationPrevious,registrationCurrent,probe,edge):QRect{};
+  if(!run.isEmpty()) {
+    wholeNative=edge;
+    if(!m_layoutLocked &&
+       (content.width()<frame.width()*.6 || content.height()<frame.height()*.6)) {
+      const int first=std::min(run.top(),run.top()+edge.position);
+      const int last=std::max(run.bottom()+1,run.bottom()+1+edge.position);
+      // Only unchanged screen-edge chrome is an initial fixed source. A bar
+      // which just appeared stays inside the body for dynamic row detection.
+      int top=0,bottom=frame.height();
+      while(top<first && std::memcmp(registrationPrevious.constScanLine(top),registrationCurrent.constScanLine(top),frame.width()*4)==0) ++top;
+      while(bottom>last && std::memcmp(registrationPrevious.constScanLine(bottom-1),registrationCurrent.constScanLine(bottom-1),frame.width()*4)==0) --bottom;
+      content=QRect(0,top,frame.width(),bottom-top);
+    }
+  }
+  if(!wholeNative.found) {
+    QRect columnRun;
+    const auto columns=nativeColumnMotion(registrationPrevious,registrationCurrent,previous,current,probe,m_prediction,columnRun);
+    const bool small=!m_layoutLocked && (content.width()<frame.width()*.6 || content.height()<frame.height()*.6);
+    if(columns.found && (!small || !columnRun.isEmpty())) {
+      wholeNative=columns;
+      if(small) {
+        const int first=std::min(columnRun.top(),columnRun.top()+columns.position);
+        const int last=std::max(columnRun.bottom()+1,columnRun.bottom()+1+columns.position);
+        int top=0,bottom=frame.height();
+        const auto sameRow=[&](int y) {return std::memcmp(registrationPrevious.constScanLine(y)+columnRun.x()*4,
+            registrationCurrent.constScanLine(y)+columnRun.x()*4,columnRun.width()*4)==0;};
+        while(top<first && sameRow(top)) ++top;
+        while(bottom>last && sameRow(bottom-1)) --bottom;
+        content.setTop(top);content.setBottom(bottom-1);
+      }
+    }
+  }
+  const auto previousNative = crop(previous, content);
+  const auto currentNative = crop(current, content);
+  const auto rawAlignment = wholeNative.found?wholeNative:match(previousNative, currentNative, false, m_prediction);
   auto alignment = rawAlignment;
   const char *method = "pairwise-overlap";
   bool consensusMotion = false;
+  bool usedPrior = rawAlignment.priorUsed;
   bool sparseMotion = false;
   // Opaque documents usually have a byte-identical overlap. This stronger,
   // inexpensive check avoids filtering full-resolution frames on that path.
@@ -1267,8 +1594,8 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       exactOverlap(registrationPrevious, registrationCurrent, content, alignment.position);
   const bool verifiedNative = !original.isNull() && rawAlignment.found &&
       verifyOriginalPixels(registrationPrevious,registrationCurrent,content,rawAlignment.position,false,.95);
-  if (!exactRegistration && !verifiedNative) {
-    alignment = match(foregroundDetail(previousCompact), foregroundDetail(currentCompact), true);
+  if (!exactRegistration && !verifiedNative && !wholeNative.found) {
+    alignment = match(foregroundDetail(previousNative), foregroundDetail(currentNative), true, m_prediction);
     if (alignment.found &&
         (!verifyOriginalPixels(registrationPrevious, registrationCurrent, content, alignment.position, true) ||
          (!original.isNull() && !verifyOriginalPixels(registrationPrevious, registrationCurrent, content, alignment.position))))
@@ -1284,25 +1611,30 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       // backdrop. Repeated terminal phrases alone can vote for a false shift.
       if (!alignment.found && !alignment.ambiguous &&
           texturedFrames(crop(previous, content), crop(current, content))) {
-        alignment = matchForeground(previousCompact, currentCompact);
+        alignment = matchForeground(previousNative, currentNative);
         sparseMotion = alignment.found;
       }
       if (!alignment.found)
         alignment.ambiguous |= detailAmbiguous;
     }
   }
+  // A unique, natively verified zero in a locked body already establishes
+  // document position. Illumination/alpha animation must not run every motion
+  // fallback again. Keep the zero-position repair path for late-loaded tiles.
+  const bool verifiedStationary=m_layoutLocked && alignment.found && alignment.position==0 &&
+      verifyOriginalPixels(registrationPrevious,registrationCurrent,content,0,true);
   // When chrome appears mid-capture, registration's old rectangle still
   // includes it. Retry only the broadly changing body. Unlike byte-consensus,
   // this verifies native foreground detail as well as template alignment, and never
   // overrides a successfully verified foreground alignment.
-  if (!alignment.found || alignment.position == 0 || sparseMotion) {
+  if (!alignment.found || (!verifiedStationary && alignment.position == 0) || sparseMotion) {
     const auto body = detectContent(previous, current).intersected(content);
     if (body != content && body.width() >= std::max(64, content.width() / 3) &&
         body.height() >= std::max(96, content.height() * 3 / 5)) {
       const bool sparseRejected = sparseMotion &&
           !verifyOriginalPixels(registrationPrevious, registrationCurrent, body, alignment.position, true);
       if (!alignment.found || alignment.position == 0 || sparseRejected) {
-        const auto registration = registerBody(registrationPrevious, registrationCurrent, body, !original.isNull());
+        const auto registration = registerBody(registrationPrevious, registrationCurrent, body, !original.isNull(), m_prediction);
         if (registration.found && registration.position != 0) {
           alignment = registration; method = "changing-body-overlap";
           sparseMotion = false;
@@ -1310,7 +1642,7 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       }
     }
   }
-  if (!alignment.found || alignment.position == 0 || sparseMotion) {
+  if (!alignment.found || (!verifiedStationary && alignment.position == 0) || sparseMotion) {
     // The very first frame of newly appearing chrome is not stationary yet.
     // Broad interior bodies exclude top chrome, one side, or bottom chrome.
     // Require independently verified translations; conflicts stay ambiguous.
@@ -1321,31 +1653,55 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
                             content.adjusted(0, 0, -content.width()/3, -content.height()/4),
                             content.adjusted(content.width()/3, 0, 0, -content.height()/4)}) {
       if (rect.width() < 64 || rect.height() < 96) continue;
-      const auto candidate = registerBody(registrationPrevious, registrationCurrent, rect, !original.isNull());
-      if (candidate.found && candidate.position) translations[candidate.position]=candidate.confidence;
+      const auto candidate = registerBody(registrationPrevious, registrationCurrent, rect, !original.isNull(), m_prediction);
+      if (candidate.found && candidate.position) {translations[candidate.position]=candidate.confidence;usedPrior|=candidate.priorUsed;}
     }
     if (translations.size() == 1) {alignment = {translations.begin()->first, true, false, translations.begin()->second}; method="interior-body-overlap";}
     else if (translations.size() > 1) alignment = {0, false, true};
   }
-  if (!alignment.found || alignment.position == 0 || smallInferredContent) {
+  // A period-aligned scroll can change only the differing message IDs. A
+  // byte-exact translation of the entire native viewport proves that those
+  // IDs belong to a moving page, not an animated widget in a stationary page.
+  const bool broadNativeMotion=smallInferredContent && alignment.found && alignment.position &&
+      (wholeNative.found || exactOverlap(registrationPrevious,registrationCurrent,frame.rect(),alignment.position));
+  if (!alignment.found || (!verifiedStationary && alignment.position == 0) || (smallInferredContent && !broadNativeMotion)) {
     // Preserve master's foreground-registration precedence. Native consensus
     // is a fallback; it cannot override found translucent detail alignment.
-    const auto consensus = matchConsensus(registrationPrevious, registrationCurrent,
-        m_layoutLocked ? content : frame.rect());
+    auto consensus = matchConsensus(registrationPrevious, registrationCurrent,
+        m_layoutLocked ? content : frame.rect(), false, m_prediction);
+    if(consensus.found && consensus.position==0 && alignment.ambiguous &&
+       m_prediction.valid && std::abs(m_prediction.offset)>m_prediction.tolerance) {
+      consensus.found=false;consensus.ambiguous=true;
+    }
+    if(consensus.found && consensus.position) {
+      bool coherent=false;
+      for(const auto region : {content, content.adjusted(0,0,-content.width()/3,0), content.adjusted(content.width()/3,0,0,0)})
+        coherent |= verifyOriginalPixels(registrationPrevious,registrationCurrent,region,consensus.position,true);
+      // An interior animation/panel may cover most body tiles. Two native
+      // edge bands can still prove the document translation independently;
+      // neither a central video nor a single periodic prefix can supply both.
+      if(!coherent && content.width()>=320) {
+        const QRect left(content.x(),content.y(),content.width()/5,content.height());
+        const QRect right(content.right()+1-content.width()/5,content.y(),content.width()/5,content.height());
+        coherent=verifyOriginalPixels(registrationPrevious,registrationCurrent,left,consensus.position,true) &&
+                 verifyOriginalPixels(registrationPrevious,registrationCurrent,right,consensus.position,true);
+      }
+      if(!coherent) consensus.found=false;
+    }
     if (consensus.found || consensus.ambiguous) {
       alignment = consensus; method="native-consensus";
       consensusMotion = consensus.found && consensus.position != 0;
     }
     else if (smallInferredContent) alignment.found = false;
   }
-  if ((!alignment.found || alignment.position == 0) && !original.isNull()) {
+  if ((!alignment.found || (!verifiedStationary && alignment.position == 0)) && !original.isNull()) {
     std::map<int,double> offsets;
     for (const auto rect : {content.adjusted(0,0,-content.width()/3,0),
                             content.adjusted(content.width()/3,0,0,0)}) {
-      const auto raw = match(compact(gray(registrationPrevious.copy(rect))),
-                             compact(gray(registrationCurrent.copy(rect))));
+      const auto raw = match(gray(registrationPrevious.copy(rect)),
+                             gray(registrationCurrent.copy(rect)), false, m_prediction);
       if (raw.found && raw.position && verifyOriginalPixels(registrationPrevious,registrationCurrent,rect,raw.position))
-        offsets[raw.position]=raw.confidence;
+        {offsets[raw.position]=raw.confidence;usedPrior|=raw.priorUsed;}
     }
     if (offsets.size() == 1) { alignment = {offsets.begin()->first,true,false,offsets.begin()->second}; consensusMotion=true; method="full-height-body-overlap"; }
     else if (offsets.size() > 1) alignment = {0,false,true};
@@ -1384,13 +1740,15 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
       refresh(m_strips,frame);refresh(m_originalStrips,original);refresh(m_hdrStrips,hdr);
       cleanMarginFloats();
       m_previous=frame;m_originalPrevious=original;
-      return {Status::Unchanged,0,0,alignment.confidence,"loaded-blank-refresh"};
+      Result result{Status::Unchanged,0,0,alignment.confidence,"loaded-blank-refresh"};
+      result.priorUsed=usedPrior || alignment.priorUsed;return result;
     }
   }
   if (alignment.found && alignment.position == 0) {
     // Keep the last registered anchor. Unmatched animation must not replace
     // it (or silently rebase a moving region whose motion was not observed).
-    return {Status::Unchanged, 0, 0, alignment.confidence, "stationary-anchor"};
+    Result result{Status::Unchanged, 0, 0, alignment.confidence, "stationary-anchor"};
+    result.priorUsed=usedPrior || alignment.priorUsed;return result;
   }
   int position = m_layout.viewportY + alignment.position;
   if (alignment.found && m_layoutLocked && position > m_layout.maximumY &&
@@ -1398,17 +1756,18 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     return {Status::NoOverlap,0,0,alignment.confidence,"occlusion-leaves-no-safe-overlap"};
   if (!alignment.found && m_layoutLocked) {
     method="retained-history";
+    auto historyPrior=m_prediction;historyPrior.offset+=m_layout.viewportY-m_layout.minimumY+m_topOcclusion;
     const auto body = bodyImage(!original.isNull());
-    const auto history = compact(gray(body));
-    const auto visible = compact(crop(current, content));
-    alignment = match(foregroundDetail(history), foregroundDetail(visible), true);
+    const auto history = gray(body);
+    const auto visible = crop(current, content);
+    alignment = match(foregroundDetail(history), foregroundDetail(visible), true, historyPrior);
     const bool foreground = alignment.found;
     if (!alignment.found && !alignment.ambiguous)
-      alignment = match(history, visible);
+      alignment = match(history, visible, false, historyPrior);
     bool consensus = false;
     const auto visibleFrame = registrationCurrent.copy(content);
     if (!alignment.found && !alignment.ambiguous) {
-      alignment = matchConsensus(body, visibleFrame, visibleFrame.rect(), true);
+      alignment = matchConsensus(body, visibleFrame, visibleFrame.rect(), true, historyPrior);
       consensus = alignment.found;
     }
     position = m_layout.minimumY + alignment.position - m_topOcclusion;
@@ -1455,25 +1814,26 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
     const int footer = frame.height() - content.bottom() - 1;
     if (translatedBand(frame.height() - footer - d, footer))
       content.setBottom(frame.height() - 1);
-    // Sparse moving gutter markers can look stationary on a one-pixel
-    // touchpad step. Reclaim only columns that change and whose entire
-    // translated interior agrees; fixed sidebar labels must still stay fixed.
+    // Reclaim adjacent page gutters/prefixes whose entire translated
+    // interior agrees; independently fixed labels remain a barrier.
     const auto translatedSide = [&](int x, int width, bool left) {
-      const int y = content.top() + 32;
-      const int height = content.height() - d - 64;
-      if (width <= 0 || height < 96) return -1;
-      int edge = left ? x + width : x - 1;
-      for (int column = x; column < x + width; ++column) {
-        bool changed = false, translated = true;
-        for (int row = y; row < y + height; ++row) {
-          const auto a = upper.pixel(column, row + d), b = lower.pixel(column, row);
-          if (std::max({std::abs(qRed(a)-qRed(b)),std::abs(qGreen(a)-qGreen(b)),std::abs(qBlue(a)-qBlue(b)),std::abs(qAlpha(a)-qAlpha(b))}) > 1) { translated = false; break; }
-          const auto unshifted = upper.pixel(column, row);
-          changed |= std::max({std::abs(qRed(unshifted)-qRed(b)),std::abs(qGreen(unshifted)-qGreen(b)),std::abs(qBlue(unshifted)-qBlue(b))}) > 2;
+      const int y=content.top()+32, height=content.height()-d-64;
+      if(width<=0 || height<96) return -1;
+      int edge=-1;
+      // Walk outwards from proven document motion. Periodic text prefixes and
+      // blank gutters can agree with both zero and document motion; retain
+      // them until an actually non-translating fixed column forms a barrier.
+      for(int i=0;i<width;++i) {
+        const int column=left?x+width-1-i:x+i;
+        bool translated=true;
+        for(int row=y;row<y+height;++row) {
+          const auto a=upper.pixel(column,row+d),b=lower.pixel(column,row);
+          if(std::max({std::abs(qRed(a)-qRed(b)),std::abs(qGreen(a)-qGreen(b)),std::abs(qBlue(a)-qBlue(b)),std::abs(qAlpha(a)-qAlpha(b))})>1) {translated=false;break;}
         }
-        if (changed && translated) edge = left ? std::min(edge,column) : std::max(edge,column);
+        if(!translated) break;
+        edge=column;
       }
-      return edge >= x && edge < x + width ? edge : -1;
+      return edge;
     };
     if (const int edge = translatedSide(0, content.left(), true); edge >= 0) content.setLeft(edge);
     if (const int edge = translatedSide(content.right()+1, frame.width()-content.right()-1, false); edge >= 0) content.setRight(edge);
@@ -1704,7 +2064,10 @@ ScrollStitcher::Result ScrollStitcher::append(const QImage &source, const QImage
   m_originalPrevious = original;
   if (added)
     ++m_frames;
-  return {added ? Status::Appended : Status::Relocated, added, delta, alignment.confidence, method};
+  Result result{added ? Status::Appended : Status::Relocated, added, delta, alignment.confidence, method};
+  result.priorUsed=usedPrior || alignment.priorUsed;
+  if(result.priorUsed) result.reason="motion-prior-native-peaks";
+  return result;
 }
 void ScrollStitcher::cleanMarginFloats() {
   const auto c=m_layout.content;

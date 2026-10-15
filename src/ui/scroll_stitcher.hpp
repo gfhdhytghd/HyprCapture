@@ -1,4 +1,5 @@
 #pragma once
+#include "shared/scroll_motion.hpp"
 #include <QImage>
 #include <QPainter>
 #include <QRect>
@@ -69,10 +70,13 @@ public:
     int displacement = 0;
     double confidence = 0; // Verified correlation; zero when no unique match exists.
     const char *reason = "frame-validation";
+    double predictedOffset = std::numeric_limits<double>::quiet_NaN(), priorTolerance = 0;
+    std::array<double,4> input{}, gain{};
+    bool priorUsed = false;
   };
   ScrollStitcher();
   explicit ScrollStitcher(Limits limits);
-  Result append(const QImage &frame, const QImage &original = {}, const QImage &hdr = {});
+  Result append(const QImage &frame, const QImage &original = {}, const QImage &hdr = {}, const ScrollMotionSnapshot* motion = nullptr, uint64_t timeNs = 0);
   QImage image() const;
   QImage originalImage() const;
   QImage hdrImage() const;
@@ -87,6 +91,9 @@ public:
   static bool stable(const QImage &a, const QImage &b);
 
 private:
+  Result appendPixels(const QImage &, const QImage &, const QImage &);
+  ScrollMotionPrior m_motion;
+  ScrollPrediction m_prediction;
   struct Strip {
     int y;
     QImage image;
