@@ -2,6 +2,7 @@
 #include "shared/hdr_color.hpp"
 #include "ui/hdr_image.hpp"
 #include "ui/timing.hpp"
+#include "ui/hdr_shm.hpp"
 #include <QColorSpace>
 #include <QDebug>
 #include <QGuiApplication>
@@ -12,6 +13,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <ctime>
 #include <map>
 #include <set>
 #include <thread>
@@ -117,6 +119,7 @@ struct NativeBuffer {
   wl_buffer *buffer = nullptr;
   bool busy = false, retired = false;
   std::shared_ptr<const HdrGpuFrame> frame;
+  std::shared_ptr<HdrShmBuffer> shm;
 };
 struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   wl_display *display = nullptr;
@@ -154,10 +157,19 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   zwp_linux_dmabuf_feedback_v1 *dmaFeedback = nullptr;
   bool globalsReady = false, managerDone = false, prewarming = false, dmaFeedbackDone = false;
   std::map<void *, std::function<void()>> progress;
+  struct ParentTiming {
+    NativeGlobals* owner;
+    wl_surface* surface;
+    int64_t submittedNs;
+    unsigned sequence;
+  };
+  std::map<struct wp_presentation_feedback*, std::unique_ptr<ParentTiming>> parentTimings;
+  unsigned parentSequence = 0;
+  uint64_t surfaceSequence = 0;
   std::shared_ptr<NativeGlobals> draining;
   void updateTimer() {
     const bool active =
-        !clients.empty() || !buffers.empty() || !pendingImports.empty() ||
+        !clients.empty() || !buffers.empty() || !pendingImports.empty() || !parentTimings.empty() ||
         (prewarming && (!globalsReady || (manager && !managerDone) ||
                         (dmaFeedback && !dmaFeedbackDone)));
     if (active && !closed) {
@@ -370,13 +382,17 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
     return i->second->ready ? i->second->object : nullptr;
   }
   NativeBuffer *own(wl_buffer *b,
-                    std::shared_ptr<const HdrGpuFrame> frame = {}) {
+                    std::shared_ptr<const HdrGpuFrame> frame = {},
+                    std::shared_ptr<HdrShmBuffer> shm = {}) {
     auto value = std::make_unique<NativeBuffer>();
     value->buffer = b;
     value->frame = std::move(frame);
+    value->shm = std::move(shm);
     auto *result = value.get();
     static const wl_buffer_listener listener{[](void *p, wl_buffer *) {
-      static_cast<NativeBuffer *>(p)->busy = false;
+      auto* buffer = static_cast<NativeBuffer *>(p);
+      buffer->busy = false;
+      if (buffer->shm) buffer->shm->busy = false;
     }};
     wl_buffer_add_listener(b, &listener, result);
     buffers.push_back(std::move(value));
@@ -404,6 +420,8 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
       wl_buffer_destroy(b->buffer);
     }
     buffers.clear();
+    for (auto& [feedback, _] : parentTimings) wp_presentation_feedback_destroy(feedback);
+    parentTimings.clear();
     for (auto &[_, d] : descriptions)
       wp_image_description_v1_destroy(d->object);
     descriptions.clear();
@@ -487,12 +505,20 @@ struct HdrBackdrop::Impl {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   std::shared_ptr<NativeGlobals> globals;
   wl_surface *surface = nullptr;
+  uint64_t surfaceIdentity = 0, stackedAboveIdentity = 0;
   wl_subsurface *subsurface = nullptr;
   wp_viewport *viewport = nullptr;
   wp_color_management_surface_v1 *colorSurface = nullptr;
   NativeBuffer *buffer = nullptr;
+  NativeBuffer *attachedBuffer = nullptr;
+  bool attachedVisible = false, contentDirty = false;
+  HdrShmPool pqPool;
+  std::vector<NativeBuffer*> pqBuffers;
+  qint64 pqRequestKey = 0;
+  QRegion pqDamage, bufferDamage;
   bool descriptionReady = false, visible = false, presentationPending = false;
   std::set<struct wp_presentation_feedback *> feedback;
+  std::map<struct wp_presentation_feedback*, int64_t> feedbackStarts;
   QRect destination, clippedDestination;
   QSize imageSize;
   QPointer<QWindow> parent;
@@ -510,6 +536,11 @@ struct HdrBackdrop::Impl {
       createSurface();
       if (auto retry = pending)
         retry();
+      else if (visible && requestedVisible && buffer && !attachedVisible && !buffer->busy) {
+        attach();
+        if (parent) parent->requestUpdate();
+        if (auto callback = completed) callback(readyForPresentation());
+      }
     };
     g.updateTimer();
   }
@@ -525,6 +556,7 @@ struct HdrBackdrop::Impl {
       return false;
     auto &g = *globals;
     surface = wl_compositor_create_surface(g.compositor);
+    surfaceIdentity = ++g.surfaceSequence; stackedAboveIdentity = 0;
     auto *empty = wl_compositor_create_region(g.compositor);
     wl_surface_set_input_region(surface, empty);
     wl_region_destroy(empty);
@@ -542,22 +574,44 @@ struct HdrBackdrop::Impl {
     colorSurface = wp_color_manager_v1_get_surface(g.manager, surface);
     return true;
   }
+  bool readyForPresentation() const { return surface && buffer && descriptionReady && globals && !globals->closed; }
   void attach() {
     if (!surface || !globals || globals->closed)
       return;
-    if (visible && buffer) {
+    ScopedUiTiming timing("hdr.attach_commit_flush");
+    if (visible && buffer && (contentDirty || attachedBuffer != buffer || !attachedVisible)) {
+      // Never resubmit a busy buffer after hide/show: a queued release for its
+      // earlier use could otherwise mark a newly submitted mapping writable.
+      // The progress callback retries once that release has been dispatched.
+      if (buffer->busy) { traceTiming("hdr.attach_wait_release"); return; }
       buffer->busy = true;
+      if (buffer->shm) buffer->shm->busy = true;
       wl_surface_attach(surface, buffer->buffer, 0, 0);
-      if (globals->presentation && !presentationPending) {
+      const QRegion damage = contentDirty ? bufferDamage : QRegion(QRect(QPoint{}, imageSize));
+      if (wl_proxy_get_version(reinterpret_cast<wl_proxy*>(surface)) >= 4) {
+        for (const auto& r : damage)
+          wl_surface_damage_buffer(surface, r.x(), r.y(), r.width(), r.height());
+      } else wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
+      attachedBuffer = buffer; attachedVisible = true; contentDirty = false;
+      if (globals->presentation && !presentationPending && timingEnabled()) {
         presentationPending = true;
         auto *f = wp_presentation_feedback(globals->presentation, surface);
         feedback.insert(f);
+        timespec submitted{};
+        if (clock_gettime(globals->presentationClock, &submitted) == 0)
+          feedbackStarts[f] = int64_t(submitted.tv_sec)*1000000000 + submitted.tv_nsec;
         static const wp_presentation_feedback_listener l{
             [](void *, struct wp_presentation_feedback *, wl_output *) {},
             [](void *p, struct wp_presentation_feedback *f, uint32_t hi,
                uint32_t lo, uint32_t ns, uint32_t, uint32_t, uint32_t,
                uint32_t) {
               auto &s = *static_cast<Impl *>(p);
+              s.presentationPending = false;
+              if (auto i=s.feedbackStarts.find(f); i!=s.feedbackStarts.end()) {
+                const int64_t presented = int64_t((quint64(hi)<<32)|lo)*1000000000 + ns;
+                traceTiming("hdr.commit_to_present", -1, (presented-i->second)/1000);
+                s.feedbackStarts.erase(i);
+              }
               traceTiming(QStringLiteral("hdr.presented mode=%1 seconds=%2 "
                                          "nanoseconds=%3 clock=%4")
                               .arg(s.buffer && s.buffer->frame ? "fp16" : "pq")
@@ -570,14 +624,16 @@ struct HdrBackdrop::Impl {
             [](void *p, struct wp_presentation_feedback *f) {
               auto &s = *static_cast<Impl *>(p);
               s.presentationPending = false;
+              s.feedbackStarts.erase(f);
               s.feedback.erase(f);
               wp_presentation_feedback_destroy(f);
             }};
         wp_presentation_feedback_add_listener(f, &l, this);
       }
-    } else
+    } else if ((!visible || !buffer) && attachedVisible) {
       wl_surface_attach(surface, nullptr, 0, 0);
-    wl_surface_damage(surface, 0, 0, INT32_MAX, INT32_MAX);
+      attachedBuffer = nullptr; attachedVisible = false;
+    }
     traceTiming(QStringLiteral("hdr.child_commit mode=%1 visible=%2 synchronized=%3 x=%4 y=%5")
                     .arg(buffer && buffer->frame ? "fp16" : "pq")
                     .arg(visible && buffer).arg(synchronized)
@@ -601,6 +657,7 @@ struct HdrBackdrop::Impl {
     for (auto *f : feedback)
       wp_presentation_feedback_destroy(f);
     feedback.clear();
+    feedbackStarts.clear();
     if (subsurface)
       wl_subsurface_destroy(subsurface);
     if (viewport)
@@ -612,8 +669,11 @@ struct HdrBackdrop::Impl {
     subsurface = nullptr;
     viewport = nullptr;
     colorSurface = nullptr;
-    globals->retire(buffer);
+    if (buffer && std::ranges::find(pqBuffers, buffer) == pqBuffers.end()) globals->retire(buffer);
+    for (auto* b : pqBuffers) globals->retire(b);
+    pqBuffers.clear(); pqPool.reset(); pqRequestKey=0; pqDamage={}; bufferDamage={};
     buffer = nullptr;
+    attachedBuffer = nullptr; attachedVisible = false; contentDirty = false;
     globals->updateTimer();
   }
   ~Impl() {
@@ -663,6 +723,37 @@ HdrBackdrop::HdrBackdrop(QWindow *parent, bool aboveParent, bool synchronized)
 #endif
 }
 HdrBackdrop::~HdrBackdrop() = default;
+void HdrBackdrop::traceParentFrame(QWindow* parent) {
+#ifdef HYPRCAPTURE_HDR_WAYLAND
+  if (!timingEnabled() || !parent) return;
+  auto g = NativeGlobals::get();
+  if (!g || g->closed || !g->globalsReady || !g->presentation) return;
+  auto* native = QGuiApplication::platformNativeInterface();
+  auto* surface = native ? static_cast<wl_surface*>(native->nativeResourceForWindow("surface",parent)) : nullptr;
+  if (!surface || std::ranges::any_of(g->parentTimings,[&](const auto& p) { return p.second->surface == surface; })) return;
+  timespec now{};
+  if (clock_gettime(g->presentationClock,&now)!=0) return;
+  auto data=std::make_unique<NativeGlobals::ParentTiming>(NativeGlobals::ParentTiming{
+      g.get(),surface,int64_t(now.tv_sec)*1000000000+now.tv_nsec,++g->parentSequence});
+  auto* f=wp_presentation_feedback(g->presentation,surface);
+  static const wp_presentation_feedback_listener listener{
+      [](void*,struct wp_presentation_feedback*,wl_output*) {},
+      [](void* p,struct wp_presentation_feedback* f,uint32_t hi,uint32_t lo,uint32_t ns,uint32_t,uint32_t,uint32_t,uint32_t) {
+        auto& data=*static_cast<NativeGlobals::ParentTiming*>(p);
+        const auto presented=int64_t((quint64(hi)<<32)|lo)*1000000000+ns;
+        traceTiming(QStringLiteral("editor.parent_presented sequence=%1").arg(data.sequence),-1,(presented-data.submittedNs)/1000);
+        auto* owner=data.owner; wp_presentation_feedback_destroy(f); owner->parentTimings.erase(f); owner->updateTimer();
+      },
+      [](void* p,struct wp_presentation_feedback* f) {
+        auto* owner=static_cast<NativeGlobals::ParentTiming*>(p)->owner;
+        traceTiming("editor.parent_discarded"); wp_presentation_feedback_destroy(f); owner->parentTimings.erase(f); owner->updateTimer();
+      }};
+  traceTiming(QStringLiteral("editor.parent_frame_queued sequence=%1").arg(data->sequence));
+  wp_presentation_feedback_add_listener(f,&listener,data.get());
+  g->parentTimings.emplace(f,std::move(data)); g->updateTimer();
+  wl_display_flush(g->display);
+#endif
+}
 void HdrBackdrop::setReadyCallback(std::function<void(bool)> callback) {
   m->completed = std::move(callback);
 }
@@ -791,12 +882,20 @@ bool HdrBackdrop::setPreparedImage(
       return;
     }
     auto &g = *m->globals;
+    if (!m->pqBuffers.empty()) {
+      m->buffer = nullptr;
+      for (auto* b : m->pqBuffers) g.retire(b);
+      m->pqBuffers.clear(); m->pqPool.reset(); m->pqRequestKey=0; m->pqDamage={};
+    }
     g.retire(m->buffer);
     m->buffer = g.own(std::exchange(result->buffer, nullptr), result->frame);
     m->descriptionReady = true;
     wp_color_management_surface_v1_set_image_description(
         m->colorSurface, desc, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
     m->imageSize = {result->frame->width, result->frame->height};
+    m->attachedBuffer = nullptr;
+    m->contentDirty = true;
+    m->bufferDamage = QRect(QPoint{}, m->imageSize);
     m->destination = {};
     m->visible = m->requestedVisible;
     traceTiming("hdr.attach_ready mode=fp16");
@@ -823,86 +922,70 @@ bool HdrBackdrop::setImage(const QImage &image, const QRect &destination,
   return setPqImage(pq, destination, peak, reference);
 }
 bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
-                             float peak, float reference) {
+                             float peak, float reference, std::optional<QRegion> damage) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
+  ScopedUiTiming timing("hdr.pq_submit");
   m->pending = {};
   const auto fail = [&] {
-    setVisible(false);
-    m->descriptionReady = false;
-    m->close();
-    return false;
+    setVisible(false); m->descriptionReady = false; m->close(); return false;
   };
-  if (!m->globals || pq.isNull() || pq.format() != QImage::Format_RGB30 ||
-      !destination.isValid())
-    return fail();
+  if (!m->globals || pq.isNull() || pq.format() != QImage::Format_RGB30 || !destination.isValid()) return fail();
   auto &g = *m->globals;
-  if (g.closed)
-    return fail();
-  m->activate();
-  m->pendingDestination = destination;
+  if (g.closed) return fail();
+  if (m->pqRequestKey != pq.cacheKey()) {
+    m->pqDamage |= damage.value_or(QRegion(pq.rect()));
+    m->pqRequestKey = pq.cacheKey();
+  }
+  m->activate(); m->pendingDestination = destination;
   const auto defer = [&] {
-    if (m->visible) {
-      m->visible = false;
-      m->attach();
-    }
-    m->descriptionReady = false;
-    m->pending = [this, pq, peak, reference] {
-      const auto destination = m->pendingDestination;
-      const bool accepted = setPqImage(pq, destination, peak, reference);
+    // Keep the last accepted frame visible while descriptions or releases are
+    // pending. Replacing this closure coalesces input without losing damage.
+    m->pending = [this, pq, peak, reference, damage] {
+      const bool accepted = setPqImage(pq, m->pendingDestination, peak, reference, damage);
       if (!m->pending) {
-        if (m->parent)
-          m->parent->requestUpdate();
-        if (auto callback = m->completed)
-          callback(accepted && ready());
+        if (m->parent) m->parent->requestUpdate();
+        if (auto callback = m->completed) callback(accepted && ready());
       }
     };
-    wl_display_flush(g.display);
-    return true;
+    wl_display_flush(g.display); return true;
   };
-  if (!g.globalsReady || (g.manager && !g.managerDone))
-    return defer();
-  if (!g.common() || !g.shm || !g.rgb30 || !g.pq || !g.bt2020 || !m->parent)
-    return fail();
-  if (!m->createSurface())
-    return defer();
-  auto *desc =
-      g.description(false, peak, reference);
+  if (!g.globalsReady || (g.manager && !g.managerDone)) return defer();
+  if (!g.common() || !g.shm || !g.rgb30 || !g.pq || !g.bt2020 || !m->parent) return fail();
+  if (!m->createSurface()) return defer();
+  auto *desc = g.description(false, peak, reference);
   if (!desc) {
-    const bool waiting = std::ranges::any_of(
-        g.descriptions, [](const auto &d) { return !d.second->done; });
+    const bool waiting = std::ranges::any_of(g.descriptions, [](const auto &d) { return !d.second->done; });
     return waiting ? defer() : fail();
   }
-  int fd = memfd_create("hyprcapture-hdr-preview", MFD_CLOEXEC);
-  if (fd < 0)
-    return fail();
-  auto size = pq.sizeInBytes();
-  if (size > INT32_MAX || ftruncate(fd, size) < 0) {
-    close(fd);
-    return fail();
+  if (m->imageSize != pq.size() && !m->pqBuffers.empty()) {
+    m->buffer = nullptr; m->attachedBuffer = nullptr;
+    for (auto* b : m->pqBuffers) g.retire(b);
+    m->pqBuffers.clear(); m->pqPool.reset(); m->pqDamage = pq.rect();
   }
-  void *memory = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if (memory == MAP_FAILED) {
-    close(fd);
-    return fail();
+  auto update = m->pqPool.prepare(pq, m->pqDamage);
+  if (!update.buffer) return update.blocked ? defer() : fail();
+  NativeBuffer* buffer = nullptr;
+  for (auto* b : m->pqBuffers) if (b->shm == update.buffer) { buffer = b; break; }
+  if (!buffer) {
+    ScopedUiTiming protocolTiming("hdr.shm_create_protocol_buffer");
+    auto* pool = wl_shm_create_pool(g.shm, update.buffer->fd, int(update.buffer->bytes));
+    auto* native = wl_shm_pool_create_buffer(pool, 0, pq.width(), pq.height(),
+                                            int(update.buffer->stride), WL_SHM_FORMAT_XRGB2101010);
+    wl_shm_pool_destroy(pool);
+    buffer = g.own(native, {}, update.buffer); m->pqBuffers.push_back(buffer);
   }
-  memcpy(memory, pq.constBits(), size);
-  munmap(memory, size);
-  auto *pool = wl_shm_create_pool(g.shm, fd, int(size));
-  close(fd);
-  auto *buffer =
-      wl_shm_pool_create_buffer(pool, 0, pq.width(), pq.height(),
-                                pq.bytesPerLine(), WL_SHM_FORMAT_XRGB2101010);
-  wl_shm_pool_destroy(pool);
-  g.retire(m->buffer);
-  m->buffer = g.own(buffer);
-  m->descriptionReady = true;
-  wp_color_management_surface_v1_set_image_description(
-      m->colorSurface, desc, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
-  m->imageSize = pq.size();
-  m->destination = {};
-  m->visible = m->requestedVisible;
-  traceTiming("hdr.attach_ready mode=pq");
+  if (m->buffer && m->buffer->frame) g.retire(m->buffer);
+  m->buffer = buffer; m->descriptionReady = true;
+  m->bufferDamage = update.damage; m->contentDirty = !update.damage.isEmpty(); m->pqDamage = {};
+  wp_color_management_surface_v1_set_image_description(m->colorSurface, desc, WP_COLOR_MANAGER_V1_RENDER_INTENT_PERCEPTUAL);
+  const bool newSize = m->imageSize != pq.size();
+  m->imageSize = pq.size(); m->visible = m->requestedVisible;
+  if (newSize) m->destination = {};
+  traceTiming(QStringLiteral("hdr.attach_ready mode=pq allocated=%1 copied_bytes=%2 damage_rects=%3")
+      .arg(update.allocated).arg(update.copiedBytes).arg(update.damage.rectCount()));
+  const bool geometryChanged = destination != m->destination;
   setGeometry(destination);
+  if (!geometryChanged) m->attach();
   return true;
 #else
   return false;
@@ -933,6 +1016,14 @@ void HdrBackdrop::setGeometry(const QRect &destination) {
   wl_subsurface_set_position(m->subsurface, clipped.x(), clipped.y());
   wp_viewport_set_destination(m->viewport, clipped.width(), clipped.height());
   m->attach();
+#endif
+}
+void HdrBackdrop::stackAbove(const HdrBackdrop& lower) {
+#ifdef HYPRCAPTURE_HDR_WAYLAND
+  if (!m->surface || !m->subsurface || !lower.m->surface || m->parent != lower.m->parent ||
+      m->globals != lower.m->globals || m->globals->closed || m->stackedAboveIdentity == lower.m->surfaceIdentity) return;
+  wl_subsurface_place_above(m->subsurface, lower.m->surface);
+  m->stackedAboveIdentity = lower.m->surfaceIdentity;
 #endif
 }
 void HdrBackdrop::setVisible(bool visible) {

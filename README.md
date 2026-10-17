@@ -242,6 +242,8 @@ HyprCapture supports HDR screenshots with native HDR preview and editing. Choose
 
 On a color-managed HDR output, screenshots retain the compositor's half-float linear sRGB/scRGB pixels (1.0 = 80 cd/m²) until export. The overlay and in-place editor present the frozen HDR image through a separate Wayland color-managed BT.2020 surface beneath the transparent Qt controls: FP16 linear when supported, otherwise 10-bit PQ. The linear encoding declares 80 cd/m² at 1.0; PQ retains its fixed 10000 cd/m² encoding span. Both carry the captured output's reference white and a separate mastering peak, so content brightness does not become an extra encoding multiplier or trigger unnecessary tone mapping. Native presentation requires mastering-luminance support; FP16 also requires extended target volume support. Thumbnails and SDR PNG output use an sRGB rendition normalized to the output's SDR reference white, with a smooth highlight shoulder and gamut compression. SDR monitor captures stay on the sRGB path.
 
+Ordinary annotations are drawn in a transparent Qt layer over an immutable HDR background, so drawing does not reconvert or upload the HDR image. HDR gain and Mosaic use an exact HDR composite with release-aware incremental buffers; Spotlight uses an alpha-only Qt mask. See [HDR annotation layers](docs/hdr-annotation-layers.md) for preview/reference-white semantics, validation and timing.
+
 Choose **HDR** in the **SDR / HDR** segmented control to preserve HDR highlights, or set:
 
 ```lua
