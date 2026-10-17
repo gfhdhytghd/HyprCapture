@@ -2,12 +2,18 @@
 
 #include <QImage>
 #include <QRect>
+#include <QRegion>
 #include <QWidget>
 #include <memory>
 #include <functional>
 #include "ui/scroll_stitcher.hpp"
 
 struct AnnotationSnapshot;
+struct HdrAnnotationPreview {
+    QImage pixels;
+    QRegion damage;
+    float peakNits = 0;
+};
 
 // An image editor embedded in the capture overlay. Annotation coordinates are
 // native image pixels, independent of display scale, zoom and the export path.
@@ -27,6 +33,8 @@ class AnnotationEditor final : public QWidget {
     // Native-resolution PQ preview: cache unchanged pixels, compose only damaged
     // annotation bounds on a worker. Export uses resultImageOn independently.
     std::function<QImage(float*)> pqPreviewRendererOn(const QImage& hdrBase, float referenceNits) const;
+    std::function<HdrAnnotationPreview()> pqPreviewFrameRendererOn(const QImage& hdrBase, float referenceNits, bool baseOnly = false) const;
+    bool needsHdrAnnotationComposition() const;
     void setHdrEnabled(bool enabled);
     bool hdrEnabled() const;
     void setRegionResizeBounds(const QRect& bounds);
@@ -40,6 +48,7 @@ class AnnotationEditor final : public QWidget {
     void setLiveScrollPresentation(bool live);
     void setExternalImagePresentation(bool enabled, bool includesAnnotations = false);
     bool externalImagePresentation() const;
+    bool externalAnnotationPresentation() const;
     void setAnnotationPresentation(bool ready, qreal opacity = 1, qreal offset = 0);
     QImage annotatedPreview(const QImage& preview, const hyprcapture::ui::ScrollLayout& layout) const;
     QRect canvasGeometry() const;

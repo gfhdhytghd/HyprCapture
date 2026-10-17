@@ -3211,7 +3211,7 @@ bool CaptureOverlay::canKeepHdrDesktopInEditor() const {
         for (const auto& other : m_windowArtifacts)
             if (&other != window && !other.stagePreview && other.zIndex <= window->zIndex &&
                 other.fullGeometry.intersects(window->fullGeometry)) return false;
-    } else if (m_mode != hyprcapture::CaptureMode::Region) return false;
+    } else if (m_mode != hyprcapture::CaptureMode::Region && m_mode != hyprcapture::CaptureMode::Fullscreen) return false;
     if (m_hdrBaseFailed) return false;
     // The frozen desktop is a temporary display while the isolated HDR base is
     // composed. Never substitute this preview for the HDR export pixels.
@@ -3221,87 +3221,103 @@ bool CaptureOverlay::canKeepHdrDesktopInEditor() const {
     return uncovered.isEmpty();
 }
 
+void CaptureOverlay::updateHdrEditPresentation() {
+    if (!m_editor) return;
+    const bool enabled = m_editing && m_defaults.screenshotFormat == "heic" && !m_scrolling &&
+                         !m_hdrBaseFailed && !m_hdrBackdrops.empty();
+    const auto key = m_editHdrBase.cacheKey();
+    const bool base = enabled && !m_editHdrBase.isNull() && m_hdrEditCacheKey == key &&
+                      m_hdrEditBackdrop && m_hdrEditBackdrop->ready();
+    const bool composite = enabled && !m_editHdrBase.isNull() && m_editor->needsHdrAnnotationComposition() &&
+                           m_hdrCompositeBaseKey == key && m_hdrEditCompositeBackdrop && m_hdrEditCompositeBackdrop->ready();
+    const auto geometry = m_editor->canvasGeometry();
+    if (m_hdrEditCompositeBackdrop && m_hdrEditBackdrop)
+        m_hdrEditCompositeBackdrop->stackAbove(*m_hdrEditBackdrop);
+    if (m_hdrEditBackdrop) {
+        m_hdrEditBackdrop->setGeometry(geometry);
+        m_hdrEditBackdrop->setVisible(m_overlayActive && base);
+    }
+    if (m_hdrEditCompositeBackdrop) {
+        m_hdrEditCompositeBackdrop->setGeometry(geometry);
+        m_hdrEditCompositeBackdrop->setVisible(m_overlayActive && composite);
+    }
+    m_editor->setExternalImagePresentation(enabled && (base || composite || canKeepHdrDesktopInEditor()), composite);
+}
+
 void CaptureOverlay::updateHdrEditBackdrop() {
-    if (!m_editing || m_defaults.screenshotFormat != "heic" || m_scrolling || !m_editor || m_hdrBackdrops.empty()) {
-        if(m_hdrEditBackdrop) m_hdrEditBackdrop->setVisible(false);
-        if(m_editor) m_editor->setExternalImagePresentation(false);
-        return;
-    }
-    const auto retainNative = [this] {
-        const bool oldPreview = m_hdrEditBackdrop && m_hdrEditBackdrop->ready();
-        if (oldPreview) {
-            m_hdrEditBackdrop->setGeometry(m_editor->canvasGeometry());
-            m_hdrEditBackdrop->setVisible(m_overlayActive);
-        }
-        m_editor->setExternalImagePresentation(oldPreview || canKeepHdrDesktopInEditor(), oldPreview);
-    };
-    if (m_hdrBaseFailed) {
-        if (m_hdrEditBackdrop) m_hdrEditBackdrop->setVisible(false);
-        m_editor->setExternalImagePresentation(false);
-        return;
-    }
-    if (m_editHdrBase.isNull()) {
-        retainNative();
-        return;
-    }
-    if(!m_hdrEditBackdrop) {
-        m_hdrEditBackdrop=std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle());
-        m_hdrEditBackdrop->setReadyCallback([this](bool ready) {
-            if (!m_editor) return;
-            const bool presenting = ready && m_editing && !m_scrolling && !m_hdrBaseFailed && m_defaults.screenshotFormat == "heic";
-            m_editor->setExternalImagePresentation(presenting, presenting);
-            m_hdrEditBackdrop->setVisible(m_overlayActive && presenting);
-            update();
-        });
-    }
-    if (m_hdrEditPreviewDirty || m_hdrEditCacheKey != m_editHdrBase.cacheKey()) {
-        if (m_hdrEditPreviewBusy) { retainNative(); return; }
+    updateHdrEditPresentation();
+    if (!m_editing || m_defaults.screenshotFormat != "heic" || m_scrolling || !m_editor ||
+        m_hdrBackdrops.empty() || m_hdrBaseFailed || m_editHdrBase.isNull()) return;
+    const auto baseKey = m_editHdrBase.cacheKey();
+    const bool baseOnly = m_hdrEditCacheKey != baseKey;
+    const bool needsComposite = m_editor->needsHdrAnnotationComposition();
+    if (!baseOnly && (!needsComposite || (!m_hdrEditPreviewDirty && m_hdrCompositeBaseKey == baseKey))) return;
+    if (m_hdrEditPreviewBusy) return;
+    m_hdrEditPreviewBusy = true;
+    float reference = 203;
+    for (const auto& artifact : m_monitorArtifacts)
+        if (!artifact.hdrImage.isNull()) { reference = artifact.referenceNits; break; }
+    std::function<HdrAnnotationPreview()> render;
+    if (baseOnly) {
+        // Immutable captured background: no ink snapshot and no per-stroke
+        // conversion/upload. Qt ink is already visible over the frozen desktop
+        // (or immediate SDR base) while this one asynchronous conversion runs.
+        // Seed the same PQ cache used by exceptional HDR ink, so its first
+        // stroke does not trigger a second full-frame base conversion.
+        render = m_editor->pqPreviewFrameRendererOn(m_editHdrBase, reference, true);
+    } else {
         m_hdrEditPreviewDirty = false;
-        m_hdrEditPreviewBusy = true;
-        const qint64 baseKey = m_editHdrBase.cacheKey();
-        float reference = 203;
-        for (const auto& artifact : m_monitorArtifacts)
-            if (!artifact.hdrImage.isNull()) { reference = artifact.referenceNits; break; }
-        auto render = m_editor->pqPreviewRendererOn(m_editHdrBase, reference);
-        if (!m_hdrEditPreviewPool) m_hdrEditPreviewPool = QThreadPool::globalInstance();
-        QPointer<CaptureOverlay> overlay(this);
-        m_hdrEditPreviewPool->start(QRunnable::create([overlay, render = std::move(render), baseKey, reference] {
-            float peak = 0;
-            QImage pq;
-            { ScopedUiTiming timing("overlay.hdr_edit_render"); pq = render(&peak); }
-            QMetaObject::invokeMethod(QCoreApplication::instance(), [overlay, pq, peak, baseKey, reference] {
-                if (!overlay) return;
-                auto* self = overlay.data();
-                self->m_hdrEditPreviewBusy = false;
-                if (!self->m_editing || !self->m_editor || self->m_defaults.screenshotFormat != "heic" ||
-                    self->m_editHdrBase.cacheKey() != baseKey || self->m_scrolling) {
-                    self->updateHdrEditBackdrop();
-                    return;
-                }
-                if (self->m_hdrEditPqCacheKey == pq.cacheKey() && self->m_hdrEditCacheKey == baseKey) {
-                    self->updateHdrEditBackdrop(); // Geometry-only changes reuse the attached buffer.
-                    return;
-                }
-                ScopedUiTiming uploadTiming("overlay.hdr_edit_upload");
-                if (self->m_hdrEditBackdrop->setPqImage(pq, self->m_editor->canvasGeometry(), peak, reference)) {
-                    self->m_hdrEditCacheKey = baseKey;
-                    self->m_hdrEditBackdrop->setVisible(self->m_overlayActive);
-                    self->m_editor->setExternalImagePresentation(self->m_hdrEditBackdrop->ready(), self->m_hdrEditBackdrop->ready());
-                } else {
-                    self->m_hdrEditCacheKey = baseKey;
-                    self->m_hdrEditBackdrop->setVisible(false);
-                    self->m_editor->setExternalImagePresentation(false);
-                }
-                self->m_hdrEditPqCacheKey = pq.cacheKey();
-                self->update(); // The parent mask must reflect the newly visible HDR preview.
-                if (self->m_hdrEditPreviewDirty) self->updateHdrEditBackdrop();
-            }, Qt::QueuedConnection);
-        }));
+        render = m_editor->pqPreviewFrameRendererOn(m_editHdrBase, reference);
     }
-    m_hdrEditBackdrop->setGeometry(m_editor->canvasGeometry());
-    m_hdrEditBackdrop->setVisible(m_overlayActive);
-    if (m_hdrEditBackdrop->ready()) m_editor->setExternalImagePresentation(true, true);
-    else retainNative();
+    const auto queued = std::chrono::steady_clock::now();
+    QPointer<CaptureOverlay> overlay(this);
+    if (!m_hdrEditPreviewPool) m_hdrEditPreviewPool = QThreadPool::globalInstance();
+    m_hdrEditPreviewPool->start(QRunnable::create([overlay, render=std::move(render), baseKey, reference, baseOnly, queued] {
+        const auto began = std::chrono::steady_clock::now();
+        traceTiming("overlay.hdr_edit_worker_queue", -1, std::chrono::duration_cast<std::chrono::microseconds>(began-queued).count());
+        HdrAnnotationPreview frame;
+        { ScopedUiTiming timing(baseOnly ? "overlay.hdr_edit_base_convert" : "overlay.hdr_edit_render"); frame=render(); }
+        const auto rendered = std::chrono::steady_clock::now();
+        QMetaObject::invokeMethod(QCoreApplication::instance(), [overlay, frame, baseKey, reference, baseOnly, rendered, queued] {
+            if (!overlay) return;
+            auto* self = overlay.data(); self->m_hdrEditPreviewBusy = false;
+            traceTiming("overlay.hdr_edit_main_queue", -1, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-rendered).count());
+            if (!self->m_editing || !self->m_editor || self->m_defaults.screenshotFormat != "heic" ||
+                self->m_editHdrBase.cacheKey() != baseKey || self->m_scrolling) {
+                self->updateHdrEditBackdrop(); return;
+            }
+            if (!baseOnly) {
+                // A snapshot may complete after undo/mode changes. Retain its
+                // damage even if we skip displaying it, so a later HDR update
+                // catches up from the last frame actually submitted.
+                self->m_hdrCompositePendingDamage |= frame.damage;
+                if (!self->m_editor->needsHdrAnnotationComposition()) {
+                    self->updateHdrEditBackdrop(); return;
+                }
+            }
+            auto& surface = baseOnly ? self->m_hdrEditBackdrop : self->m_hdrEditCompositeBackdrop;
+            if (!surface) {
+                surface = std::make_unique<hyprcapture::ui::HdrBackdrop>(self->windowHandle(), false, true);
+                surface->setReadyCallback([overlay](bool) {
+                    if (overlay) { overlay->updateHdrEditPresentation(); overlay->update(); }
+                });
+            }
+            ScopedUiTiming uploadTiming("overlay.hdr_edit_upload");
+            if (baseOnly) self->m_hdrEditCacheKey = baseKey;
+            else self->m_hdrCompositeBaseKey = baseKey;
+            const bool changed = baseOnly || self->m_hdrEditPqCacheKey != frame.pixels.cacheKey() || !self->m_hdrCompositePendingDamage.isEmpty();
+            if (changed) {
+                const QRegion damage = baseOnly ? frame.damage : self->m_hdrCompositePendingDamage;
+                if (surface->setPqImage(frame.pixels, self->m_editor->canvasGeometry(), frame.peakNits, reference, damage)) {
+                    if (!baseOnly) self->m_hdrCompositePendingDamage = {};
+                }
+                if (!baseOnly) self->m_hdrEditPqCacheKey = frame.pixels.cacheKey();
+            }
+            self->updateHdrEditPresentation(); self->update();
+            traceTiming("overlay.hdr_edit_cpu_submission", -1, std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now()-queued).count());
+            self->updateHdrEditBackdrop();
+        }, Qt::QueuedConnection);
+    }));
 }
 
 void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target, bool preserveClip) const {
@@ -5124,6 +5140,8 @@ void CaptureOverlay::invalidateHdrEditBase() {
     m_hdrEditCacheKey = 0;
     m_hdrEditPreviewDirty = true;
     m_hdrEditPqCacheKey = 0;
+    m_hdrCompositeBaseKey = 0;
+    m_hdrCompositePendingDamage = {};
 }
 
 void CaptureOverlay::queueHdrEditBase() {
@@ -5314,6 +5332,7 @@ void CaptureOverlay::leaveInPlaceEdit() {
     m_toolbar->show();
     m_editor->hide();
     m_hdrEditBackdrop.reset();
+    m_hdrEditCompositeBackdrop.reset();
     m_editedOutput = {};
     m_fullscreenClientSelected = false;
     m_dragStart = {};

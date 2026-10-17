@@ -132,6 +132,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     void queuePqBackdrop(const QRect& geometry);
     bool hdrStartupBlocked();
     void updateHdrEditBackdrop();
+    void updateHdrEditPresentation();
     bool canKeepHdrDesktopInEditor() const;
     bool hasHdrBackdrop(const MonitorArtifact& artifact) const;
     struct HdrMonitorBackdrop {
@@ -146,7 +147,10 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     std::chrono::steady_clock::time_point m_hdrStartupDeadline{};
     friend class InPlaceEditorTest;
     std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrEditBackdrop;
+    std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrEditCompositeBackdrop;
     qint64 m_hdrEditCacheKey = 0;
+    qint64 m_hdrCompositeBaseKey = 0;
+    QRegion m_hdrCompositePendingDamage;
     qint64 m_hdrEditPqCacheKey = 0;
     QThreadPool* m_hdrEditPreviewPool = nullptr;
     bool m_hdrEditPreviewBusy = false;

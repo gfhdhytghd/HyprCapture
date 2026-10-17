@@ -2,6 +2,8 @@
 #include "ui/hdr_gpu.hpp"
 #include <QImage>
 #include <QRect>
+#include <QRegion>
+#include <optional>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -22,6 +24,8 @@ public:
   // Call only for an HDR overlay; retain the lease through construction.
   static std::shared_ptr<void> prewarm();
   static bool fp16Available();
+  // Optional timing probe on Qt's parent surface; no new surface or pixels.
+  static void traceParentFrame(QWindow* parent);
   bool setPreparedImage(const std::shared_ptr<const HdrGpuFrame> &,
                         const QRect &);
   ~HdrBackdrop();
@@ -29,8 +33,10 @@ public:
   bool setImage(const QImage &image, const QRect &destination,
                 float referenceNits);
   bool setPqImage(const QImage &image, const QRect &destination, float peakNits,
-                  float referenceNits);
+                  float referenceNits, std::optional<QRegion> damage = std::nullopt);
   void setGeometry(const QRect &destination);
+  // Sibling ordering is applied with the next parent commit.
+  void stackAbove(const HdrBackdrop& lower);
   void setVisible(bool visible);
   bool ready() const;
   // Pending PQ requests complete after globals/description events arrive.

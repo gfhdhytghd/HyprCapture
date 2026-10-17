@@ -118,6 +118,87 @@ void defaults() {
 class AnnotationEditorTest final : public QObject {
     Q_OBJECT
   private slots:
+    void layeredInkPreservesExportAndSelectsExactFallback() {
+        defaults();
+        AnnotationEditor editor; initialize(editor,image()); editor.setHdrEnabled(true);
+        QImage hdr(image().size(),QImage::Format_RGBA16FPx4_Premultiplied); hdr.fill(Qt::white);
+        auto* canvas=editor.findChild<QWidget*>("annotationCanvas");
+        selectTool(editor,5); drag(editor,{31,33},{101,81});
+        QVERIFY(!editor.needsHdrAnnotationComposition());
+        const auto sdr=editor.resultImage(); const auto linear=editor.resultImageOn(hdr);
+        editor.setExternalImagePresentation(true,false);
+        QVERIFY(!editor.externalAnnotationPresentation());
+        const auto ink=canvas->grab().toImage();
+        QVERIFY(ink.pixelColor(displayed({66,57})).alpha()>0);
+        QCOMPARE(ink.pixelColor(displayed({180,120})).alpha(),0);
+        QCOMPARE(editor.resultImage(),sdr); QCOMPARE(editor.resultImageOn(hdr),linear);
+        editor.setExternalImagePresentation(true,true);
+        QCOMPARE(canvas->grab().toImage().pixelColor(displayed({66,57})).alpha(),0);
+        QCOMPARE(editor.resultImageOn(hdr),linear);
+        editor.setExternalImagePresentation(true,false);
+        editor.findChild<QSlider*>("annotationHdrGain")->setValue(400);
+        drag(editor,{41,43},{111,91});
+        QVERIFY(editor.needsHdrAnnotationComposition());
+        const auto gain=editor.resultImageOn(hdr);
+        editor.setExternalImagePresentation(false); QCOMPARE(editor.resultImageOn(hdr),gain);
+        editor.setExternalImagePresentation(true,true); QCOMPARE(editor.resultImageOn(hdr),gain);
+        editor.undo(); QVERIFY(!editor.needsHdrAnnotationComposition());
+        QCOMPARE(editor.resultImageOn(hdr),linear);
+        editor.redo(); QVERIFY(editor.needsHdrAnnotationComposition());
+        editor.clearAnnotations(); editor.findChild<QSlider*>("annotationHdrGain")->setValue(100);
+        selectTool(editor,9); drag(editor,{31,33},{101,81}); QVERIFY(editor.needsHdrAnnotationComposition());
+        editor.clearAnnotations();
+        // Even gain>1 Spotlight is only translucent black, independent of base.
+        editor.findChild<QSlider*>("annotationHdrGain")->setValue(400);
+        selectTool(editor,10); drag(editor,{31,33},{101,81});
+        QVERIFY(!editor.needsHdrAnnotationComposition());
+        editor.setExternalImagePresentation(true,false);
+        const auto mask=canvas->grab().toImage().pixelColor(displayed({180,120}));
+        QCOMPARE(mask.red(),0); QCOMPARE(mask.green(),0); QCOMPARE(mask.blue(),0); QVERIFY(mask.alpha()>0);
+    }
+
+    void previewDamageIncludesResetUndoAndSkippedSnapshots() {
+        defaults(); AnnotationEditor editor; initialize(editor,image());
+        QImage hdr(image().size(),QImage::Format_RGBA16FPx4_Premultiplied); hdr.fill(Qt::white);
+        auto first=editor.pqPreviewFrameRendererOn(hdr,173)();
+        QCOMPARE(first.damage,QRegion(hdr.rect()));
+        selectTool(editor,5); drag(editor,{31,33},{71,53});
+        auto ink=editor.pqPreviewFrameRendererOn(hdr,173)();
+        QVERIFY(!ink.damage.isEmpty()); QVERIFY(ink.damage.boundingRect().width()<hdr.width());
+        QCOMPARE(ink.pixels,hyprcapture::ui::hdrToPq10(editor.previewImageOn(hdr),nullptr,173));
+        auto same=editor.pqPreviewFrameRendererOn(hdr,173)(); QVERIFY(same.damage.isEmpty());
+        QCOMPARE(same.pixels.cacheKey(),ink.pixels.cacheKey());
+        editor.undo(); auto undo=editor.pqPreviewFrameRendererOn(hdr,173)();
+        QVERIFY(undo.damage.contains(ink.damage.boundingRect()));
+        QCOMPARE(undo.pixels,first.pixels);
+    }
+
+    void layeredTransparentInkOverlapsLikeSdr() {
+        defaults(); AnnotationEditor editor; initialize(editor,image());
+        editor.setHdrEnabled(true); editor.setExternalImagePresentation(true,false);
+        selectTool(editor,6);
+        drag(editor,{31,33},{101,81}); drag(editor,{31,33},{101,81});
+        QVERIFY(!editor.needsHdrAnnotationComposition());
+        auto* canvas=editor.findChild<QWidget*>("annotationCanvas");
+        const auto ink=canvas->grab().toImage().pixelColor(displayed({66,57}));
+        const auto sdr=editor.resultImage().pixelColor(66,57);
+        QCOMPARE(ink,sdr);
+        QVERIFY(ink.alpha()>130 && ink.alpha()<150); // Two 85/255 alpha strokes.
+        QCOMPARE(canvas->grab().toImage().pixelColor(displayed({180,120})).alpha(),0);
+    }
+
+    void immutableBaseSeedsHdrCacheWithoutCapturingInk() {
+        defaults(); AnnotationEditor editor; initialize(editor,image());
+        QImage hdr(image().size(),QImage::Format_RGBA16FPx4_Premultiplied); hdr.fill(Qt::white);
+        selectTool(editor,5); drag(editor,{31,33},{71,53});
+        const auto base=editor.pqPreviewFrameRendererOn(hdr,173,true)();
+        QCOMPARE(base.pixels,hyprcapture::ui::hdrToPq10(hdr,nullptr,173));
+        auto composite=editor.pqPreviewFrameRendererOn(hdr,173)();
+        QVERIFY(composite.damage.boundingRect().width()<hdr.width());
+        QCOMPARE(composite.pixels,hyprcapture::ui::hdrToPq10(editor.previewImageOn(hdr),nullptr,173));
+        QCOMPARE(base.pixels,hyprcapture::ui::hdrToPq10(hdr,nullptr,173));
+    }
+
     void cachedPqPreviewMatchesFullRenderer_data() {
         QTest::addColumn<int>("format");
         QTest::newRow("fp16-straight") << int(QImage::Format_RGBA16FPx4);

@@ -288,6 +288,42 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(qApp->findChildren<QTimer*>("hyprcaptureHdrDrain").empty());
     }
 
+    void normalHdrInkNeverQueuesCompositionAndBaseStaysImmutable() {
+        hyprcapture::CaptureDefaults defaults; defaults.mode=hyprcapture::CaptureMode::Fullscreen;
+        defaults.screenshotFormat="heic";
+        CaptureOverlay overlay(defaults,false,false,false,hdrSessionJson(defaults,true));
+        overlay.beginInPlaceEdit(); QVERIFY(overlay.m_editor);
+        overlay.invalidateHdrEditBase();
+        QImage base(overlay.m_editor->resultImage().size(),QImage::Format_RGBA16FPx4_Premultiplied); base.fill(Qt::white);
+        overlay.m_editHdrBase=base;
+        auto desktop=std::make_unique<hyprcapture::ui::HdrBackdrop>(nullptr); desktop->setReadyForTest(true);
+        overlay.m_hdrBackdrops.push_back({overlay.m_monitorArtifacts.front().logicalGeometry,std::move(desktop)});
+        overlay.m_hdrEditBackdrop=std::make_unique<hyprcapture::ui::HdrBackdrop>(nullptr);
+        overlay.m_hdrEditBackdrop->setReadyForTest(true);
+        overlay.m_hdrEditCacheKey=base.cacheKey();
+        overlay.m_editor->setHdrEnabled(true);
+        const auto key=overlay.m_hdrEditCacheKey;
+        overlay.m_hdrEditPreviewDirty=true; overlay.updateHdrEditBackdrop();
+        QVERIFY(!overlay.m_hdrEditPreviewBusy);
+        QVERIFY(overlay.m_editor->externalImagePresentation());
+        QVERIFY(!overlay.m_editor->externalAnnotationPresentation());
+        auto* canvas=overlay.m_editor->findChild<QWidget*>("annotationCanvas"); QVERIFY(canvas);
+        auto* pen=overlay.m_editor->findChild<QToolButton*>("annotationTool5"); QVERIFY(pen); pen->click();
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,overlay.m_editor->canvasGeometry().center());
+        for(int i=0;i<8;++i) {
+            QTest::mouseMove(canvas,overlay.m_editor->canvasGeometry().center()+QPoint(i+1,i+1));
+            overlay.updateHdrEditBackdrop();
+            QVERIFY(!overlay.m_hdrEditPreviewBusy); QCOMPARE(overlay.m_hdrEditCacheKey,key);
+            QVERIFY(!overlay.m_hdrEditCompositeBackdrop);
+        }
+        QTest::mouseRelease(canvas,Qt::LeftButton);
+        QCOMPARE(overlay.m_editHdrBase,base);
+        // Isolated HDR base generation can still be pending: Qt ink must remain
+        // enabled, with a frozen native desktop or immediate SDR image below.
+        overlay.m_editHdrBase={}; overlay.updateHdrEditPresentation();
+        QVERIFY(!overlay.m_editor->externalAnnotationPresentation());
+    }
+
     void nativeDesktopRetentionRequiresMatchingWindowContent() {
         hyprcapture::CaptureDefaults defaults;
         defaults.mode = hyprcapture::CaptureMode::Window;

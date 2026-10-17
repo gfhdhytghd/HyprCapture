@@ -1,6 +1,7 @@
 #include "ui/annotation_editor.hpp"
 #include "ui/hdr_image.hpp"
 #include "ui/hdr_backdrop.hpp"
+#include "ui/timing.hpp"
 #include <QColorSpace>
 #include <QWindow>
 #include <QStyleOptionSlider>
@@ -656,9 +657,9 @@ void drawMappedAnnotation(QPainter& p,const QImage& base,const Annotation& a,con
 }
 
 QRect annotationDamage(const Annotation& annotation, const QImage& base,
-                       const std::optional<ScrollLayout>& layout) {
+                       const std::optional<ScrollLayout>& layout, bool spotlightHole = false) {
     if (annotation.points.isEmpty()) return {};
-    if (annotation.tool == Tool::Spotlight) return base.rect();
+    if (annotation.tool == Tool::Spotlight && !spotlightHole) return base.rect();
     QRectF bounds = annotationPath(annotation).boundingRect();
     if (annotation.tool == Tool::Text && !annotation.textBox.isValid()) {
         const QFontMetricsF metrics(annotation.textFont.pixelSize() > 0 ? annotation.textFont : annotationFont(annotation.width));
@@ -676,6 +677,14 @@ QRect annotationDamage(const Annotation& annotation, const QImage& base,
     for (const auto& piece : annotationPieces(annotation, *layout, false))
         damage |= bounds.intersected(piece.clip).translated(0, piece.dy).toAlignedRect();
     return damage.intersected(base.rect());
+}
+QRect changedInkDamage(const Annotation& before, const Annotation& after, const QImage& base,
+                       const std::optional<ScrollLayout>& layout) {
+    auto sameStyle=before; sameStyle.points=after.points;
+    const bool hole=before.tool==Tool::Spotlight && after.tool==Tool::Spotlight && sameStyle.sameInk(after);
+    // A moving Spotlight only changes its old/new holes, not the black mask
+    // outside them. Creation/removal/style/layout changes still invalidate all.
+    return annotationDamage(before,base,layout,hole) | annotationDamage(after,base,layout,hole);
 }
 
 struct PqPreviewCache {
@@ -706,7 +715,18 @@ class AnnotationCanvas final : public QWidget {
     bool previewDirty = true;
     std::shared_ptr<PqPreviewCache> pqPreviewCache = std::make_shared<PqPreviewCache>();
     std::function<void()> previewChanged;
+    qint64 lastInputUs = 0;
+    void inputTiming() {
+        if (hyprcapture::ui::timingEnabled())
+            lastInputUs = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    }
     void update() { previewDirty = true; QWidget::update(); }
+    void updateInk(const Annotation& before, const Annotation& after) {
+        previewDirty = true;
+        if (!externalImagePresentation || externalAnnotationPresentation) { QWidget::update(); return; }
+        const QRect damage = changedInkDamage(before, after, base, scrollLayout);
+        QWidget::update(imageTransform().mapRect(QRectF(damage)).toAlignedRect().adjusted(-8,-8,8,8));
+    }
     Tool tool = Tool::Rectangle;
     Variant variant = Variant::Outline;
     QColor color = QColor("#ff5252");
@@ -882,17 +902,33 @@ class AnnotationCanvas final : public QWidget {
         return rendererOn(hdrBase, preview)();
     }
 
-    std::function<QImage(float*)> pqRendererOn(const QImage& hdrBase, float reference) const {
-        auto annotations = m_annotations;
-        if (m_editingTextIndex >= 0 && m_editingTextIndex < int(annotations.size()))
-            annotations.erase(annotations.begin() + m_editingTextIndex);
-        if (m_draft) annotations.push_back(*m_draft);
+    bool needsHdrComposition() const {
+        const auto special = [this](const Annotation& a) {
+            // Spotlight is an alpha-only black mask; it never samples the base
+            // and its zero RGB stays zero at every gain. Mosaic uses SDR source
+            // samples; gains need linear HDR ink. Keep both on the exact path.
+            return a.tool == Tool::Mosaic || (hdrEnabled && a.tool != Tool::Spotlight && !qFuzzyCompare(a.hdrGain, 1.0));
+        };
+        for (int i=0; i<int(m_annotations.size()); ++i)
+            if (i!=m_editingTextIndex && special(m_annotations[i])) return true;
+        return m_draft && special(*m_draft);
+    }
+
+    std::function<QImage(float*, QRegion*)> pqRendererOn(const QImage& hdrBase, float reference, bool baseOnly = false) const {
+        std::vector<Annotation> annotations;
+        if (!baseOnly) {
+            annotations = m_annotations;
+            if (m_editingTextIndex >= 0 && m_editingTextIndex < int(annotations.size()))
+                annotations.erase(annotations.begin() + m_editingTextIndex);
+            if (m_draft) annotations.push_back(*m_draft);
+        }
         return [cache = pqPreviewCache, base = base, hdrBase, annotations = std::move(annotations),
-                layout = scrollLayout, hdrEnabled = hdrEnabled, reference](float* peak) -> QImage {
+                layout = scrollLayout, hdrEnabled = hdrEnabled, reference](float* peak, QRegion* changed) -> QImage {
             if (!hyprcapture::ui::isHdrImage(hdrBase) || hdrBase.size() != base.size()) return {};
             std::lock_guard lock(cache->mutex);
             const bool reset = cache->hdrKey != hdrBase.cacheKey() || cache->reference != reference || cache->pq.isNull();
             if (reset) {
+                hyprcapture::ui::ScopedUiTiming timing("hdr.preview.base_convert");
                 // Match the export renderer's FP16 premultiplication rounding,
                 // including straight-alpha FP16/FP32 callers.
                 cache->pq = hyprcapture::ui::hdrToPq10(
@@ -910,14 +946,19 @@ class AnnotationCanvas final : public QWidget {
                 for (size_t i = 0; i < std::max(annotations.size(), cache->annotations.size()); ++i) {
                     if (i < annotations.size() && i < cache->annotations.size() &&
                         annotations[i].sameInk(cache->annotations[i])) continue;
+                    if (i < annotations.size() && i < cache->annotations.size()) {
+                        damage |= changedInkDamage(cache->annotations[i], annotations[i], base, layout); continue;
+                    }
                     if (i < annotations.size()) damage |= annotationDamage(annotations[i], base, layout);
                     if (i < cache->annotations.size()) damage |= annotationDamage(cache->annotations[i], base, layout);
                 }
             }
             if (!damage.isEmpty()) {
-                QImage output = hdrBase.copy(damage).convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
-                if (output.isNull()) return {};
+                QImage output;
                 {
+                    hyprcapture::ui::ScopedUiTiming timing("hdr.preview.render_damage");
+                    output = hdrBase.copy(damage).convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
+                    if (output.isNull()) return {};
                     QPainter painter(&output);
                     for (const auto& annotation : annotations) {
                         const QRect ink = annotationDamage(annotation, base, layout).intersected(damage);
@@ -935,7 +976,11 @@ class AnnotationCanvas final : public QWidget {
                     }
                 }
                 float patchPeak = 0;
-                const auto patch = hyprcapture::ui::hdrToPq10(output, &patchPeak, reference, damage.topLeft());
+                QImage patch;
+                {
+                    hyprcapture::ui::ScopedUiTiming timing("hdr.preview.convert_damage");
+                    patch = hyprcapture::ui::hdrToPq10(output, &patchPeak, reference, damage.topLeft());
+                }
                 if (patch.isNull()) return {};
                 QPainter painter(&cache->pq);
                 painter.setCompositionMode(QPainter::CompositionMode_Source);
@@ -947,6 +992,7 @@ class AnnotationCanvas final : public QWidget {
             cache->annotations = annotations; cache->layout = layout;
             cache->sdrKey = base.cacheKey(); cache->hdrEnabled = hdrEnabled;
             if (peak) *peak = cache->peak;
+            if (changed) *changed = reset ? QRegion(hdrBase.rect()) : QRegion(damage);
             return cache->pq;
         };
     }
@@ -1072,6 +1118,12 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void paintEvent(QPaintEvent*) override {
+        hyprcapture::ui::ScopedUiTiming timing(externalAnnotationPresentation ? "editor.canvas_paint.composited" : "editor.canvas_paint.layered");
+        if (externalImagePresentation && !externalAnnotationPresentation)
+            hyprcapture::ui::HdrBackdrop::traceParentFrame(window()->windowHandle());
+        if (const auto input = std::exchange(lastInputUs, 0); input && hyprcapture::ui::timingEnabled())
+            hyprcapture::ui::traceTiming("editor.input_dispatch_to_paint", -1,
+                std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count()-input);
         if (previewDirty) {
             previewDirty = false;
             if (previewChanged) previewChanged();
@@ -1132,6 +1184,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void mousePressEvent(QMouseEvent* event) override {
+        inputTiming();
         if(liveScroll && !annotationsReady) { event->accept(); return; }
         if (pressed) pressed();
         if (event->button() == Qt::LeftButton && !m_spaceDown && (m_resizeEdges = resizeEdgesAt(event->position()))) {
@@ -1216,11 +1269,12 @@ class AnnotationCanvas final : public QWidget {
         if (tool != Tool::Pen && tool != Tool::Highlighter)
             annotation.points.push_back(point);
         m_draft = std::move(annotation);
-        update();
+        updateInk({}, *m_draft);
         event->accept();
     }
 
     void mouseMoveEvent(QMouseEvent* event) override {
+        inputTiming();
         if (m_resizeEdges) {
             updateResize(event->position());
             event->accept();
@@ -1240,20 +1294,22 @@ class AnnotationCanvas final : public QWidget {
         }
         const QPointF point = imagePoint(event->position());
         if (m_dragBefore && m_selected >= 0) {
+            const auto previous = m_annotations[m_selected];
             m_annotations[m_selected] = *m_dragBefore;
             for (auto& item : m_annotations[m_selected].points)
                 item += point - m_pointerOrigin;
-            update();
+            updateInk(previous, m_annotations[m_selected]);
             event->accept();
             return;
         }
         if (m_draft) {
+            const auto previous = *m_draft;
             if (m_draft->tool == Tool::Pen || m_draft->tool == Tool::Highlighter) {
                 if (QLineF(m_draft->points.back(), point).length() >= 0.7 && m_draft->points.size() < 20000)
                     m_draft->points.push_back(point);
             } else
                 m_draft->points.back() = point;
-            update();
+            updateInk(previous, *m_draft);
             event->accept();
             return;
         }
@@ -1263,6 +1319,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void mouseReleaseEvent(QMouseEvent* event) override {
+        inputTiming();
         if (m_resizeEdges && event->button() == Qt::LeftButton) {
             updateResize(event->position());
             m_resizeEdges = 0;
@@ -2600,8 +2657,14 @@ void AnnotationEditor::setExternalImagePresentation(bool enabled, bool includesA
 QImage AnnotationEditor::previewImageOn(const QImage& hdrBase) const { return m_impl->canvas->resultOn(hdrBase, true); }
 std::function<QImage()> AnnotationEditor::previewRendererOn(const QImage& hdrBase) const { return m_impl->canvas->rendererOn(hdrBase, true); }
 std::function<QImage(float*)> AnnotationEditor::pqPreviewRendererOn(const QImage& hdrBase, float referenceNits) const {
-    return m_impl->canvas->pqRendererOn(hdrBase, referenceNits);
+    return [render=m_impl->canvas->pqRendererOn(hdrBase, referenceNits)](float* peak) { return render(peak,nullptr); };
 }
+std::function<HdrAnnotationPreview()> AnnotationEditor::pqPreviewFrameRendererOn(const QImage& hdrBase, float referenceNits, bool baseOnly) const {
+    return [render=m_impl->canvas->pqRendererOn(hdrBase, referenceNits, baseOnly)] {
+        HdrAnnotationPreview frame; frame.pixels=render(&frame.peakNits,&frame.damage); return frame;
+    };
+}
+bool AnnotationEditor::needsHdrAnnotationComposition() const { return m_impl->canvas->needsHdrComposition(); }
 void AnnotationEditor::setHdrEnabled(bool enabled) {
     if (m_impl->canvas->hdrEnabled == enabled) return;
     m_impl->canvas->hdrEnabled = enabled;
@@ -2614,5 +2677,6 @@ void AnnotationEditor::setHdrEnabled(bool enabled) {
 bool AnnotationEditor::hdrEnabled() const { return m_impl->canvas->hdrEnabled; }
 
 bool AnnotationEditor::externalImagePresentation() const { return m_impl->canvas->externalImagePresentation; }
+bool AnnotationEditor::externalAnnotationPresentation() const { return m_impl->canvas->externalAnnotationPresentation; }
 void AnnotationEditor::setAnnotationPresentation(bool ready,qreal opacity,qreal offset) { m_impl->canvas->presentation(ready,opacity,offset); }
 QImage AnnotationEditor::annotatedPreview(const QImage& image,const hyprcapture::ui::ScrollLayout& layout) const { return m_impl->canvas->annotatedPreview(image,layout); }
