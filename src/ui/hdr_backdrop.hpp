@@ -7,6 +7,12 @@
 #include <memory>
 class QWindow;
 namespace hyprcapture::ui {
+struct HdrPresentationLuminances {
+  uint32_t encodingMaximum = 0, reference = 0, masteringMaximum = 0;
+};
+// Keep pixel encoding units separate from the captured content's peak.
+HdrPresentationLuminances hdrPresentationLuminances(bool fp16, float peakNits,
+                                                   float referenceNits);
 // A color-managed child surface beneath the transparent Qt controls. Qt's
 // raster backing store never receives the HDR pixels.
 class HdrBackdrop {
