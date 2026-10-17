@@ -32,7 +32,8 @@ namespace hyprcapture::ui {
 static unsigned globalsRequests = 0;
 unsigned HdrBackdrop::globalsRequestsForTest() { return globalsRequests; }
 #endif
-QImage hdrToPq10(const QImage &image, float *peakNits, float referenceNits) {
+QImage hdrToPq10(const QImage &image, float *peakNits, float referenceNits,
+                 const QPoint &origin) {
   if (!isHdrImage(image))
     return {};
   if (!std::isfinite(referenceNits) || referenceNits <= 0)
@@ -75,7 +76,8 @@ QImage hdrToPq10(const QImage &image, float *peakNits, float referenceNits) {
             std::isfinite(rawAlpha) ? std::clamp(rawAlpha, 0.0F, 1.0F) : 0;
         if (alpha < 1) {
           const float checker =
-              ((x / 12 + y / 12) & 1) ? checkerDark : checkerLight;
+              (((x + origin.x()) / 12 + (y + origin.y()) / 12) & 1)
+                  ? checkerDark : checkerLight;
           for (auto &v : rgb)
             v = v * alpha + checker * (1 - alpha);
         }

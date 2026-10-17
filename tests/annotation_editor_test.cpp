@@ -1,6 +1,8 @@
 #include "ui/annotation_editor.hpp"
 #include "ui/material_icon.hpp"
 #include "ui/touch_gesture.hpp"
+#include "ui/hdr_backdrop.hpp"
+#include <QtCore/qfloat16.h>
 #include <QPointingDevice>
 
 #include <QApplication>
@@ -116,6 +118,122 @@ void defaults() {
 class AnnotationEditorTest final : public QObject {
     Q_OBJECT
   private slots:
+    void cachedPqPreviewMatchesFullRenderer_data() {
+        QTest::addColumn<int>("format");
+        QTest::newRow("fp16-straight") << int(QImage::Format_RGBA16FPx4);
+        QTest::newRow("fp16-premultiplied") << int(QImage::Format_RGBA16FPx4_Premultiplied);
+        QTest::newRow("fp32-straight") << int(QImage::Format_RGBA32FPx4);
+        QTest::newRow("fp32-premultiplied") << int(QImage::Format_RGBA32FPx4_Premultiplied);
+    }
+    void cachedPqPreviewMatchesFullRenderer() {
+        QFETCH(int, format);
+        defaults();
+        AnnotationEditor editor;
+        initialize(editor, image());
+        editor.setHdrEnabled(true);
+        QImage hdr(image().size(), QImage::Format_RGBA16FPx4);
+        // HDR highlights, negative wide-gamut channels and partial alpha.
+        for (int y = 0; y < hdr.height(); ++y) {
+            auto* row = reinterpret_cast<qfloat16*>(hdr.scanLine(y));
+            for (int x = 0; x < hdr.width(); ++x) {
+                row[x*4] = qfloat16(4.0F * x / hdr.width());
+                row[x*4+1] = qfloat16(-0.15F);
+                row[x*4+2] = qfloat16(0.7F);
+                row[x*4+3] = qfloat16(float((x + y) % 5) / 4);
+            }
+        }
+        hdr = hdr.convertToFormat(QImage::Format(format));
+        hdr.setColorSpace(QColorSpace::SRgbLinear);
+        const QImage original = hdr.copy();
+        const auto verify = [&](float reference = 173) {
+            const QImage exported = editor.resultImageOn(hdr);
+            const QImage sdr = editor.resultImage();
+            const auto expected = hyprcapture::ui::hdrToPq10(editor.previewImageOn(hdr), nullptr, reference);
+            float peak = 0;
+            const auto actual = editor.pqPreviewRendererOn(hdr, reference)(&peak);
+            if (actual != expected && actual.size() == expected.size()) {
+                bool found = false;
+                for (int y = 0; y < actual.height() && !found; ++y)
+                    for (int x = 0; x < actual.width(); ++x)
+                        if (actual.pixel(x, y) != expected.pixel(x, y)) {
+                            qWarning("First PQ difference at %d,%d: %08x vs %08x", x, y, actual.pixel(x, y), expected.pixel(x, y));
+                            found = true; break;
+                        }
+            }
+            QCOMPARE(actual, expected);
+            QCOMPARE(editor.resultImageOn(hdr), exported);
+            QCOMPARE(editor.resultImage(), sdr);
+            QCOMPARE(hdr, original);
+            QVERIFY(peak >= 0);
+            // No detachment or full-frame work for an unchanged snapshot.
+            QCOMPARE(editor.pqPreviewRendererOn(hdr, reference)(nullptr).cacheKey(), actual.cacheKey());
+        };
+        verify();
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        for (int tool : {1, 2, 3, 4, 5, 6, 8, 9, 10}) {
+            selectTool(editor, tool);
+            if (tool == 1) chooseVariant(editor, 1, "annotationVariantRectFilled");
+            if (tool == 3) chooseVariant(editor, 3, "annotationVariantArrowDoubleCurved");
+            QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, displayed({31, 33}));
+            QTest::mouseMove(canvas, displayed({105, 83}));
+            verify(); // Active draft, overlapping earlier objects.
+            QTest::mouseMove(canvas, displayed({211, 129}));
+            verify(); // Both old and new bounds must be recomposed.
+            QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, displayed({211, 129}));
+            verify();
+            editor.undo(); verify(); editor.redo(); verify();
+        }
+        editor.clearAnnotations(); verify();
+        selectTool(editor, 5); drag(editor, {31, 33}, {71, 53}); verify();
+        selectTool(editor, 0);
+        drag(editor, {51, 43}, {171, 123}); verify(); // Disjoint old/new ink.
+        QTest::keyClick(canvas, Qt::Key_Delete); verify();
+        selectTool(editor, 7);
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed({21, 29}));
+        auto* input = editor.findChild<QPlainTextEdit*>("annotationTextInput");
+        QVERIFY(input);
+        input->setPlainText("Italic fj\nHDR text");
+        verify(); // Active native text editor is excluded from HDR preview.
+        QTest::mouseClick(&editor, Qt::LeftButton, Qt::NoModifier, QPoint(1, 1));
+        verify();
+        editor.findChild<QSlider*>("annotationHdrGain")->setValue(400);
+        editor.setHdrEnabled(false); verify(); editor.setHdrEnabled(true); verify();
+        verify(203); // Reference-white change invalidates cached base/checker.
+        hdr.fill(QColor::fromRgbF(0.3, 0.4, 0.5, 0.5));
+        const auto expected = hyprcapture::ui::hdrToPq10(editor.previewImageOn(hdr), nullptr, 173);
+        QCOMPARE(editor.pqPreviewRendererOn(hdr, 173)(nullptr), expected);
+    }
+
+    void cachedPqImagesRemainImmutableDuringViewAndContentChanges() {
+        AnnotationEditor editor; initialize(editor, image());
+        QImage hdr(image().size(), QImage::Format_RGBA16FPx4_Premultiplied);
+        hdr.fill(Qt::white);
+        selectTool(editor, 5); drag(editor, {31, 33}, {101, 81});
+        const QImage before = editor.pqPreviewRendererOn(hdr, 173)(nullptr);
+        const QImage expected = before.copy();
+        editor.setImageDisplayRect({10, 20, 300, 200});
+        QCOMPARE(editor.pqPreviewRendererOn(hdr, 173)(nullptr).cacheKey(), before.cacheKey());
+        editor.clearAnnotations();
+        QVERIFY(editor.pqPreviewRendererOn(hdr, 173)(nullptr) != before);
+        QCOMPARE(before, expected); // A queued upload can retain an older frame.
+    }
+
+    void cachedPqPreviewSnapshotSurvivesEditor() {
+        QImage hdr(image().size(), QImage::Format_RGBA16FPx4);
+        hdr.fill(Qt::white);
+        std::function<QImage(float*)> render;
+        QImage expected;
+        {
+            AnnotationEditor editor; initialize(editor, image());
+            selectTool(editor, 5); drag(editor, {31, 33}, {101, 81});
+            render = editor.pqPreviewRendererOn(hdr, 173);
+            expected = hyprcapture::ui::hdrToPq10(editor.previewImageOn(hdr), nullptr, 173);
+            editor.clearAnnotations();
+        }
+        auto worker = std::async(std::launch::async, [render] { return render(nullptr); });
+        QCOMPARE(worker.get(), expected);
+    }
+
     void externalHdrBaseOnlyChangesPresentation() {
         AnnotationEditor editor;
         const QImage source=image(QSize(240,160),Qt::white);
@@ -208,6 +326,7 @@ class AnnotationEditorTest final : public QObject {
             const auto hdr=editor.resultImageOn(linear);
             QVERIFY(!hdr.isNull());QVERIFY(hdr.pixelColor(200,expected).greenF()<.4F);
             QCOMPARE(editor.previewRendererOn(linear)(),hdr);
+            QCOMPARE(editor.pqPreviewRendererOn(linear, 173)(nullptr), hyprcapture::ui::hdrToPq10(hdr, nullptr, 173));
             editor.undo();QCOMPARE(editor.resultImage(),output);QCOMPARE(editor.resultImageOn(linear),linear);
             editor.redo();QCOMPARE(editor.resultImage(),result);QCOMPARE(editor.resultImageOn(linear),hdr);
             QCOMPARE(editor.annotatedPreview(output,layout),result);

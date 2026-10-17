@@ -40,5 +40,5 @@ private:
   std::unique_ptr<Impl> m;
 };
 QImage hdrToPq10(const QImage &image, float *peakNits = nullptr,
-                 float referenceNits = 203);
+                 float referenceNits = 203, const QPoint &origin = {});
 } // namespace hyprcapture::ui

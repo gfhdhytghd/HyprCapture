@@ -3255,22 +3255,20 @@ void CaptureOverlay::updateHdrEditBackdrop() {
         });
     }
     if (m_hdrEditPreviewDirty || m_hdrEditCacheKey != m_editHdrBase.cacheKey()) {
-        if (m_hdrEditPreviewBusy) return;
+        if (m_hdrEditPreviewBusy) { retainNative(); return; }
         m_hdrEditPreviewDirty = false;
         m_hdrEditPreviewBusy = true;
         const qint64 baseKey = m_editHdrBase.cacheKey();
-        auto render = m_editor->previewRendererOn(m_editHdrBase);
         float reference = 203;
         for (const auto& artifact : m_monitorArtifacts)
             if (!artifact.hdrImage.isNull()) { reference = artifact.referenceNits; break; }
+        auto render = m_editor->pqPreviewRendererOn(m_editHdrBase, reference);
         if (!m_hdrEditPreviewPool) m_hdrEditPreviewPool = QThreadPool::globalInstance();
         QPointer<CaptureOverlay> overlay(this);
         m_hdrEditPreviewPool->start(QRunnable::create([overlay, render = std::move(render), baseKey, reference] {
             float peak = 0;
-            QImage rendered;
-            { ScopedUiTiming timing("overlay.hdr_edit_render"); rendered = render(); }
             QImage pq;
-            { ScopedUiTiming timing("overlay.hdr_edit_convert"); pq = hyprcapture::ui::hdrToPq10(rendered, &peak, reference); }
+            { ScopedUiTiming timing("overlay.hdr_edit_render"); pq = render(&peak); }
             QMetaObject::invokeMethod(QCoreApplication::instance(), [overlay, pq, peak, baseKey, reference] {
                 if (!overlay) return;
                 auto* self = overlay.data();
@@ -3278,6 +3276,10 @@ void CaptureOverlay::updateHdrEditBackdrop() {
                 if (!self->m_editing || !self->m_editor || self->m_defaults.screenshotFormat != "heic" ||
                     self->m_editHdrBase.cacheKey() != baseKey || self->m_scrolling) {
                     self->updateHdrEditBackdrop();
+                    return;
+                }
+                if (self->m_hdrEditPqCacheKey == pq.cacheKey() && self->m_hdrEditCacheKey == baseKey) {
+                    self->updateHdrEditBackdrop(); // Geometry-only changes reuse the attached buffer.
                     return;
                 }
                 ScopedUiTiming uploadTiming("overlay.hdr_edit_upload");
@@ -3290,6 +3292,7 @@ void CaptureOverlay::updateHdrEditBackdrop() {
                     self->m_hdrEditBackdrop->setVisible(false);
                     self->m_editor->setExternalImagePresentation(false);
                 }
+                self->m_hdrEditPqCacheKey = pq.cacheKey();
                 self->update(); // The parent mask must reflect the newly visible HDR preview.
                 if (self->m_hdrEditPreviewDirty) self->updateHdrEditBackdrop();
             }, Qt::QueuedConnection);
@@ -5120,6 +5123,7 @@ void CaptureOverlay::invalidateHdrEditBase() {
     m_editedHdrOutput = {};
     m_hdrEditCacheKey = 0;
     m_hdrEditPreviewDirty = true;
+    m_hdrEditPqCacheKey = 0;
 }
 
 void CaptureOverlay::queueHdrEditBase() {

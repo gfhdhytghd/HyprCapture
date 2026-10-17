@@ -24,6 +24,9 @@ class AnnotationEditor final : public QWidget {
     QImage resultImageOn(const QImage& hdrBase) const;
     QImage previewImageOn(const QImage& hdrBase) const;
     std::function<QImage()> previewRendererOn(const QImage& hdrBase) const;
+    // Native-resolution PQ preview: cache unchanged pixels, compose only damaged
+    // annotation bounds on a worker. Export uses resultImageOn independently.
+    std::function<QImage(float*)> pqPreviewRendererOn(const QImage& hdrBase, float referenceNits) const;
     void setHdrEnabled(bool enabled);
     bool hdrEnabled() const;
     void setRegionResizeBounds(const QRect& bounds);
