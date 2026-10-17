@@ -49,6 +49,7 @@
 #include <cmath>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <vector>
 
@@ -74,6 +75,14 @@ struct Annotation {
     mutable QRect mosaicBounds;
     mutable int mosaicBlock = 0;
     mutable qint64 mosaicSource = 0;
+
+    bool sameInk(const Annotation& other) const {
+        return tool == other.tool && variant == other.variant && color == other.color &&
+            width == other.width && hdrGain == other.hdrGain && points == other.points &&
+            text == other.text && textFont == other.textFont && textBox == other.textBox &&
+            number == other.number && documentY == other.documentY &&
+            scrollAnchored == other.scrollAnchored && anchorLayout == other.anchorLayout;
+    }
 };
 
 struct Edit {
@@ -646,6 +655,39 @@ void drawMappedAnnotation(QPainter& p,const QImage& base,const Annotation& a,con
     }
 }
 
+QRect annotationDamage(const Annotation& annotation, const QImage& base,
+                       const std::optional<ScrollLayout>& layout) {
+    if (annotation.points.isEmpty()) return {};
+    if (annotation.tool == Tool::Spotlight) return base.rect();
+    QRectF bounds = annotationPath(annotation).boundingRect();
+    if (annotation.tool == Tool::Text && !annotation.textBox.isValid()) {
+        const QFontMetricsF metrics(annotation.textFont.pixelSize() > 0 ? annotation.textFont : annotationFont(annotation.width));
+        qreal y = annotation.points.front().y() + metrics.ascent();
+        for (const auto& line : annotation.text.split('\n')) {
+            bounds |= metrics.boundingRect(line).translated(annotation.points.front().x(), y);
+            y += metrics.lineSpacing();
+        }
+    }
+    // Include round caps, wide highlighters, arrow heads, glyph overhang and AA.
+    const qreal margin = annotation.width * 4 + 16;
+    bounds.adjust(-margin, -margin, margin, margin);
+    if (!layout || !annotation.scrollAnchored) return bounds.toAlignedRect().intersected(base.rect());
+    QRect damage;
+    for (const auto& piece : annotationPieces(annotation, *layout, false))
+        damage |= bounds.intersected(piece.clip).translated(0, piece.dy).toAlignedRect();
+    return damage.intersected(base.rect());
+}
+
+struct PqPreviewCache {
+    std::mutex mutex;
+    qint64 hdrKey = 0, sdrKey = 0;
+    float reference = 0, peak = 0;
+    bool hdrEnabled = false;
+    QImage pq;
+    std::vector<Annotation> annotations;
+    std::optional<ScrollLayout> layout;
+};
+
 class AnnotationCanvas final : public QWidget {
   public:
     explicit AnnotationCanvas(QWidget* parent) : QWidget(parent) {
@@ -662,6 +704,7 @@ class AnnotationCanvas final : public QWidget {
     bool externalAnnotationPresentation = false;
     bool hdrEnabled = false;
     bool previewDirty = true;
+    std::shared_ptr<PqPreviewCache> pqPreviewCache = std::make_shared<PqPreviewCache>();
     std::function<void()> previewChanged;
     void update() { previewDirty = true; QWidget::update(); }
     Tool tool = Tool::Rectangle;
@@ -837,6 +880,75 @@ class AnnotationCanvas final : public QWidget {
     }
     QImage resultOn(const QImage& hdrBase, bool preview = false) const {
         return rendererOn(hdrBase, preview)();
+    }
+
+    std::function<QImage(float*)> pqRendererOn(const QImage& hdrBase, float reference) const {
+        auto annotations = m_annotations;
+        if (m_editingTextIndex >= 0 && m_editingTextIndex < int(annotations.size()))
+            annotations.erase(annotations.begin() + m_editingTextIndex);
+        if (m_draft) annotations.push_back(*m_draft);
+        return [cache = pqPreviewCache, base = base, hdrBase, annotations = std::move(annotations),
+                layout = scrollLayout, hdrEnabled = hdrEnabled, reference](float* peak) -> QImage {
+            if (!hyprcapture::ui::isHdrImage(hdrBase) || hdrBase.size() != base.size()) return {};
+            std::lock_guard lock(cache->mutex);
+            const bool reset = cache->hdrKey != hdrBase.cacheKey() || cache->reference != reference || cache->pq.isNull();
+            if (reset) {
+                // Match the export renderer's FP16 premultiplication rounding,
+                // including straight-alpha FP16/FP32 callers.
+                cache->pq = hyprcapture::ui::hdrToPq10(
+                    hdrBase.convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied), &cache->peak, reference);
+                if (cache->pq.isNull()) return {};
+                cache->hdrKey = hdrBase.cacheKey(); cache->reference = reference;
+                cache->annotations.clear(); cache->layout = layout;
+                cache->sdrKey = base.cacheKey(); cache->hdrEnabled = hdrEnabled;
+            }
+            QRect damage;
+            if (cache->layout != layout || cache->sdrKey != base.cacheKey() || cache->hdrEnabled != hdrEnabled) {
+                // Layout, mosaic source or gain mode changed: erase old ink too.
+                damage = base.rect();
+            } else {
+                for (size_t i = 0; i < std::max(annotations.size(), cache->annotations.size()); ++i) {
+                    if (i < annotations.size() && i < cache->annotations.size() &&
+                        annotations[i].sameInk(cache->annotations[i])) continue;
+                    if (i < annotations.size()) damage |= annotationDamage(annotations[i], base, layout);
+                    if (i < cache->annotations.size()) damage |= annotationDamage(cache->annotations[i], base, layout);
+                }
+            }
+            if (!damage.isEmpty()) {
+                QImage output = hdrBase.copy(damage).convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
+                if (output.isNull()) return {};
+                {
+                    QPainter painter(&output);
+                    for (const auto& annotation : annotations) {
+                        const QRect ink = annotationDamage(annotation, base, layout).intersected(damage);
+                        if (ink.isEmpty()) continue;
+                        QImage layer(ink.size(), QImage::Format_ARGB32_Premultiplied);
+                        if (layer.isNull()) return {};
+                        layer.fill(Qt::transparent);
+                        {
+                            QPainter layerPainter(&layer);
+                            layerPainter.translate(-ink.topLeft());
+                            drawMappedAnnotation(layerPainter, base, annotation, layout, false);
+                        }
+                        const float gain = !hdrEnabled || annotation.tool == Tool::Mosaic ? 1.0F : float(annotation.hdrGain);
+                        painter.drawImage(ink.topLeft() - damage.topLeft(), hyprcapture::ui::sdrToHdr(layer, 203.0F * gain));
+                    }
+                }
+                float patchPeak = 0;
+                const auto patch = hyprcapture::ui::hdrToPq10(output, &patchPeak, reference, damage.topLeft());
+                if (patch.isNull()) return {};
+                QPainter painter(&cache->pq);
+                painter.setCompositionMode(QPainter::CompositionMode_Source);
+                painter.drawImage(damage.topLeft(), patch);
+                // Conservative display metadata until the base is replaced;
+                // removing a bright annotation cannot understate the peak.
+                cache->peak = std::max(cache->peak, patchPeak);
+            }
+            cache->annotations = annotations; cache->layout = layout;
+            cache->sdrKey = base.cacheKey(); cache->hdrEnabled = hdrEnabled;
+            if (peak) *peak = cache->peak;
+            return cache->pq;
+        };
     }
 
     QRect displayRect() const { return imageTransform().mapRect(QRectF(base.rect())).toAlignedRect(); }
@@ -2487,6 +2599,9 @@ void AnnotationEditor::setExternalImagePresentation(bool enabled, bool includesA
 }
 QImage AnnotationEditor::previewImageOn(const QImage& hdrBase) const { return m_impl->canvas->resultOn(hdrBase, true); }
 std::function<QImage()> AnnotationEditor::previewRendererOn(const QImage& hdrBase) const { return m_impl->canvas->rendererOn(hdrBase, true); }
+std::function<QImage(float*)> AnnotationEditor::pqPreviewRendererOn(const QImage& hdrBase, float referenceNits) const {
+    return m_impl->canvas->pqRendererOn(hdrBase, referenceNits);
+}
 void AnnotationEditor::setHdrEnabled(bool enabled) {
     if (m_impl->canvas->hdrEnabled == enabled) return;
     m_impl->canvas->hdrEnabled = enabled;

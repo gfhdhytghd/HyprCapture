@@ -147,6 +147,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     friend class InPlaceEditorTest;
     std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrEditBackdrop;
     qint64 m_hdrEditCacheKey = 0;
+    qint64 m_hdrEditPqCacheKey = 0;
     QThreadPool* m_hdrEditPreviewPool = nullptr;
     bool m_hdrEditPreviewBusy = false;
     bool m_hdrEditPreviewDirty = false;
