@@ -11,6 +11,7 @@
 #include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 
 using namespace hyprcapture;
 static float pqNits(unsigned code) {
@@ -80,6 +81,27 @@ public:
 };
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
+  // EXT_LINEAR is a normalised linear TF, not the Windows-scRGB protocol
+  // shortcut. Its encoding span must describe the actual uploaded units.
+  // Mastering peak must remain independent (PQ ignores encoding max).
+  for (float reference : {80.F, 173.F, 203.F, 252.F}) {
+    for (float peak : {0.F, 69.F, 173.F, 630.F, 1000.F, 10000.F}) {
+      const auto fp = ui::hdrPresentationLuminances(true, peak, reference);
+      const auto pq = ui::hdrPresentationLuminances(false, peak, reference);
+      assert(fp.encodingMaximum == 80 && pq.encodingMaximum == 10000);
+      assert(fp.reference == reference && pq.reference == reference);
+      assert(fp.masteringMaximum == std::max(peak, reference));
+      assert(pq.masteringMaximum == fp.masteringMaximum);
+      // Reference-white anchoring back onto the captured output has ratio 1.
+      // Neither headless 80-nit output nor HDR 173-nit output gets a gain.
+      for (float nits : {.2F, 69.F, 173.F, 630.F})
+        assert(std::abs(nits / 80 * fp.encodingMaximum * reference / fp.reference - nits) < .001F);
+    }
+  }
+  const auto invalid = ui::hdrPresentationLuminances(true,
+      std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN());
+  assert(invalid.encodingMaximum == 80 && invalid.reference == 203 && invalid.masteringMaximum == 203);
+  assert(ui::hdrPresentationLuminances(false, 630.01F, 173).masteringMaximum == 631);
   auto image = fixture();
   float peak = 0;
   auto pq = ui::hdrToPq10(image, &peak);

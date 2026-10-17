@@ -92,7 +92,7 @@ int main(int argc, char **argv) {
     return 77;
   ui::HdrUpload::forceNonLinearForTest();
   auto original = fixture();
-  for (float reference : {80.F, 203.F, 252.F})
+  for (float reference : {80.F, 173.F, 203.F, 252.F})
     for (bool premultiplied : {false, true}) {
       auto image = premultiplied ? original.convertToFormat(
                                        QImage::Format_RGBA16FPx4_Premultiplied)

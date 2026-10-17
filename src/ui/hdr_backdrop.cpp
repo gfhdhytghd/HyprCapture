@@ -28,6 +28,14 @@
 #include <wayland-client.h>
 #endif
 namespace hyprcapture::ui {
+HdrPresentationLuminances hdrPresentationLuminances(bool fp16, float peak,
+                                                   float reference) {
+  if (!std::isfinite(reference) || reference <= 0) reference = 203;
+  if (!std::isfinite(peak) || peak < 0) peak = 0;
+  const auto ref = uint32_t(std::clamp(std::round(reference), 1.F, 10000.F));
+  return {fp16 ? 80U : 10000U, ref,
+          uint32_t(std::clamp(std::ceil(std::max(peak, float(ref))), 1.F, 10000.F))};
+}
 #ifdef HYPRCAPTURE_HDR_TESTING
 static unsigned globalsRequests = 0;
 unsigned HdrBackdrop::globalsRequestsForTest() { return globalsRequests; }
@@ -123,7 +131,8 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   wp_presentation *presentation = nullptr;
   uint32_t presentationClock = 0;
   bool pq = false, bt2020 = false, srgb = false, linear = false,
-       parametric = false, luminances = false, rgb30 = false,
+       parametric = false, luminances = false, mastering = false,
+       extendedVolume = false, rgb30 = false,
        perceptual = false, closed = false;
   std::set<std::pair<uint32_t, uint64_t>> modifiers;
   struct Format {
@@ -231,6 +240,8 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
             auto &s = *static_cast<NativeGlobals *>(d);
             s.parametric |= f == WP_COLOR_MANAGER_V1_FEATURE_PARAMETRIC;
             s.luminances |= f == WP_COLOR_MANAGER_V1_FEATURE_SET_LUMINANCES;
+            s.mastering |= f == WP_COLOR_MANAGER_V1_FEATURE_SET_MASTERING_DISPLAY_PRIMARIES;
+            s.extendedVolume |= f == WP_COLOR_MANAGER_V1_FEATURE_EXTENDED_TARGET_VOLUME;
           },
           [](void *d, wp_color_manager_v1 *, uint32_t f) {
             auto &s = *static_cast<NativeGlobals *>(d);
@@ -309,10 +320,10 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   }
   bool common() const {
     return display && compositor && subcompositor && viewporter && manager &&
-           parametric && luminances && perceptual && !closed;
+           parametric && luminances && mastering && perceptual && !closed;
   }
   bool fp16() const {
-    return common() && dma && linear && bt2020 &&
+    return common() && extendedVolume && dma && linear && bt2020 &&
            std::ranges::any_of(modifiers,
                                [](const auto &m) {
                                  return m.first == WL_SHM_FORMAT_ABGR16161616F;
@@ -320,12 +331,8 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
            qEnvironmentVariable("HYPRCAPTURE_HDR_DMABUF") != "0";
   }
   wp_image_description_v1 *description(bool fp16, float peak, float reference) {
-    const auto ref = uint32_t(std::clamp(reference, 1.F, 10000.F));
-    const auto envelope = std::min(
-        10000U,
-        std::max(ref,
-                 uint32_t(std::ceil(std::max(peak, 203.F) / 203.F)) * 203U));
-    auto key = std::tuple{fp16, ref, envelope};
+    const auto levels = hdrPresentationLuminances(fp16, peak, reference);
+    auto key = std::tuple{fp16, levels.reference, levels.masteringMaximum};
     auto i = descriptions.find(key);
     if (i == descriptions.end()) {
       auto d = std::make_unique<Description>();
@@ -335,11 +342,17 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
       wp_image_description_creator_params_v1_set_tf_named(
           c, fp16 ? WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_EXT_LINEAR
                   : WP_COLOR_MANAGER_V1_TRANSFER_FUNCTION_ST2084_PQ);
-      // Same reference and content envelope as the old PQ surface. Hyprland's
-      // ext_linear TF range is fixed at 80 nits, independently of this
-      // envelope.
-      wp_image_description_creator_params_v1_set_luminances(c, 0, envelope,
-                                                            ref);
+      // These are ordinary parametric EXT_LINEAR pixels, not Windows-scRGB:
+      // 1.0 means exactly 80 nits only when that encoding range is declared.
+      // PQ has its fixed 10000-nit range. Keep the already display-referred
+      // pixels anchored to the captured output's white, without another gain.
+      wp_image_description_creator_params_v1_set_luminances(
+          c, 0, levels.encodingMaximum, levels.reference);
+      // Content/mastering peak belongs to the target volume, not the encoding
+      // range. PQ ignores set_luminances.max; without this it appears to peak at
+      // 10000 nits and can be tone mapped a second time by the compositor.
+      wp_image_description_creator_params_v1_set_mastering_luminance(
+          c, 0, levels.masteringMaximum);
       d->object = wp_image_description_creator_params_v1_create(c);
       static const wp_image_description_v1_listener l{
           [](void *p, wp_image_description_v1 *, uint32_t, const char *) {

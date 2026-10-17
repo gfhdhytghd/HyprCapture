@@ -218,6 +218,28 @@ class AnnotationEditorTest final : public QObject {
         QCOMPARE(before, expected); // A queued upload can retain an older frame.
     }
 
+    void cachedEditorPqKeepsCapturedWhiteAndSeparateMasteringPeak() {
+        for (float reference : {80.F, 173.F}) {
+            AnnotationEditor editor; initialize(editor, image());
+            QImage hdr(image().size(), QImage::Format_RGBA16FPx4);
+            hdr.fill(QColor::fromRgbF(.5, .5, .5));
+            // QColor cannot express the >1 linear channels of 173-nit white.
+            for (int y = 0; y < hdr.height(); ++y) {
+                auto* row = reinterpret_cast<qfloat16*>(hdr.scanLine(y));
+                for (int x = 0; x < hdr.width(); ++x)
+                    for (int c = 0; c < 3; ++c) row[x*4+c] = qfloat16(reference / 80);
+            }
+            float peak = 0;
+            const auto pq = editor.pqPreviewRendererOn(hdr, reference)(&peak);
+            QCOMPARE(pq, hyprcapture::ui::hdrToPq10(hdr, nullptr, reference));
+            const auto levels = hyprcapture::ui::hdrPresentationLuminances(false, peak, reference);
+            QCOMPARE(levels.encodingMaximum, 10000U);
+            QCOMPARE(levels.reference, uint32_t(reference));
+            QVERIFY(levels.masteringMaximum >= reference);
+            QVERIFY(levels.masteringMaximum <= reference + 1);
+        }
+    }
+
     void cachedPqPreviewSnapshotSurvivesEditor() {
         QImage hdr(image().size(), QImage::Format_RGBA16FPx4);
         hdr.fill(Qt::white);
