@@ -74,10 +74,11 @@ class WindowStreamSender {
     std::mutex m_mutex;
     std::condition_variable_any m_ready;
     std::optional<Frame> m_latest;
-    std::jthread m_worker;
     std::atomic<WindowStreamSenderState> m_state{WindowStreamSenderState::Idle};
     std::atomic<WindowStreamSenderFailure> m_failure{WindowStreamSenderFailure::None};
     std::atomic<std::uint64_t> m_droppedFrames{0};
+    // Starts immediately: every member used by run() must be constructed first.
+    std::jthread m_worker;
 };
 
 } // namespace hyprcapture

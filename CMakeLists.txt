@@ -314,6 +314,8 @@ if(BUILD_TESTING)
   if(Python3_Interpreter_FOUND)
     add_test(NAME aec-source-pins COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/aec_sources_test.py)
     set_tests_properties(aec-source-pins PROPERTIES TIMEOUT 45)
+    add_test(NAME recording-transcode COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_transcode_test.py $<TARGET_FILE:hyprcapture-ui>)
+    set_tests_properties(recording-transcode PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
     add_test(NAME recording-permissions COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_permissions_test.py $<TARGET_FILE:hyprcapture-ui>)
     set_tests_properties(recording-permissions PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
     add_test(NAME omarchy-aec-setup COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/omarchy_aec_setup_test.py)
@@ -365,6 +367,14 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-material-icon-test PRIVATE Qt6::Gui Qt6::Svg)
   add_test(NAME material-icon COMMAND hyprcapture-material-icon-test)
   set_tests_properties(material-icon PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 10)
+
+  add_executable(hyprcapture-screenshot-notification-test
+    tests/screenshot_notification_test.cpp src/ui/screenshot_notification.cpp src/shared/config.cpp)
+  target_include_directories(hyprcapture-screenshot-notification-test PRIVATE src)
+  target_link_libraries(hyprcapture-screenshot-notification-test PRIVATE Qt6::Gui)
+  target_compile_options(hyprcapture-screenshot-notification-test PRIVATE -UNDEBUG)
+  add_test(NAME screenshot-notification COMMAND hyprcapture-screenshot-notification-test)
+  set_tests_properties(screenshot-notification PROPERTIES TIMEOUT 10)
 
   add_executable(hyprcapture-session-startup-test tests/session_startup_test.cpp)
   target_include_directories(hyprcapture-session-startup-test PRIVATE src)
@@ -430,6 +440,13 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-recording-state-test PRIVATE nlohmann_json::nlohmann_json)
   add_test(NAME hyprcapture-recording-state-test COMMAND hyprcapture-recording-state-test)
 
+  add_executable(hyprcapture-timing-test tests/timing_test.cpp src/plugin/timing.cpp)
+  target_include_directories(hyprcapture-timing-test PRIVATE src)
+  target_link_libraries(hyprcapture-timing-test PRIVATE Threads::Threads)
+  target_compile_options(hyprcapture-timing-test PRIVATE -UNDEBUG)
+  add_test(NAME plugin-timing COMMAND hyprcapture-timing-test)
+  set_tests_properties(plugin-timing PROPERTIES TIMEOUT 15)
+
   add_executable(hyprcapture-recording-codec-test tests/recording_codec_test.cpp)
   target_include_directories(hyprcapture-recording-codec-test PRIVATE src)
   target_compile_options(hyprcapture-recording-codec-test PRIVATE -UNDEBUG)
@@ -480,6 +497,17 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-window-stream-sender-test PRIVATE src)
   target_compile_options(hyprcapture-window-stream-sender-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-window-stream-sender-test COMMAND hyprcapture-window-stream-sender-test)
+
+  add_executable(hyprcapture-window-stream-sender-startup-test
+    tests/window_stream_sender_startup_test.cpp
+    src/plugin/window_stream.cpp
+    src/plugin/window_stream_sender.cpp
+  )
+  target_include_directories(hyprcapture-window-stream-sender-startup-test PRIVATE src)
+  target_compile_options(hyprcapture-window-stream-sender-startup-test PRIVATE -UNDEBUG)
+  target_link_libraries(hyprcapture-window-stream-sender-startup-test PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+  add_test(NAME window-stream-sender-startup COMMAND hyprcapture-window-stream-sender-startup-test)
+  set_tests_properties(window-stream-sender-startup PROPERTIES TIMEOUT 5)
 
   add_executable(hyprcapture-window-gpu-wire-test
     tests/window_gpu_wire_test.cpp

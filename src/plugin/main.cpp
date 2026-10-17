@@ -16,6 +16,7 @@
 #include <hyprland/src/desktop/rule/layerRule/LayerRule.hpp>
 #include <hyprland/src/desktop/rule/layerRule/LayerRuleEffectContainer.hpp>
 #include <hyprland/src/plugins/PluginAPI.hpp>
+#include <hyprland/src/event/EventBus.hpp>
 
 extern "C" {
 #include <lauxlib.h>
@@ -27,6 +28,7 @@ extern "C" {
 #include "plugin/recording.hpp"
 #include "plugin/session_launcher.hpp"
 #include "plugin/session_lock.hpp"
+#include "plugin/timing.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 
@@ -112,6 +114,15 @@ bool configBool(const std::string& suffix, bool fallback) {
         return **reinterpret_cast<Config::INTEGER* const*>(value.dataptr) != 0;
 
     return fallback;
+}
+
+CHyprSignalListener g_timingTickListener;
+CHyprSignalListener g_timingReloadListener;
+std::chrono::steady_clock::time_point g_nextTimingRefresh;
+
+void refreshTimingConfig() {
+    hyprcapture::refreshTimingConfig(configBool("timing", false), configString("timing_file", ""));
+    g_nextTimingRefresh = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
 }
 
 void addStringConfig(const char* suffix, const char* description, const char* fallback) {
@@ -592,6 +603,13 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         hyprcapture::notifyUser("reloadConfig failed", hyprcapture::NotificationLevel::Error, 5000);
     installOverlayLayerRule();
 
+    refreshTimingConfig();
+    g_timingReloadListener = Event::bus()->m_events.config.reloaded.listen([] { refreshTimingConfig(); });
+    g_timingTickListener = Event::bus()->m_events.tick.listen([] {
+        if (std::chrono::steady_clock::now() >= g_nextTimingRefresh)
+            refreshTimingConfig();
+    });
+
     std::string stateServerError;
     if (!hyprcapture::initializeRecordingStateServer(&stateServerError))
         hyprcapture::notifyUser(
@@ -608,6 +626,8 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 }
 
 APICALL EXPORT void PLUGIN_EXIT() {
+    g_timingTickListener.reset();
+    g_timingReloadListener.reset();
     hyprcapture::shutdownSessionLock();
     hyprcapture::cancelCaptureHelpers();
     unregisterLuaFunctions();

@@ -11,6 +11,7 @@
 #include "ui/pinned_image.hpp"
 #include "ui/hdr_backdrop.hpp"
 #include "ui/session_lock_guard.hpp"
+#include "ui/screenshot_notification.hpp"
 
 #include <LayerShellQt/Shell>
 #include <LayerShellQt/Window>
@@ -20,6 +21,7 @@
 #include <QCommandLineParser>
 #include <QCursor>
 #include <QDir>
+#include <QDebug>
 #include <QElapsedTimer>
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -641,6 +643,12 @@ int showRecordingResult(const hyprcapture::CaptureDefaults& defaults, const QStr
     return qApp->exec();
 }
 
+void reportTranscodeFailure(const hyprcapture::CaptureDefaults& defaults, const QString& inputPath, const QString& reason) {
+    const QString message = QStringLiteral("APNG conversion failed: %1. Recording retained at: %2").arg(reason, inputPath);
+    qWarning().noquote() << message;
+    hyprcapture::ui::showNotification(defaults.notificationBackend, QStringLiteral("APNG conversion failed"), message, {}, 1000);
+}
+
 struct TranscodeState {
     QProcess* process = nullptr;
     std::unique_ptr<ResultThumbnailCollection> thumbnails;
@@ -691,8 +699,10 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
         return 1;
 
     const QString ffmpeg = hyprcapture::ui::trustedSystemProgram(QStringLiteral("ffmpeg"));
-    if (ffmpeg.isEmpty())
+    if (ffmpeg.isEmpty()) {
+        reportTranscodeFailure(defaults, inputPath, QStringLiteral("ffmpeg is unavailable"));
         return 1;
+    }
 
     const QString canonicalInput = QFileInfo(inputPath).canonicalFilePath();
     const QString cleanOutput = QDir::cleanPath(outputPath);
@@ -757,10 +767,11 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
     });
     QObject::connect(state->process, &QProcess::finished, qApp, [state](int exitCode, QProcess::ExitStatus exitStatus) {
         updateTranscodeProgress(state);
-        const bool success = exitStatus == QProcess::NormalExit && exitCode == 0 && QFileInfo(state->outputPath).exists();
+        const QFileInfo output(state->outputPath);
+        const bool success = exitStatus == QProcess::NormalExit && exitCode == 0 && output.isFile() && output.size() > 0;
 
-        QFile::remove(state->inputPath);
         if (success) {
+            QFile::remove(state->inputPath);
             setOwnerOnlyPermissions(state->outputPath);
             if (state->defaults.clipboard)
                 hyprcapture::ui::copyFileUrlToClipboard(state->outputPath);
@@ -777,18 +788,19 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
         }
 
         QFile::remove(state->outputPath);
+        reportTranscodeFailure(state->defaults, state->inputPath, QStringLiteral("ffmpeg did not produce a complete output"));
         if (state->thumbnails) {
             state->thumbnails->finishTranscodeProgress(false, state->defaults.thumbnailTimeoutMs > 0 ? static_cast<int>(state->defaults.thumbnailTimeoutMs) : 5000);
         } else {
             hyprcapture::ui::discardClipboardSnapshot(state->restoreClipboardPath);
-            qApp->quit();
+            qApp->exit(1);
         }
     });
 
     state->process->start();
     if (!state->process->waitForStarted(1000)) {
-        QFile::remove(canonicalInput);
         QFile::remove(cleanOutput);
+        reportTranscodeFailure(defaults, canonicalInput, state->process->errorString());
         hyprcapture::ui::discardClipboardSnapshot(state->restoreClipboardPath);
         if (state->thumbnails)
             state->thumbnails->finishTranscodeProgress(false, 5000);

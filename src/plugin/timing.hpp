@@ -1,10 +1,14 @@
 #pragma once
 
 #include <chrono>
+#include <string>
 #include <string_view>
 
 namespace hyprcapture {
 
+// Call only on the compositor main thread, with freshly read host settings.
+// The enabled flag and output path are atomically published for worker readers.
+void refreshTimingConfig(bool enabled, std::string file);
 bool timingEnabled();
 void traceTiming(std::string_view event, long long elapsedUs = -1);
 

@@ -196,9 +196,10 @@ void eagainDropsThenDrainingAllowsTheSameConnectionToRecover() {
     submitFrame(sender, 20);
     auto client = acceptClient(listener);
     for (std::uint64_t sequence = 21; sequence < 180; ++sequence) {
-        // Filling the socket can also contend with the worker. Keep offering
-        // frames until the socket itself reports SendWouldBlock below.
+        // submit() may drop on mutex contention by contract. Keep driving
+        // the slow consumer until the socket itself reports backpressure.
         (void)sender.submit(metadata(sequence), std::vector<unsigned char>(8, static_cast<unsigned char>(sequence)));
+        assert(sender.state() == WindowStreamSenderState::Connected);
         std::this_thread::sleep_for(1ms);
         if (sender.failure() == WindowStreamSenderFailure::SendWouldBlock)
             break;
