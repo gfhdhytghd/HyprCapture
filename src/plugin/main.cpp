@@ -24,6 +24,7 @@ extern "C" {
 }
 
 #include "plugin/artifact_capture.hpp"
+#include "plugin/capture_options.hpp"
 #include "plugin/notification.hpp"
 #include "plugin/recording.hpp"
 #include "plugin/session_launcher.hpp"
@@ -307,7 +308,7 @@ void installOverlayLayerRule() {
     ruleEngine()->registerRule(SP<IRule>{rule});
 }
 
-SDispatchResult openCapture(const std::string& args, bool quick, bool record, bool inPlaceEditToolbar = false) {
+SDispatchResult openCapture(const std::string& args, bool quick, bool record, bool inPlaceEditToolbar = false, const hyprcapture::CaptureOptions& overrides = {}) {
     if (hyprcapture::sessionLocked()) return {.success = false, .error = "session locked"};
     const auto now = std::chrono::steady_clock::now();
     if (g_lastCaptureDispatch.time_since_epoch().count() != 0 && now - g_lastCaptureDispatch < kMinDispatchInterval) {
@@ -318,6 +319,13 @@ SDispatchResult openCapture(const std::string& args, bool quick, bool record, bo
 
     auto defaults = readDefaults();
     defaults.inPlaceEditToolbar = inPlaceEditToolbar;
+    auto requestedMode = defaults.mode;
+    hyprcapture::CaptureOptions stringOptions;
+    std::string optionsError;
+    if (!hyprcapture::parseCaptureArguments(args, requestedMode, stringOptions, optionsError))
+        return {.success = false, .error = optionsError};
+    stringOptions.apply(defaults);
+    overrides.apply(defaults);
     if (quick && !defaults.allowQuick) {
         const std::string error = "quick capture disabled; set plugin.hyprcapture.allow_quick = true to enable no-confirmation capture";
         if (g_lastQuickRejectNotification.time_since_epoch().count() == 0 || now - g_lastQuickRejectNotification >= kMinDispatchInterval) {
@@ -329,7 +337,6 @@ SDispatchResult openCapture(const std::string& args, bool quick, bool record, bo
 
     installOverlayLayerRule();
 
-    const auto requestedMode = hyprcapture::parseCaptureMode(args, defaults.mode);
     const auto result = hyprcapture::launchHelper(
         {.defaults = defaults, .requestedMode = requestedMode, .quick = quick, .record = record, .recordActive = hyprcapture::isRecordingActive()});
     if (!result.success) {
@@ -442,19 +449,41 @@ std::string normalizeHyprcaptureAction(std::string action) {
     return action;
 }
 
+int luaCapture(lua_State* L, bool quick, bool editor, int modeIndex = 1, int optionsIndex = 2) {
+    // Errors are raised after the parser's C++ strings leave scope.
+    bool failed = false;
+    {
+        hyprcapture::CaptureOptions options;
+        std::string error;
+        if (lua_gettop(L) >= modeIndex && !lua_isnil(L, modeIndex) && lua_type(L, modeIndex) != LUA_TSTRING)
+            error = "hyprcapture capture mode must be a string or nil";
+        else
+            hyprcapture::parseLuaCaptureOptions(L, optionsIndex, options, error);
+        if (error.empty()) {
+            const auto args = lua_gettop(L) < modeIndex || lua_isnil(L, modeIndex) ? std::string{} : std::string(lua_tostring(L, modeIndex));
+            const auto result = openCapture(args, quick, false, editor, options);
+            if (result.success) return 0;
+            error = result.error;
+        }
+        lua_pushstring(L, error.c_str());
+        failed = true;
+    }
+    return failed ? lua_error(L) : 0;
+}
+
 int luaOpen(lua_State* L) {
     if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
-    return luaDispatchResult(L, dispatchOpen(luaOptionalString(L, 1)));
+    return luaCapture(L, false, false);
 }
 
 int luaOpenEditor(lua_State* L) {
     if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
-    return luaDispatchResult(L, dispatchOpenEditor(luaOptionalString(L, 1)));
+    return luaCapture(L, false, true);
 }
 
 int luaQuick(lua_State* L) {
     if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
-    return luaDispatchResult(L, dispatchQuick(luaOptionalString(L, 1)));
+    return luaCapture(L, true, false);
 }
 
 int luaRecord(lua_State* L) {
@@ -519,6 +548,11 @@ int luaCancel(lua_State* L) {
 
 int luaDispatch(lua_State* L) {
     if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
+    const int captureAction = [](const char* raw) {
+        const auto action = normalizeHyprcaptureAction(raw);
+        return action == "open" ? 1 : action == "open_editor" ? 2 : action == "quick" ? 3 : 0;
+    }(luaL_checkstring(L, 1));
+    if (captureAction) return luaCapture(L, captureAction == 3, captureAction == 2, 2, 3);
     const std::string action = normalizeHyprcaptureAction(luaL_checkstring(L, 1));
     const std::string args   = luaOptionalString(L, 2);
 

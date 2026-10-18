@@ -1613,7 +1613,7 @@ QIcon actionIcon(const QString& action, bool dark, const QColor&) {
     const QColor ink(dark ? "#e9f0f6" : "#26313d");
     static const std::map<QString, std::string_view> names{
         {"color", "palette"}, {"undo", "undo"}, {"redo", "redo"},
-        {"pin", "push_pin"}, {"confirm", "check"}, {"cancel", "close"},
+        {"save", "save"}, {"pin", "push_pin"}, {"confirm", "check"}, {"cancel", "close"},
         {"light", "light_mode"}, {"dark", "dark_mode"}, {"fit", "fit_screen"},
         {"clear", "delete"}, {"reselect", "restart_alt"}, {"more", "more_horiz"}};
     const auto found = names.find(action);
@@ -1786,6 +1786,7 @@ struct AnnotationEditor::Impl {
     StripActionButton* clear = nullptr;
     StripActionButton* fit = nullptr;
     StripActionButton* confirm = nullptr;
+    StripActionButton* save = nullptr;
     StripActionButton* cancel = nullptr;
     StripActionButton* pin = nullptr;
     StripActionButton* reselect = nullptr;
@@ -1953,7 +1954,7 @@ struct AnnotationEditor::Impl {
         for (auto* frame : {toolbar, variantPanel, colorPanel, morePanel})
             frame->setStyleSheet(QString("QFrame#%1 { background: %2; border: 1px solid %3; border-radius: 6px; } QLabel { color: %4; } QSpinBox { color: %4; background: %2; border: 1px solid %3; border-radius: 4px; padding: 1px 2px; selection-background-color: %5; selection-color: %4; } QToolButton#annotationWidthDecrease, QToolButton#annotationWidthIncrease { color:%4; background:%2; border:1px solid %3; border-radius:4px; } QToolButton#annotationWidthDecrease:hover, QToolButton#annotationWidthIncrease:hover { background:%5; }")
                 .arg(frame->objectName(), surface, border, ink, selected));
-        for (const auto& [button, action] : std::vector<std::pair<StripActionButton*, QString>>{{undo, "undo"}, {redo, "redo"}, {pin, "pin"}, {confirm, "confirm"}, {cancel, "cancel"}, {clear, "clear"}, {fit, "fit"}, {reselect, "reselect"}, {more, "more"}}) {
+        for (const auto& [button, action] : std::vector<std::pair<StripActionButton*, QString>>{{save, "save"}, {undo, "undo"}, {redo, "redo"}, {pin, "pin"}, {confirm, "confirm"}, {cancel, "cancel"}, {clear, "clear"}, {fit, "fit"}, {reselect, "reselect"}, {more, "more"}}) {
             button->dark = dark;
             button->setIcon(actionIcon(action, dark, canvas->color));
             button->update();
@@ -2056,6 +2057,7 @@ struct AnnotationEditor::Impl {
         actionLabel(customColor, owner->tr("Color"), {});
         actionLabel(undo, owner->tr("Undo"), "Z");
         actionLabel(redo, owner->tr("Redo"), "X");
+        actionLabel(save, owner->tr("Save"), {});
         actionLabel(confirm, owner->tr("Capture"), "Enter");
         actionLabel(cancel, owner->tr("Cancel"), "Esc");
         actionLabel(pin, owner->tr("Pin"), "P");
@@ -2124,6 +2126,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     ui.undo = action("Z", "annotationUndo");
     ui.redo = action("X", "annotationRedo");
     ui.cancel = action({}, "annotationCancel");
+    ui.save = action({}, "annotationSave");
     ui.confirm = action({}, "annotationConfirm");
     ui.more = action({}, "annotationMore");
 
@@ -2518,6 +2521,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     connect(ui.redo, &QPushButton::clicked, this, [this] { m_impl->closePanels(); redo(); });
     connect(ui.clear, &QPushButton::clicked, this, [this] { m_impl->closePanels(); clearAnnotations(); });
     connect(ui.fit, &QPushButton::clicked, this, [this] { m_impl->closePanels(); fitImage(); });
+    connect(ui.save, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit saveRequested(); });
     connect(ui.confirm, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit confirmRequested(); });
     connect(ui.cancel, &QPushButton::clicked, this, [this] { m_impl->closePanels(); emit cancelRequested(); });
     connect(ui.pin, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit pinRequested(); });

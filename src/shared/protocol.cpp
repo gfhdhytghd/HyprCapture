@@ -440,6 +440,12 @@ std::string encodeSessionJson(const CaptureSession& session) {
     Json root;
     root["id"] = boundedString(session.id, MAX_METADATA_STRING_BYTES);
     root["defaults"] = defaultsJson(session.defaults);
+    if (session.filenameMetadata) {
+        root["filenameMetadata"] = Json{
+            {"windowClass", boundedString(session.filenameMetadata->windowClass, MAX_METADATA_STRING_BYTES)},
+            {"windowTitle", boundedString(session.filenameMetadata->windowTitle, MAX_METADATA_STRING_BYTES)},
+        };
+    }
     root["regionCaptureAvailable"] = session.regionCaptureAvailable;
     root["scrollSessionVersion"] = session.scrollSessionVersion;
     if (session.cursorPosition)
@@ -535,6 +541,15 @@ std::optional<CaptureSession> decodeSessionJson(const std::string& json) {
         return std::nullopt;
     if (!root.contains("defaults") || !parseDefaults(root.value("defaults", Json{}), session.defaults))
         return std::nullopt;
+
+    if (const auto metadata = root.find("filenameMetadata"); metadata != root.end()) {
+        FilenameMetadata value;
+        if (!metadata->is_object() ||
+            !stringValue(*metadata, "windowClass", value.windowClass, MAX_METADATA_STRING_BYTES) ||
+            !stringValue(*metadata, "windowTitle", value.windowTitle, MAX_METADATA_STRING_BYTES))
+            return std::nullopt;
+        session.filenameMetadata = std::move(value);
+    }
 
     Point cursorPosition;
     if (!pointValue(root, "cursorPosition", cursorPosition))

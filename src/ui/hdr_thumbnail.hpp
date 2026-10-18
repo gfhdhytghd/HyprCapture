@@ -8,11 +8,14 @@
 #include <unistd.h>
 namespace hyprcapture::ui {
 // Private, bounded, lossless transport. PNG remains the SDR fallback.
-inline QString saveHdrThumbnail(const QImage &image) {
+inline QString saveHdrThumbnail(const QImage &image, bool fullResolution = false) {
   if (image.isNull())
     return {};
+  if (fullResolution && (image.width() > 32768 || image.height() > 32768 ||
+                         qint64(image.width()) * image.height() * 8 > 512LL * 1024 * 1024))
+    return {};
   QImage small = image;
-  if (small.width() > 1120 || small.height() > 720)
+  if (!fullResolution && (small.width() > 1120 || small.height() > 720))
     small = small.scaled(QSize(1120, 720), Qt::KeepAspectRatio,
                          Qt::SmoothTransformation);
   small = small.convertToFormat(QImage::Format_RGBA16FPx4_Premultiplied);
@@ -40,7 +43,7 @@ inline QString saveHdrThumbnail(const QImage &image) {
   }
   return path;
 }
-inline QImage takeHdrThumbnail(const QString &path) {
+inline QImage takeHdrThumbnail(const QString &path, bool fullResolution = false) {
   int fd = ::open(QFile::encodeName(path).constData(),
                   O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
   struct stat st{};
@@ -48,7 +51,7 @@ inline QImage takeHdrThumbnail(const QString &path) {
     return {};
   if (::fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_uid != ::getuid() ||
       (st.st_mode & 0077) || st.st_size < 20 ||
-      st.st_size > 1120 * 720 * 8 + 12) {
+      st.st_size > (fullResolution ? 512LL * 1024 * 1024 + 12 : 1120 * 720 * 8 + 12)) {
     ::close(fd);
     return {};
   }
@@ -60,7 +63,7 @@ inline QImage takeHdrThumbnail(const QString &path) {
   quint32 magic = 0, w = 0, h = 0;
   QDataStream stream(&file);
   stream >> magic >> w >> h;
-  if (magic != 0x48435431 || !w || !h || w > 1120 || h > 720 ||
+  if (magic != 0x48435431 || !w || !h || w > (fullResolution ? 32768U : 1120U) || h > (fullResolution ? 32768U : 720U) ||
       st.st_size != 12 + qint64(w) * h * 8)
     return {};
   QImage image(w, h, QImage::Format_RGBA16FPx4_Premultiplied);

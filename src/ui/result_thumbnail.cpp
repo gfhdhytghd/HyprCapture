@@ -3,6 +3,7 @@
 
 #include "ui/clipboard_utils.hpp"
 #include "ui/i18n.hpp"
+#include "ui/screenshot_notification.hpp"
 
 #include <LayerShellQt/Window>
 
@@ -326,6 +327,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
                       "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,242); border: 1px solid rgba(%4,%5,%6,90); border-radius: 7px; }"
                       "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; border-radius: 5px; text-align: left; }"
                       "#thumbnailOpenWithMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; border-radius: 5px; text-align: left; }"
+                      "#thumbnailMenu QPushButton:disabled { color: rgba(%4,%5,%6,100); }"
                       "#thumbnailMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }"
                       "#thumbnailOpenWithMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }")
                       .arg(bg.red()).arg(bg.green()).arg(bg.blue()).arg(fg.red()).arg(fg.green()).arg(fg.blue()).arg(highlight.red()).arg(highlight.green()).arg(highlight.blue()));
@@ -356,17 +358,18 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
             callback();
         });
         menuLayout->addWidget(buttonWidget);
+        return buttonWidget;
     };
-    addAction(hyprcapture::ui::uiText("Open"), [this] {
+    m_fileButtons.push_back(addAction(hyprcapture::ui::uiText("Open"), [this] {
         if (!m_path.isEmpty() && openPath(m_path))
             close();
-    });
-    addAction(hyprcapture::ui::uiText("Open with"), [this] {
+    }));
+    m_fileButtons.push_back(addAction(hyprcapture::ui::uiText("Open with"), [this] {
         if (m_openWithPanel)
             m_openWithPanel->setVisible(!m_openWithPanel->isVisible());
         applyLayerSize();
-    }, false);
-    addAction(hyprcapture::ui::uiText(m_copyFile ? "Copy file" : "Copy image"), [this] {
+    }, false));
+    auto* copyButton = addAction(hyprcapture::ui::uiText(m_copyFile ? "Copy file" : "Copy image"), [this] {
         // Native HDR painting leaves the QLabel empty; retain its raster fallback.
         const auto currentPixmap = m_dragPreview;
         if (m_copyFile && !m_path.isEmpty())
@@ -374,12 +377,26 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
         else if (!currentPixmap.isNull())
             hyprcapture::ui::copyPixmapToClipboard(currentPixmap);
     });
-    addAction(hyprcapture::ui::uiText("Show in folder"), [this] {
+    m_saveButton = addAction(hyprcapture::ui::uiText("Save"), [this] {
+        if (!m_saveCapture) return;
+        if (!m_saveCapture->save()) {
+            hyprcapture::ui::showNotification(m_saveCapture->defaults.notificationBackend,
+                hyprcapture::ui::uiText("Save"), hyprcapture::ui::uiText(m_saveCapture->error));
+            return;
+        }
+        refreshSaveActions();
+        hyprcapture::ui::showScreenshotNotification(m_saveCapture->defaults, m_saveCapture->defaults.mode,
+                                                   m_saveCapture->metadata, m_path);
+        emit captureSaved();
+    });
+    m_saveButton->setObjectName("thumbnailSave");
+    m_saveButton->hide();
+    m_fileButtons.push_back(addAction(hyprcapture::ui::uiText("Show in folder"), [this] {
         if (!m_path.isEmpty())
             openPath(QFileInfo(m_path).absolutePath());
-    });
-    if (canDeleteThumbnailPath(m_path, m_deleteRoot))
-        addAction(hyprcapture::ui::uiText("Delete"), [this] { deleteAndClose(); });
+    }));
+    m_deleteButton = addAction(hyprcapture::ui::uiText("Delete"), [this] { deleteAndClose(); });
+    m_deleteButton->setVisible(canDeleteThumbnailPath(m_path, m_deleteRoot));
     addAction(hyprcapture::ui::uiText("Close"), [this] { close(); });
     m_menuPanel->setFixedSize(m_menuPanel->sizeHint());
 
@@ -438,6 +455,23 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     m_imageLabel->raise();
     layout->addWidget(m_card, 0, Qt::AlignRight);
 
+    // Use the same action buttons and styling as the existing menu.
+    m_actionRow = new QWidget(this);
+    m_actionRow->setObjectName("thumbnailMenu");
+    m_actionRow->setAttribute(Qt::WA_StyledBackground);
+    auto* actions = new QHBoxLayout(m_actionRow);
+    actions->setContentsMargins(6, 6, 6, 6);
+    actions->setSpacing(2);
+    auto* quickCopy = new QPushButton(hyprcapture::ui::uiText("Copy image"), m_actionRow);
+    m_quickSaveButton = new QPushButton(hyprcapture::ui::uiText("Save"), m_actionRow);
+    m_quickSaveButton->setObjectName("thumbnailQuickSave");
+    connect(quickCopy, &QPushButton::clicked, copyButton, &QPushButton::click);
+    connect(m_quickSaveButton, &QPushButton::clicked, m_saveButton, &QPushButton::click);
+    actions->addWidget(quickCopy);
+    actions->addWidget(m_quickSaveButton);
+    layout->addWidget(m_actionRow, 0, Qt::AlignRight);
+    m_actionRow->hide();
+
     adjustSize();
     winId();
     if (targetScreen && windowHandle())
@@ -464,6 +498,35 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
         resetSwipe();
         emit swipeResetStarted();
     });
+}
+
+void ResultThumbnail::setSaveCapture(std::shared_ptr<hyprcapture::ui::CaptureSave> capture) {
+    m_saveCapture = std::move(capture);
+    refreshSaveActions();
+}
+
+void ResultThumbnail::refreshSaveActions() {
+    if (!m_saveCapture) return;
+    const bool saved = !m_saveCapture->savedPath.isEmpty();
+    m_actionRow->show();
+    m_saveButton->show();
+    m_saveButton->setEnabled(!saved && !m_saveCapture->image.isNull() &&
+        (m_saveCapture->defaults.screenshotFormat != "heic" || !m_saveCapture->hdrImage.isNull()));
+    m_quickSaveButton->setEnabled(m_saveButton->isEnabled());
+    if (saved) {
+        m_path = m_saveCapture->savedPath;
+        m_dragPath.clear();
+        m_deleteRoot = QString::fromStdString(hyprcapture::expandUserPath(m_saveCapture->defaults.saveDir).string());
+        if (m_saveCapture->defaults.screenshotFormat == "heic" && m_saveCapture->defaults.hdrDragFormat == "sdr") {
+            auto defaults = m_saveCapture->defaults;
+            defaults.save = true;
+            m_dragPath = hyprcapture::ui::sdrCaptureOutputPath(defaults, m_path);
+        }
+    }
+    for (auto* button : m_fileButtons) button->setEnabled(saved);
+    m_deleteButton->setVisible(saved && canDeleteThumbnailPath(m_path, m_deleteRoot));
+    m_menuPanel->setFixedSize(m_menuPanel->sizeHint());
+    applyLayerSize();
 }
 
 ResultThumbnail::~ResultThumbnail() = default;
@@ -531,7 +594,7 @@ void ResultThumbnail::mouseMoveEvent(QMouseEvent* event) {
 void ResultThumbnail::mouseReleaseEvent(QMouseEvent* event) {
     if (m_transcodeProgressActive)
         return;
-    if (event->button() == Qt::LeftButton && !m_dragMoved && !m_path.isEmpty() && openPath(m_path))
+    if ((!m_saveCapture || !m_saveCapture->savedPath.isEmpty()) && event->button() == Qt::LeftButton && !m_dragMoved && !m_path.isEmpty() && openPath(m_path))
         close();
 }
 

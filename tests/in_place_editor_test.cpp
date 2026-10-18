@@ -970,8 +970,10 @@ class InPlaceEditorTest final : public QObject {
         auto* previousCancel = overlay.findChild<QAbstractButton*>(QStringLiteral("captureCancel"));
         QVERIFY(confirm && confirm->isVisible());
         QVERIFY(cancel && cancel->isVisible());
+        auto* manualSave = editor->findChild<QAbstractButton*>(QStringLiteral("annotationSave"));
+        QVERIFY(manualSave && manualSave->isVisible());
         QVERIFY(previousCancel && !previousCancel->isVisible());
-        for (const char* oldOutput : {"annotationCopy", "annotationSave", "annotationPin"}) {
+        for (const char* oldOutput : {"annotationCopy", "annotationPin"}) {
             auto* button = editor->findChild<QAbstractButton*>(QString::fromLatin1(oldOutput));
             QVERIFY(!button || !button->isVisible());
         }
@@ -1832,7 +1834,52 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(editor->resultImage(), original);
     }
 
+    void manualSaveOverridesDisabledSave() {
+        QTemporaryDir output;
+        QVERIFY(output.isValid());
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
+        defaults.inPlaceEditToolbar = true;
+        defaults.save = false;
+        defaults.clipboard = false;
+        defaults.showThumbnail = false;
+        defaults.screenshotNotification = false;
+        defaults.saveDir = output.path().toStdString();
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        QSignalSpy finishing(&overlay, &CaptureOverlay::finishingStarted);
+        overlay.show();
+        QTest::qWait(30);
+        QTest::mouseClick(&overlay, Qt::LeftButton, Qt::NoModifier, QPoint(150, 150));
+        auto* editor = overlay.findChild<AnnotationEditor*>("inPlaceEditor");
+        QVERIFY(editor);
+        QTRY_VERIFY(editor->isVisible());
+        auto* canvas = editor->findChild<QWidget*>("annotationCanvas");
+        QVERIFY(canvas);
+        const auto original = editor->resultImage();
+        QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(150, 140));
+        QTest::mouseMove(canvas, QPoint(200, 160));
+        QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, QPoint(200, 160));
+        const auto expected = editor->resultImage().convertToFormat(QImage::Format_RGBA8888);
+        QVERIFY(editor->resultImage() != original);
+        QVERIFY(clickEditorAction(*editor, "annotationSave"));
+        QTRY_COMPARE_WITH_TIMEOUT(finishing.count(), 1, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.isVisible(), 2000);
+        const auto files = QDir(output.path()).entryList(QDir::Files);
+        QCOMPARE(files.size(), 1);
+        QCOMPARE(QImage(output.filePath(files.front())).convertToFormat(QImage::Format_RGBA8888), expected);
+        QVERIFY(!defaults.save); // Only the overlay's per-capture copy changed.
+        QTest::qWait(30);
+    }
+
+    void failedSavePreservesEditorAndAnnotations_data() {
+        QTest::addColumn<bool>("manual");
+        QTest::newRow("automatic-confirmation") << false;
+        QTest::newRow("manual-save") << true;
+    }
+
     void failedSavePreservesEditorAndAnnotations() {
+        QFETCH(bool, manual);
         QTemporaryDir output;
         QVERIFY(output.isValid());
         const QString blockerPath = output.filePath(QStringLiteral("not-a-directory"));
@@ -1844,6 +1891,7 @@ class InPlaceEditorTest final : public QObject {
         defaults.mode = hyprcapture::CaptureMode::Window;
         defaults.windowBackground = hyprcapture::WindowBackground::Transparent;
         defaults.inPlaceEditToolbar = true;
+        defaults.save = !manual;
         defaults.clipboard = false;
         defaults.showThumbnail = false;
         defaults.screenshotNotification = false;
@@ -1859,7 +1907,7 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(editor);
         QTRY_VERIFY(editor->isVisible());
         auto* canvas = editor->findChild<QWidget*>(QStringLiteral("annotationCanvas"));
-        auto* save = editor->findChild<QAbstractButton*>(QStringLiteral("annotationConfirm"));
+        auto* save = editor->findChild<QAbstractButton*>(manual ? QStringLiteral("annotationSave") : QStringLiteral("annotationConfirm"));
         QVERIFY(canvas);
         QVERIFY(save);
         const QImage original = editor->resultImage();

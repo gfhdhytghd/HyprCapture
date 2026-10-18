@@ -1,3 +1,4 @@
+#include "ui/capture_output.hpp"
 #include "ui/timing.hpp"
 #include "ui/mapped_image.hpp"
 #include "ui/scroll_capture.hpp"
@@ -150,16 +151,6 @@ constexpr int kMaxSessionWindows = 512;
 constexpr int kMaxRecordCountdownSeconds = 60;
 constexpr int kThumbnailPreviewMaxWidth = 720;
 constexpr int kThumbnailPreviewMaxHeight = 480;
-
-struct CaptureOutputResult {
-    QString savedPath;
-    QString saveError;
-    QString sdrPath;
-    QString restoreClipboardPath;
-    bool    showThumbnail = false;
-    bool    clipboardRequested = false;
-    bool    clipboardCopied = false;
-};
 
 struct DispatchCommandResult {
     bool    success = false;
@@ -486,6 +477,11 @@ QString recordTemplateWithFormat(const std::string& filenameTemplate, const QStr
 }
 
 using hyprcapture::ui::traceTiming;
+using hyprcapture::ui::CaptureOutputResult;
+using hyprcapture::ui::savePng;
+using hyprcapture::ui::plannedCaptureOutputPath;
+using hyprcapture::ui::sdrCaptureOutputPath;
+using hyprcapture::ui::writeCaptureOutput;
 using hyprcapture::ui::ScopedUiTiming;
 
 void applyHdrWatermark(QImage& image, const hyprcapture::CaptureDefaults& defaults) {
@@ -495,26 +491,6 @@ void applyHdrWatermark(QImage& image, const hyprcapture::CaptureDefaults& defaul
     hyprcapture::ui::applyWatermark(layer, defaults);
     QPainter painter(&image);
     painter.drawImage(QPoint(0, 0), hyprcapture::ui::sdrToHdr(layer));
-}
-
-bool savePng(const QImage& image, const QString& path) {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::NewOnly, QFileDevice::ReadOwner | QFileDevice::WriteOwner))
-        return false;
-    if (!file.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
-        file.remove();
-        return false;
-    }
-
-    QImageWriter writer(&file, "PNG");
-    writer.setQuality(75);
-    QImage tagged = image;
-    tagged.setColorSpace(QColorSpace::SRgb);
-    if (!writer.write(tagged)) {
-        file.remove();
-        return false;
-    }
-    return true;
 }
 
 bool writePrivateTextFile(const QString& path, const QByteArray& bytes) {
@@ -640,25 +616,6 @@ DispatchCommandResult dispatchRecordingStop() {
     return evalHyprcaptureLuaFunction(QStringLiteral("record_stop"));
 }
 
-QString uniqueOutputPath(const QDir& dir, const QString& rawFilename) {
-    QFileInfo info(QFileInfo(rawFilename).fileName());
-    QString   base = info.completeBaseName();
-    QString   suffix = info.suffix();
-    if (base.isEmpty())
-        base = QStringLiteral("Screenshot");
-    if (suffix.isEmpty())
-        suffix = QStringLiteral("png");
-
-    for (int i = 0; i < 1000; ++i) {
-        const QString filename = i == 0 ? QStringLiteral("%1.%2").arg(base, suffix) : QStringLiteral("%1-%2.%3").arg(base).arg(i).arg(suffix);
-        const QString path = dir.filePath(filename);
-        if (!QFileInfo::exists(path) && (suffix != "heic" || !QFileInfo::exists(dir.filePath(base + (i == 0 ? QString{} : QStringLiteral("-%1").arg(i)) + ".png"))))
-            return path;
-    }
-
-    return dir.filePath(QStringLiteral("%1-%2.%3").arg(base).arg(QDateTime::currentMSecsSinceEpoch()).arg(suffix));
-}
-
 void cleanupArtifactFiles(const QStringList& paths) {
     QStringList dirs;
     for (const QString& path : paths) {
@@ -676,83 +633,6 @@ void cleanupArtifactFiles(const QStringList& paths) {
         QDir parent(QFileInfo(dir).absolutePath());
         parent.rmdir(QFileInfo(dir).fileName());
     }
-}
-
-QString sdrCaptureOutputPath(const hyprcapture::CaptureDefaults& defaults, const QString& outputPath) {
-    if (defaults.save && defaults.hdrSaveSdr)
-        return QFileInfo(outputPath).absolutePath() + "/" + QFileInfo(outputPath).completeBaseName() + ".png";
-    const QString runtime = hyprcapture::ui::runtimeFile("sdr-drag", ".png");
-    if (runtime.isEmpty()) return {};
-    return QFileInfo(runtime).dir().filePath("sdr-drag-" + QString::number(qHash(outputPath)) + ".png");
-}
-
-CaptureOutputResult writeCaptureOutput(const QImage& image,
-                                        const QImage& hdrImage,
-                                        const hyprcapture::CaptureDefaults& defaults,
-                                        const hyprcapture::ui::ClipboardSnapshotData& clipboardSnapshot,
-                                        const QString& outputPath,
-                                        const QString& restoreClipboardPath) {
-    CaptureOutputResult result;
-    result.showThumbnail = defaults.showThumbnail;
-
-    if (defaults.clipboard && defaults.showThumbnail && !restoreClipboardPath.isEmpty()) {
-        QElapsedTimer timer;
-        timer.start();
-        if (hyprcapture::ui::saveClipboardSnapshotDataToPath(clipboardSnapshot, restoreClipboardPath))
-            result.restoreClipboardPath = restoreClipboardPath;
-        traceTiming(QStringLiteral("clipboard_snapshot_save"), timer.elapsed());
-    }
-
-    const bool hdr = defaults.screenshotFormat == "heic";
-    const bool needSdrFile = hdr && ((defaults.save && defaults.hdrSaveSdr) ||
-                                   (defaults.showThumbnail && defaults.hdrDragFormat == "sdr"));
-    if (needSdrFile) {
-        result.sdrPath = sdrCaptureOutputPath(defaults, outputPath);
-        if (!savePng(image, result.sdrPath)) {
-            result.saveError = QStringLiteral("Could not save the SDR screenshot copy.");
-            return result;
-        }
-    }
-
-    if (!outputPath.isEmpty()) {
-        const bool saved = hdr ? hyprcapture::ui::saveHdrHeic(hdrImage, outputPath, &result.saveError, image)
-                               : savePng(image, outputPath);
-        if (saved) result.savedPath = outputPath;
-    }
-
-    result.clipboardRequested = defaults.clipboard;
-    if (defaults.clipboard) {
-        if (hdr && defaults.hdrClipboardFormat == "heic") {
-            QString path = result.savedPath;
-            const bool temporary = path.isEmpty();
-            if (temporary) {
-                path = hyprcapture::ui::runtimeFile("clipboard-hdr", ".heic");
-                if (!hyprcapture::ui::saveHdrHeic(hdrImage, path, &result.saveError, image)) return result;
-            }
-            result.clipboardCopied = hyprcapture::ui::copyImageFileToClipboardDetached(path, QStringLiteral("image/heic"), temporary);
-            if (temporary && !result.clipboardCopied) QFile::remove(path);
-        } else {
-            result.clipboardCopied = !hdr && !result.savedPath.isEmpty()
-                ? hyprcapture::ui::copyImageFileToClipboardDetached(result.savedPath)
-                : hyprcapture::ui::copyImageToClipboardDetached(image);
-        }
-        if (!result.clipboardCopied && hdr && defaults.hdrClipboardFormat == "heic")
-            result.saveError = QStringLiteral("Could not copy HDR HEIC to the clipboard. Check that wl-copy is installed.");
-    }
-
-    return result;
-}
-
-QString plannedCaptureOutputPath(const hyprcapture::CaptureDefaults& defaults, const QString& windowClass, const QString& windowTitle) {
-    if (!defaults.save)
-        return {};
-
-    const auto dirPath = hyprcapture::expandUserPath(defaults.saveDir);
-    QDir       dir(QString::fromStdString(dirPath.string()));
-    if (!dir.exists())
-        dir.mkpath(".");
-    const QString filename = QString::fromStdString(hyprcapture::makeTimestampedFilename(defaults.filenameTemplate, windowClass.toStdString(), windowTitle.toStdString()));
-    return uniqueOutputPath(dir, QFileInfo(filename).completeBaseName() + (defaults.screenshotFormat == "heic" ? ".heic" : ".png"));
 }
 
 QString thumbnailTargetPath(const hyprcapture::CaptureDefaults& defaults, const QString& plannedOutputPath) {
@@ -5259,6 +5139,12 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
         connect(m_editor,&AnnotationEditor::scrollRequested,this,[this](const QPointF& p,double d,int discrete,bool finger,bool inverted) {
             if(m_scrollController) m_scrollController->scroll(p,d,discrete,finger,inverted);
         });
+        connect(m_editor, &AnnotationEditor::saveRequested, this, [this] {
+            if (m_finishing) return;
+            m_defaults.save = true;
+            if (m_scrolling && m_scrollController) m_scrollController->finish();
+            else exportInPlaceImage();
+        });
         connect(m_editor, &AnnotationEditor::confirmRequested, this,
                 [this] { if(m_scrolling && m_scrollController) m_scrollController->finish(); else exportInPlaceImage(); });
         connect(m_editor,&AnnotationEditor::cancelRequested,this,[this] { if(m_scrolling && m_scrollController) m_scrollController->cancel(); else cancelCapture(); });
@@ -5574,7 +5460,7 @@ void CaptureOverlay::renderAndSaveCapture() {
     const QString restoreClipboardPath =
         (m_defaults.clipboard && m_defaults.showThumbnail) ? hyprcapture::ui::runtimeFile("clipboard", ".json") : QString{};
     bool thumbnailStarted = false;
-    if (m_defaults.showThumbnail && !edited) {
+    if (m_defaults.showThumbnail && m_defaults.save && !edited) {
         const QString previewPath = saveThumbnailPreview(image);
         if (!previewPath.isEmpty()) {
             showThumbnail(previewPath, targetPath, restoreClipboardPath, hdrImage);
@@ -5651,7 +5537,7 @@ void CaptureOverlay::saveImage(const QImage& image,
                         hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
                     if (result.showThumbnail && !thumbnailStarted)
                         showThumbnail(defaults.screenshotFormat == "heic" ? saveThumbnailPreview(image) : result.savedPath,
-                                      result.savedPath, result.restoreClipboardPath, hdrImage);
+                                      result.savedPath, result.restoreClipboardPath, hdrImage, image);
                     qApp->quit();
                 };
                 if (edited) {
@@ -5667,7 +5553,7 @@ void CaptureOverlay::saveImage(const QImage& image,
     worker->start();
 }
 
-void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath, const QImage& hdrPreview) {
+void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath, const QImage& hdrPreview, const QImage& fullImage) {
     if (previewPath.isEmpty())
         return;
 
@@ -5676,6 +5562,30 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
     if (!hdrPath.isEmpty()) args << "--thumbnail-hdr-preview" << hdrPath;
     args << "--thumbnail-monitor" << qString(m_defaults.thumbnailMonitor);
     args << "--language" << qString(m_defaults.language);
+    hyprcapture::CaptureSession saveSession;
+    saveSession.id = "thumbnail-save";
+    saveSession.defaults = m_defaults;
+    saveSession.defaults.mode = m_mode;
+    const auto metadata = resolvedFilenameMetadata();
+    saveSession.filenameMetadata = metadata;
+    // Expand metadata and time once, at capture time. Escape percent signs so
+    // strftime does not interpret a title containing percent on manual save.
+    QString filename = QString::fromStdString(hyprcapture::makeTimestampedFilename(
+        m_defaults.filenameTemplate, metadata.windowClass, metadata.windowTitle));
+    filename.replace("%", "%%");
+    saveSession.defaults.filenameTemplate = filename.toStdString();
+    const auto requestPath = hyprcapture::ui::runtimeFile("thumbnail-save", ".json");
+    QString fullSdrPath, fullHdrPath;
+    if (!m_defaults.save && m_defaults.screenshotFormat == "heic") {
+        fullSdrPath = hyprcapture::ui::runtimeFile("thumbnail-save-sdr", ".png");
+        if (!hyprcapture::ui::savePrivatePng(fullImage, fullSdrPath)) fullSdrPath.clear();
+        fullHdrPath = hyprcapture::ui::saveHdrThumbnail(hdrPreview, true);
+    }
+    if (writePrivateTextFile(requestPath, QByteArray::fromStdString(hyprcapture::encodeSessionJson(saveSession)))) {
+        args << "--thumbnail-save-session" << requestPath;
+        if (!fullSdrPath.isEmpty()) args << "--thumbnail-save-sdr" << fullSdrPath;
+        if (!fullHdrPath.isEmpty()) args << "--thumbnail-save-hdr" << fullHdrPath;
+    }
     if (!targetPath.isEmpty()) {
         args << "--thumbnail-target" << targetPath;
         if (m_defaults.screenshotFormat == "heic" && m_defaults.hdrDragFormat == "sdr") {
@@ -5688,8 +5598,10 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
         args << "--thumbnail-delete-root" << deleteRoot;
     if (!restoreClipboardPath.isEmpty())
         args << "--restore-clipboard" << restoreClipboardPath;
-    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args) && !hdrPath.isEmpty())
-        QFile::remove(hdrPath);
+    if (!QProcess::startDetached(QCoreApplication::applicationFilePath(), args)) {
+        for (const auto& path : {hdrPath, requestPath, fullSdrPath, fullHdrPath})
+            if (!path.isEmpty()) QFile::remove(path);
+    }
     traceTiming(QStringLiteral("thumbnail_started"));
     endHymissionCaptureInputSuppression();
 }
