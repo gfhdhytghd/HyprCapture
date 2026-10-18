@@ -508,7 +508,8 @@ void ResultThumbnail::setSaveCapture(std::shared_ptr<hyprcapture::ui::CaptureSav
 void ResultThumbnail::refreshSaveActions() {
     if (!m_saveCapture) return;
     const bool saved = !m_saveCapture->savedPath.isEmpty();
-    m_actionRow->show();
+    // The quick row only offers what an unsaved capture still needs.
+    m_actionRow->setVisible(!saved);
     m_saveButton->show();
     m_saveButton->setEnabled(!saved && !m_saveCapture->image.isNull() &&
         (m_saveCapture->defaults.screenshotFormat != "heic" || !m_saveCapture->hdrImage.isNull()));
