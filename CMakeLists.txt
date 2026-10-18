@@ -389,6 +389,22 @@ if(BUILD_TESTING)
   add_test(NAME hyprcapture-supervised-process-test COMMAND hyprcapture-supervised-process-test)
   set_tests_properties(hyprcapture-supervised-process-test PROPERTIES TIMEOUT 10)
 
+  add_executable(hyprcapture-capture-options-test tests/capture_options_test.cpp src/shared/config.cpp src/shared/protocol.cpp)
+  target_include_directories(hyprcapture-capture-options-test PRIVATE src ${LUA_INCLUDE_DIRS})
+  target_link_directories(hyprcapture-capture-options-test PRIVATE ${LUA_LIBRARY_DIRS})
+  target_link_libraries(hyprcapture-capture-options-test PRIVATE ${LUA_LIBRARIES} nlohmann_json::nlohmann_json)
+  target_compile_options(hyprcapture-capture-options-test PRIVATE -UNDEBUG)
+  add_test(NAME capture-options COMMAND hyprcapture-capture-options-test)
+
+  add_executable(hyprcapture-save-action-test tests/save_action_test.cpp src/ui/capture_output.cpp
+    src/ui/result_thumbnail.cpp src/ui/screenshot_notification.cpp src/ui/i18n.cpp src/shared/config.cpp)
+  target_include_directories(hyprcapture-save-action-test PRIVATE src ${GIO_INCLUDE_DIRS})
+  target_link_libraries(hyprcapture-save-action-test PRIVATE hyprcapture-hdr hyprcapture-hdr-backdrop
+    Qt6::Widgets Qt6::Svg Qt6::DBus LayerShellQt::Interface ${GIO_LIBRARIES})
+  target_compile_options(hyprcapture-save-action-test PRIVATE -UNDEBUG)
+  add_test(NAME save-action COMMAND hyprcapture-save-action-test)
+  set_tests_properties(save-action PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
+
   add_executable(hyprcapture-config-test
     tests/config_test.cpp
     src/shared/config.cpp
@@ -588,6 +604,9 @@ if(BUILD_TESTING)
 endif()
 foreach(hdr_target IN LISTS hdr_targets)
   get_target_property(hdr_sources ${hdr_target} SOURCES)
+  if("src/ui/capture_overlay.cpp" IN_LIST hdr_sources)
+    target_sources(${hdr_target} PRIVATE src/ui/capture_output.cpp)
+  endif()
   if("src/ui/annotation_editor.cpp" IN_LIST hdr_sources)
     if(hdr_target STREQUAL "hyprcapture-in-place-editor-test")
       target_link_libraries(${hdr_target} PRIVATE hyprcapture-hdr hyprcapture-hdr-backdrop-testing)

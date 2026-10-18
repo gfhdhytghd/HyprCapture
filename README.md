@@ -552,6 +552,42 @@ hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.record_toggle)
 
 Do not use `hyprctl dispatch hyprcapture:open` as a Lua fallback. Hyprland's Lua config dispatcher parser treats `hyprcapture:open` as Lua syntax. Use `hl.plugin.hyprcapture.open()` once the plugin is loaded, or bind a direct helper command during development while testing an older loaded plugin.
 
+`open`, `open_editor`, and `quick` accept an optional second table with boolean
+`save` and `clipboard` overrides. Omitted fields retain their global defaults;
+these choices apply only to that capture. Pass `nil` as the mode to keep
+`default_mode`. Unknown keys and non-boolean values raise a Lua error.
+
+```lua
+-- Copy only; keep the thumbnail available for saving later.
+hl.bind("SUPER + ALT + c", function()
+    hl.plugin.hyprcapture.open("region", { save = false, clipboard = true })
+end)
+-- Save and copy this capture, regardless of the global save setting.
+hl.bind("SUPER + ALT + s", function()
+    hl.plugin.hyprcapture.open("region", { save = true, clipboard = true })
+end)
+```
+
+The equivalent generic Lua entry is
+`hl.plugin.hyprcapture.dispatch("open", "region", { save = false, clipboard = true })`.
+Its string form also accepts `"region save=false clipboard=true"` (`1`/`0` are
+accepted). This Git HEAD build does not register legacy `hyprcapture:*`
+dispatchers; use the Lua functions above.
+
+The thumbnail and its action menu have **Save** beside **Copy image**. With `save = false`,
+Save writes the complete capture to `save_dir` using `filename_template` and the
+same SDR PNG / HDR HEIC encoder as automatic saving, including `hdr_save_sdr`.
+Open, Show in folder and Delete become available after saving. Save is disabled
+for an already saved capture, including thumbnails shown on multiple monitors.
+Private temporary files used for clipboard, drag and preview are not persistent
+screenshots in `save_dir`.
+
+The editor toolbar's **Save** exports the current annotations and finishes the
+capture, even with `save = false`; clipboard behavior follows this capture's
+setting. Like the existing confirmation path, a new edited capture receives a
+unique filename instead of overwriting an earlier screenshot. Failed saving
+keeps the editor open for retry.
+
 The old misspelled `fushion_mode` key is still accepted as a compatibility alias, but new configs should use `fusion_mode`.
 
 ### Capture options

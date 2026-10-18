@@ -6,6 +6,7 @@
 #include "ui/capture_overlay.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/result_thumbnail.hpp"
+#include "ui/capture_output.hpp"
 #include "ui/hdr_thumbnail.hpp"
 #include "ui/i18n.hpp"
 #include "ui/pinned_image.hpp"
@@ -460,6 +461,15 @@ class ResultThumbnailCollection {
         connectSwipeSynchronization();
     }
 
+    void setSaveCapture(const std::shared_ptr<hyprcapture::ui::CaptureSave>& capture) {
+        for (const auto& thumbnail : m_thumbnails) {
+            thumbnail->setSaveCapture(capture);
+            QObject::connect(thumbnail.get(), &ResultThumbnail::captureSaved, thumbnail.get(), [this] {
+                for (const auto& other : m_thumbnails) other->refreshSaveActions();
+            });
+        }
+    }
+
     void setHdrImage(const QImage& image) {
         for (const auto& thumbnail : m_thumbnails) thumbnail->setHdrImage(image);
     }
@@ -902,6 +912,9 @@ int main(int argc, char** argv) {
         {"session-json", "Compositor session metadata.", "json", "{}"},
         {"session-json-file", "Private compositor session metadata file.", "path"},
         {"session-json-stdin", "Receive a private session filename from the compositor startup socket."},
+        {"thumbnail-save-session", "Private capture settings for manual save.", "path"},
+        {"thumbnail-save-sdr", "Full resolution SDR capture for manual save.", "path"},
+        {"thumbnail-save-hdr", "Full resolution HDR capture for manual save.", "path"},
         {"thumbnail-hdr-preview", "Private HDR thumbnail pixels.", "path"},
         {"thumbnail-window", "Show a normal thumbnail window for an image path.", "path"},
         {"thumbnail-target", "Path opened or deleted by a thumbnail preview.", "path"},
@@ -1002,6 +1015,28 @@ int main(int argc, char** argv) {
                                              thumbnailScreens(parser.value("thumbnail-monitor")));
         thumbnails.setHdrImage(hyprcapture::ui::takeHdrThumbnail(parser.value("thumbnail-hdr-preview")));
         thumbnails.setDragPath(parser.value("thumbnail-drag-target"));
+        const auto saveRequest = parser.value("thumbnail-save-session");
+        if (hyprcapture::ui::isPrivateRuntimeFile(saveRequest, 8 * 1024 * 1024)) {
+            QFile file(saveRequest);
+            if (file.open(QIODevice::ReadOnly) && file.size() <= 8 * 1024 * 1024) {
+                const auto session = hyprcapture::decodeSessionJson(file.readAll().toStdString());
+                file.close();
+                QFile::remove(saveRequest);
+                if (session) {
+                    auto capture = std::make_shared<hyprcapture::ui::CaptureSave>();
+                    capture->defaults = session->defaults;
+                    if (session->filenameMetadata) capture->metadata = *session->filenameMetadata;
+                    if (capture->defaults.save) capture->savedPath = thumbnailTarget;
+                    else {
+                        const auto sdr = parser.value("thumbnail-save-sdr");
+                        capture->image = hyprcapture::ui::isPrivateRuntimeFile(sdr, 512LL * 1024 * 1024) ? QImage(sdr) : QImage(thumbnailTarget);
+                        if (hyprcapture::ui::isPrivateRuntimePath(sdr)) QFile::remove(sdr);
+                        capture->hdrImage = hyprcapture::ui::takeHdrThumbnail(parser.value("thumbnail-save-hdr"), true);
+                    }
+                    thumbnails.setSaveCapture(capture);
+                }
+            }
+        }
         thumbnails.show();
         return app.exec();
     }

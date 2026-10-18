@@ -69,6 +69,7 @@ class AnnotationEditor final : public QWidget {
     void imageDisplayGeometryChanged();
     void scrollRequested(const QPointF& globalPosition, double delta, int discrete, bool finger, bool inverted);
     void confirmRequested();
+    void saveRequested();
     void cancelRequested();
     void pinRequested();
     void reselectRequested();

@@ -281,7 +281,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     bool windowCaptureAvailable() const;
     void updateStatus();
     void relayoutToolbar();
-    void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath, const QImage& hdrPreview = {});
+    void showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath, const QImage& hdrPreview = {}, const QImage& fullImage = {});
     double overlayOpacity() const;
     void setOverlayOpacity(double opacity);
     void fadeOutThen(std::function<void()> finished);

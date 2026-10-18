@@ -81,6 +81,7 @@ struct CaptureSession {
     std::optional<Point>     cursorPosition;
     std::vector<MonitorInfo> monitors;
     std::vector<WindowInfo>  windows;
+    std::optional<FilenameMetadata> filenameMetadata; // Resolved output metadata for a detached result.
 };
 
 struct RecordingRequest {

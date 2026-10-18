@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ui/hdr_backdrop.hpp"
+#include "ui/capture_output.hpp"
+#include <vector>
 #include <QPixmap>
 #include <QPoint>
 #include <QPointF>
@@ -8,6 +10,7 @@
 #include <QTimer>
 #include <QWidget>
 
+class QPushButton;
 class QLabel;
 class QPixmap;
 class QScreen;
@@ -28,6 +31,8 @@ class ResultThumbnail final : public QWidget {
                     QScreen* targetScreen = nullptr,
                     QWidget* parent = nullptr);
     ~ResultThumbnail() override;
+    void setSaveCapture(std::shared_ptr<hyprcapture::ui::CaptureSave> capture);
+    void refreshSaveActions();
     void setHdrImage(const QImage& image);
     void setDragPath(const QString& path) { m_dragPath = path; }
     void setImagePixmap(const QPixmap& pixmap);
@@ -38,6 +43,7 @@ class ResultThumbnail final : public QWidget {
     void animateSynchronizedSwipeOut(bool deleteRequested);
 
   signals:
+    void captureSaved();
     void swipeOffsetChanged(const QPointF& offset);
     void swipeResetStarted();
     void swipeActionStarted(bool deleteRequested);
@@ -60,6 +66,12 @@ class ResultThumbnail final : public QWidget {
     bool openWithPortal(const QString& path);
     bool openWithApp(const QString& appId, const QString& path);
     void toggleMenu();
+    std::shared_ptr<hyprcapture::ui::CaptureSave> m_saveCapture;
+    QPushButton* m_saveButton = nullptr;
+    QPushButton* m_quickSaveButton = nullptr;
+    QWidget* m_actionRow = nullptr;
+    QPushButton* m_deleteButton = nullptr;
+    std::vector<QPushButton*> m_fileButtons;
     void setMenuVisible(bool visible);
     void applyLayerSize();
     void startFileDrag();
