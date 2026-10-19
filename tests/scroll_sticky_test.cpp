@@ -267,6 +267,9 @@ int main(int argc, char** argv) {
         for(int offset : {12,-30}) {
             const auto [displayed,raw]=issueFrame(offset);
             const auto result=issue.append(displayed,raw,floatPlane(raw));
+            if (result.status!=(offset==12 ? Status::Relocated : Status::Appended))
+                std::cerr<<"unpin step="<<step<<" offset="<<offset<<" viewport="<<issue.layout().viewportY
+                         <<" top="<<issue.layout().topOcclusion<<" status="<<int(result.status)<<" reason="<<result.reason<<'\n';
             require(result.status==(offset==12 ? Status::Relocated : Status::Appended),
                     "unpinning top chrome allows new rows above the initial capture");
         }

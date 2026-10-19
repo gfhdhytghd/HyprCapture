@@ -28,7 +28,12 @@ struct ScrollSession {
   std::deque<ScrollInput> pending;
   Time::steady_tp replayStarted;
   uint32_t replayOriginMs = 0, replayClockOffsetMs = 0;
-  bool draining = false;
+  bool draining = false, paced = false;
+  ScrollPacing pacing;
+  ScrollMotionSnapshot motionTotals;
+  bool motionMetadata = false;
+  double safeHeight = 0;
+  Time::steady_tp lastDelivered = Time::steadyNow(), lastMovement = Time::steadyNow();
   std::unique_ptr<WindowStreamSender> sender;
   WindowStreamPboReadbackState pbo;
   SP<CEventLoopTimer> timer;
@@ -155,6 +160,18 @@ void scrollDeliver(ScrollSession &s, const ScrollInput &input) {
         input.event.source, input.event.relativeDirection);
     g_pSeatManager->sendPointerFrame();
   }
+  // Stamp only input which was actually forwarded. Browser-generated momentum
+  // has no new event; its pixel motion is handled by the tracker's velocity.
+  if (input.event.axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
+    const int source = input.event.source == WL_POINTER_AXIS_SOURCE_FINGER ? 1 :
+        input.event.source == WL_POINTER_AXIS_SOURCE_CONTINUOUS ? 2 : input.event.deltaDiscrete ? 0 : 3;
+    const double amount = source == 0 ? input.event.deltaDiscrete / 120.0 : input.event.delta;
+    s.motionTotals.amount[source] += amount;
+    s.motionTotals.travel[source] += std::abs(amount);
+    if (amount)
+      s.motionTotals.lastInputNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+          Time::steadyNow().time_since_epoch()).count();
+  }
   // Keep pointer focus through a touchpad gesture: restoring the overlay after
   // every event splits the gesture. Clicks and motion outside the capture
   // restore overlay hit testing, and a session lock stops the scroll session.
@@ -170,10 +187,38 @@ void scrollInput(ScrollSession &s, ScrollInput input) {
     s.timer->updateTimeout(std::chrono::milliseconds(1));
   }
   scrollNotify(s, {{"event", "motion"}, {"delta", input.event.delta}});
-  if (!s.released || s.draining) {
+  if (s.paced && !s.pending.empty() &&
+      (input.event.delta*s.pending.back().event.delta<0 ||
+       (input.event.delta && input.event.source==WL_POINTER_AXIS_SOURCE_FINGER &&
+        s.pending.back().event.source!=WL_POINTER_AXIS_SOURCE_FINGER)))
+    s.pending.clear();
+  // Native touchpad motion must retain its cadence and axis-stop framing.
+  // Matching runs asynchronously; it must never gate each finger event.
+  if (s.released && input.event.source == WL_POINTER_AXIS_SOURCE_FINGER) {
+    scrollDeliver(s,input);
+    return;
+  }
+  if (s.paced || !s.released || s.draining) {
     if (s.pending.size() >= 256) {
+      // Bounded backpressure: ignore excess momentum rather than ending a
+      // valid capture or replaying a huge delayed flick.
+      if (s.paced) return;
       s.failed = true;
       return;
+    }
+    // Merge consecutive small events while the worker is busy, retaining
+    // axis-stop boundaries. Do not replay hundreds of tiny delayed steps.
+    if (s.paced && !s.pending.empty()) {
+      auto &back = s.pending.back();
+      if (back.native == input.native && back.pointer == input.pointer &&
+          back.event.source == input.event.source &&
+          back.event.relativeDirection == input.event.relativeDirection &&
+          back.event.delta * input.event.delta > 0) {
+        back.event.delta += input.event.delta;
+        back.event.deltaDiscrete += input.event.deltaDiscrete;
+        back.event.timeMs = input.event.timeMs;
+        return;
+      }
     }
     s.pending.push_back(input);
   } else
@@ -218,7 +263,21 @@ int scrollControlReadable(int fd, uint32_t mask, void *data) {
         s.paused = true;
         continue;
       }
+      if (type == "tracking") {
+        const auto now = Time::steadyNow();
+        if (j.value("offset",0.0) != 0) s.lastMovement = now;
+        s.safeHeight = std::clamp(j.value("height",s.target.height*s.scale),96.0,s.target.height*s.scale);
+        // A browser may keep easing toward its wheel target for many frames.
+        // Waiting for zero motion serializes each burst behind that animation.
+        // The sequence guard and render grace exclude pre-input frames; the
+        // remaining60% overlap budget covers its still-moving tail.
+        if (s.paced && j.value("aligned",false) &&
+            now-s.lastDelivered>std::chrono::milliseconds(80))
+          s.pacing.aligned(j.value("sequence",uint64_t(0)),0);
+        continue;
+      }
       if (type == "baseline") {
+        s.paced = j.value("paced", false);
         if (!s.baseline || s.released)
           continue;
         traceTiming("scroll.baseline_ack");
@@ -323,7 +382,37 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     s->paused = true;
     return;
   }
-  if (s->draining) {
+  if (s->paced && s->released) {
+    bool nativeFrame = false;
+    // Capture and stitching are independent. Forward one coalesced batch at
+    // the capture cadence while bounded unacknowledged motion remains safe.
+    for (int n=0; n<8 && !s->pending.empty(); ++n) {
+      auto input = s->pending.front();
+      auto &remainder = s->pending.front();
+      const bool finger = input.event.source == WL_POINTER_AXIS_SOURCE_FINGER;
+      const double allowance = s->pacing.allowance(s->safeHeight?s->safeHeight:s->target.height*s->scale, s->scale, finger, input.event.delta);
+      if (input.event.delta && allowance < .1) break;
+      const double limit = allowance;
+      const double fraction = input.event.delta ? std::min(1.0,limit/std::abs(input.event.delta)) : 1.0;
+      input.event.delta *= fraction;
+      if (input.event.deltaDiscrete) {
+        const int units = std::max(1,int(std::abs(remainder.event.deltaDiscrete)*fraction));
+        input.event.deltaDiscrete = std::clamp(input.event.deltaDiscrete,-units,units);
+        input.event.delta = remainder.event.delta * double(input.event.deltaDiscrete)/remainder.event.deltaDiscrete;
+      }
+      remainder.event.delta -= input.event.delta;
+      remainder.event.deltaDiscrete -= input.event.deltaDiscrete;
+      if (std::abs(remainder.event.delta)<.01 && !remainder.event.deltaDiscrete) s->pending.pop_front();
+      input.event.timeMs = Time::millis(Time::steadyNow());
+      scrollDeliver(*s,input);
+      nativeFrame |= input.native;
+      s->pacing.delivered(s->sequence+2,input.event.delta,finger);
+      if (input.event.delta) s->lastDelivered = Time::steadyNow();
+    }
+    if (nativeFrame) g_pInputManager->onPointerFrame();
+    s->draining = false;
+  }
+  if (s->draining && !s->paced) {
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Time::steadyNow() - s->replayStarted).count();
     bool nativeFrame = false;
     while (!s->pending.empty() && uint32_t(s->pending.front().event.timeMs - s->replayOriginMs) <= elapsed) {
@@ -360,7 +449,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
   LinearCaptureScope linearCapture;
   ScopedTiming tickTiming("scroll.tick");
   auto &pbo = s->pbo;
-  if (auto ready = takeReadyWindowStreamPboFrames(pbo)) {
+  if (auto ready = takeReadyWindowStreamPboFrames(pbo, true)) {
     auto &f = ready->frame;
     if (!s->window && s->transform != 0) {
       const size_t planeBytes = size_t(f.metadata.pixelWidth) * f.metadata.pixelHeight * 4;
@@ -395,6 +484,9 @@ void scrollTick(SP<CEventLoopTimer> timer) {
   }
   // Do not overwrite the baseline before the receiver has installed it.
   if ((s->baseline && !s->released) || pbo.pending) {
+    // Poll completion without holding the compositor through a full HDR
+    // memcpy, and without adding a whole capture interval to each frame.
+    if (pbo.copy.valid()) timer->updateTimeout(std::chrono::milliseconds(1));
     restore();
     return;
   }
@@ -488,6 +580,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
                                  .stride = uint32_t(width * 4),
                                  .format = hdr ? WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR : WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN,
                                  .payloadBytes = uint64_t(width) * height * (hdr ? 12 : 4)};
+  if(s->motionMetadata) meta.scrollMotion=s->motionTotals;
   traceTiming(std::format("scroll.readback_issue seq={} hdr={} bytes={}", meta.sequence, hdr, meta.payloadBytes));
   if (pbo.bytes != meta.payloadBytes || !issueWindowStreamPboReadback(pbo, meta, s->id, *readFramebuffer, cropX,
                                     cropTop, artifact, artifact, hdr ? pbo.framebuffer.get() : nullptr))
@@ -512,6 +605,7 @@ LaunchResult startScrollSessionFromRequestFile(const std::string &path) {
     s->id = j.at("id").get<std::string>();
     s->windowAddress = j.value("windowAddress", std::string{});
     s->hdr = j.value("hdr", false);
+    s->motionMetadata = j.value("motionMetadata", false);
     if (s->id.empty() || s->id.size() > 96)
       throw std::runtime_error("id");
     const auto r = j.at("rect");
