@@ -33,6 +33,7 @@ class QPropertyAnimation;
 class QScreen;
 class QTimer;
 class InlineSelect;
+class PillToggle;
 class AudioMeter;
 class QSlider;
 class QProcess;
@@ -371,6 +372,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     InlineSelect* m_recordFps = nullptr;
     InlineSelect* m_recordDuration = nullptr;
     InlineSelect* m_recordBackend = nullptr;
+    PillToggle*   m_recordCursor = nullptr;
     QLabel*       m_recordWarning = nullptr;
     QWidget* m_dynamicRangeControl = nullptr;
     QPushButton* m_sdrButton = nullptr;
