@@ -1972,16 +1972,19 @@ struct AnnotationEditor::Impl {
         int rowHeight=36;
         for(auto* button:strip) rowHeight=std::max(rowHeight,button->height());
         constexpr int horizontalMargin = 6, verticalMargin = 5, spacing = 2;
+        const auto shown = [](const QAbstractButton* button) { return !button->isHidden(); };
         int naturalWidth = horizontalMargin * 2 - spacing;
         for (auto* button : strip)
-            naturalWidth += button->width() + spacing;
+            if (shown(button)) naturalWidth += button->width() + spacing;
         const int panelWidth = std::max(1, std::min(naturalWidth, availableWidth));
         const int rowWidth = std::max(1, panelWidth - horizontalMargin * 2);
         int x = 0, y = 0;
         for (auto* button : strip) {
+            if (!shown(button)) continue;
             // Keep the final decision controls together when the strip wraps.
             const int requiredWidth = button == cancel
-                ? cancel->width() + confirm->width() + more->width() + spacing * 2
+                ? cancel->width() + confirm->width() + more->width() + spacing * 2 +
+                      (shown(save) ? save->width() + spacing : 0)
                 : button->width();
             if (x && x + requiredWidth > rowWidth) {
                 x = 0;
@@ -2673,6 +2676,11 @@ std::function<HdrAnnotationPreview()> AnnotationEditor::pqPreviewFrameRendererOn
     };
 }
 bool AnnotationEditor::needsHdrAnnotationComposition() const { return m_impl->canvas->needsHdrComposition(); }
+void AnnotationEditor::setSaveActionVisible(bool visible) {
+    if (m_impl->save->isHidden() != visible) return;
+    m_impl->save->setVisible(visible);
+    m_impl->positionToolbar();
+}
 void AnnotationEditor::setHdrEnabled(bool enabled) {
     if (m_impl->canvas->hdrEnabled == enabled) return;
     m_impl->canvas->hdrEnabled = enabled;

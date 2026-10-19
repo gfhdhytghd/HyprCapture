@@ -36,6 +36,8 @@ class AnnotationEditor final : public QWidget {
     std::function<HdrAnnotationPreview()> pqPreviewFrameRendererOn(const QImage& hdrBase, float referenceNits, bool baseOnly = false) const;
     bool needsHdrAnnotationComposition() const;
     void setHdrEnabled(bool enabled);
+    // Save is redundant when confirming already writes the capture.
+    void setSaveActionVisible(bool visible);
     bool hdrEnabled() const;
     void setRegionResizeBounds(const QRect& bounds);
     void replaceCaptureImage(const QImage& image, const QRect& displayRect);
