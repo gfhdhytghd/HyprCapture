@@ -5141,9 +5141,13 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
         });
         connect(m_editor, &AnnotationEditor::saveRequested, this, [this] {
             if (m_finishing) return;
-            m_defaults.save = true;
+            const bool previousSave = std::exchange(m_defaults.save, true);
             if (m_scrolling && m_scrollController) m_scrollController->finish();
-            else exportInPlaceImage();
+            else {
+                exportInPlaceImage();
+                // Nothing started: Capture stays clipboard-only for a retry.
+                if (!m_finishing && !m_hdrExportPending) m_defaults.save = previousSave;
+            }
         });
         connect(m_editor, &AnnotationEditor::confirmRequested, this,
                 [this] { if(m_scrolling && m_scrollController) m_scrollController->finish(); else exportInPlaceImage(); });
@@ -5167,6 +5171,7 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
     m_editor->setGeometry(rect());
     m_editor->setRegionResizeBounds(!m_scrollResult && m_mode == hyprcapture::CaptureMode::Region ? regionCaptureBounds() : QRect());
     m_editor->setHdrEnabled(m_defaults.screenshotFormat == "heic");
+    m_editor->setSaveActionVisible(!m_defaults.save);
     m_editor->setImage(image, false);
     m_editor->setImageDisplayRect(m_editImageRect);
     m_editor->show();

@@ -971,7 +971,7 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(confirm && confirm->isVisible());
         QVERIFY(cancel && cancel->isVisible());
         auto* manualSave = editor->findChild<QAbstractButton*>(QStringLiteral("annotationSave"));
-        QVERIFY(manualSave && manualSave->isVisible());
+        QVERIFY(manualSave && !manualSave->isVisible()); // Capture already saves.
         QVERIFY(previousCancel && !previousCancel->isVisible());
         for (const char* oldOutput : {"annotationCopy", "annotationPin"}) {
             auto* button = editor->findChild<QAbstractButton*>(QString::fromLatin1(oldOutput));
