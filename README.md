@@ -567,8 +567,8 @@ end)
 The equivalent generic Lua entry is
 `hl.plugin.hyprcapture.dispatch("open", "region", { save = false, clipboard = true })`.
 Its string form also accepts `"region save=false clipboard=true"` (`1`/`0` are
-accepted). This Git HEAD build does not register legacy `hyprcapture:*`
-dispatchers; use the Lua functions above.
+accepted). HyprCapture does not register legacy `hyprcapture:*` dispatchers;
+use the Lua functions above.
 
 The thumbnail and its action menu have **Save** beside **Copy image**. With `save = false`,
 Save writes the complete capture to `save_dir` using `filename_template` and the
