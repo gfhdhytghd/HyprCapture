@@ -288,6 +288,77 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(qApp->findChildren<QTimer*>("hyprcaptureHdrDrain").empty());
     }
 
+    void fullscreenWindowUsesContentBounds_data() {
+        QTest::addColumn<QString>("state");
+        QTest::addColumn<bool>("hdr");
+        QTest::addColumn<QString>("background");
+        for (const auto& state : {"normal", "maximized", "fullscreen"})
+            for (bool hdr : {false, true})
+                for (const auto& background : {"white", "black", "transparent", "real", "follow-system"})
+                    QTest::newRow(qPrintable(QString("%1-%2-%3").arg(state).arg(hdr ? "hdr" : "sdr").arg(background)))
+                        << QString(state) << hdr << QString(background);
+    }
+
+    void fullscreenWindowUsesContentBounds() {
+        QFETCH(QString, state);
+        QFETCH(bool, hdr);
+        QFETCH(QString, background);
+        const bool fullscreen = state == "fullscreen";
+        const QSize contentSize = fullscreen ? QSize(400, 300) : state == "maximized" ? QSize(240, 160) : QSize(160, 100);
+        const QRect content(QPoint(120, 120), contentSize);
+        const QRect decorated = content.adjusted(-20, -20, 20, 20);
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBorder = hyprcapture::DecorationPolicy::Keep;
+        defaults.windowShadow = hyprcapture::DecorationPolicy::Keep;
+        defaults.windowBackground = hyprcapture::parseWindowBackground(background.toStdString());
+        auto session = hyprcapture::decodeSessionJson(sessionJson(defaults).toStdString());
+        QVERIFY(session);
+        auto& info = session->windows.front();
+        QFile::remove(QString::fromStdString(info.artifactPath));
+        info.fullscreen = fullscreen;
+        // Deliberately retain stale decorated metadata to exercise the UI's
+        // content-only fallback as well as native plugin snapshots.
+        info.fullGeometry = {double(decorated.x()), double(decorated.y()), double(decorated.width()), double(decorated.height())};
+        info.visibleGeometry = {double(content.x()), double(content.y()), double(content.width()), double(content.height())};
+        info.borderSize = 8;
+        info.rounding = 24;
+        QImage image(decorated.size() * 2, QImage::Format_RGBA8888);
+        image.fill(QColor(240, 20, 30, 128)); // external decoration/padding
+        {
+            QPainter painter(&image);
+            painter.fillRect(QRect(QPoint(40, 40), contentSize * 2), QColor(34, 149, 98));
+        }
+        if (hdr) image = hyprcapture::ui::sdrToHdr(image);
+        info.artifactFormat = hdr ? "rgba16f-linear-srgb" : "rgba8";
+        info.artifactPath = writeArtifact(image).toStdString();
+        info.artifactWidth = image.width(); info.artifactHeight = image.height();
+        QVERIFY(!info.artifactPath.empty());
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(*session)));
+        QVERIFY(!overlay.m_windowArtifacts.empty());
+        auto& window = overlay.m_windowArtifacts.front();
+        if (background == "real") {
+            window.realBackground = QImage(window.image.size(), QImage::Format_RGBA8888);
+            window.realBackground.fill(QColor(10, 20, 200));
+            window.hdrRealBackground = hyprcapture::ui::sdrToHdr(window.realBackground);
+        }
+        const auto output = overlay.windowResultRenderer(window, hdr)();
+        QVERIFY(!output.isNull());
+        QCOMPARE(output.size(), (fullscreen ? content.size() : decorated.size()) * 2);
+        QCOMPARE(overlay.windowFrameGeometry(window), fullscreen ? content : content.adjusted(-8, -8, 8, 8));
+        if (fullscreen) {
+            QCOMPARE(overlay.windowFrameRadius(window, false), 0.0);
+            for (const auto& corner : {output.rect().topLeft(), output.rect().topRight(), output.rect().bottomLeft(), output.rect().bottomRight()}) {
+                QCOMPARE(output.pixelColor(corner).alpha(), 255);
+                if (!hdr) QCOMPARE(output.pixelColor(corner), QColor(34, 149, 98));
+                else QVERIFY(output.pixelColor(corner).greenF() > output.pixelColor(corner).redF());
+            }
+        } else {
+            QVERIFY(overlay.windowFrameRadius(window, false) > 0);
+            QCOMPARE(output.pixelColor(0, 0).alpha(), 128);
+        }
+    }
+
     void normalHdrInkNeverQueuesCompositionAndBaseStaysImmutable() {
         hyprcapture::CaptureDefaults defaults; defaults.mode=hyprcapture::CaptureMode::Fullscreen;
         defaults.screenshotFormat="heic";

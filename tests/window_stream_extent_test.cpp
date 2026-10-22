@@ -37,6 +37,20 @@ int main() {
             assert(upright.pixelWidth == geometry.pixelWidth && upright.pixelHeight == geometry.pixelHeight);
         }
     }
+    // Normal/maximized input retains asymmetric decoration extents; an actual
+    // output-fullscreen input is its content rectangle. Pixel planning must
+    // preserve all three across scale/transform without adding a margin.
+    for (int transform = 0; transform < 8; ++transform) {
+        for (double scale : {1.0, 1.25, 1.5, 2.0}) {
+            const auto fullscreen = planWindowCaptureGeometry(-800, 0, 800, 600, -800, 0, scale, transform);
+            const auto maximized = planWindowCaptureGeometry(-790, 10, 780, 580, -800, 0, scale, transform);
+            const auto normal = planWindowCaptureGeometry(-760, 40, 480, 380, -800, 0, scale, transform);
+            assert(fullscreen.supported && fullscreen.x == -800 && fullscreen.y == 0);
+            assert(fullscreen.pixelWidth == 800 * scale && fullscreen.pixelHeight == 600 * scale);
+            assert(maximized.supported && maximized.pixelWidth >= 780 * scale && maximized.pixelHeight >= 580 * scale);
+            assert(normal.supported && normal.pixelWidth >= 480 * scale && normal.pixelHeight >= 380 * scale);
+        }
+    }
     auto aligned = planWindowCaptureGeometry(100, 200, 1280, 720, 0, 0, 1.25, 0);
     assert(aligned.supported && aligned.x == 100 && aligned.y == 200 && aligned.pixelWidth == 1600 && aligned.pixelHeight == 900);
     // A subpixel extent remains visible instead of rounding to zero.
