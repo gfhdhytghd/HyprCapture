@@ -1944,6 +1944,18 @@ CBox renderedWindowGoalMainSurfaceBox(const PHLWINDOW& window) {
     return renderedWindowBox(window, box);
 }
 
+// Internal fullscreen is compositor/output fullscreen. A client-only request
+// (fake fullscreen) and FSMODE_MAXIMIZED still use their decorated bounds.
+bool isMonitorFullscreenWindow(const PHLWINDOW& window) {
+    return window && Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
+}
+
+CBox windowCaptureBounds(const PHLWINDOW& window) {
+    if (isMonitorFullscreenWindow(window))
+        return renderedWindowGoalMainSurfaceBox(window);
+    return renderedWindowBox(window, window->getFullWindowBoundingBox());
+}
+
 bool isScrollingTiledWindow(const PHLWINDOW& window) {
     if (!window || window->m_isFloating || !window->m_workspace || !window->m_workspace->m_space)
         return false;
@@ -2390,7 +2402,12 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
 
     HymissionRawWindowRenderScope rawWindowRenderScope;
     WindowAnimationGoalOverride windowGoal(window);
-    const CBox fullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
+    const bool fullscreen = isMonitorFullscreenWindow(window);
+    // Fullscreen content owns the complete pixel rectangle, including any
+    // transparent client pixels. Never trim it or ask decorations to render.
+    decorate = decorate && !fullscreen;
+    trimToAlphaBounds = trimToAlphaBounds && !fullscreen;
+    const CBox fullBox = windowCaptureBounds(window);
     const auto geometry = windowCaptureGeometry(fullBox, monitor);
     if (!geometry.supported)
         return {};
@@ -3135,7 +3152,7 @@ double shadowBorderPx(const PHLWINDOW& window, double scale) {
 }
 
 double windowRoundingPx(const PHLWINDOW& window, double scale) {
-    if (!window)
+    if (!window || isMonitorFullscreenWindow(window))
         return 0.0;
     return std::max(0.0, static_cast<double>(window->rounding()) * scale);
 }
@@ -3178,7 +3195,7 @@ std::optional<ShadowRenderGeometry> shadowRenderGeometry(const RgbaReadback& rea
     // The geometry is also serialized for the GPU stream, where the pixels
     // remain in the exported FBO.  It depends on the captured dimensions, not
     // on CPU accessibility of the pixels.
-    if (!configuredShadowEnabled() || readback.width <= 0 || readback.height <= 0 || artifactBox.w <= 0.0 || artifactBox.h <= 0.0 ||
+    if (isMonitorFullscreenWindow(window) || !configuredShadowEnabled() || readback.width <= 0 || readback.height <= 0 || artifactBox.w <= 0.0 || artifactBox.h <= 0.0 ||
         visibleBox.w <= 0.0 || visibleBox.h <= 0.0)
         return std::nullopt;
 
@@ -3651,7 +3668,7 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
         renderOptions.clearColor = *solidBackground;
         renderOptions.postprocessAlpha = false;
     } else if (request.defaults.windowBackground == WindowBackground::Real) {
-        const CBox fullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
+        const CBox fullBox = windowCaptureBounds(window);
         const auto captureBackground = [&]() {
             ScopedTiming timing("record.realbg_capture");
             const auto geometry = windowCaptureGeometry(fullBox, monitor);
@@ -3807,7 +3824,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         if (session.windows.size() >= MAX_SESSION_WINDOWS)
             break;
         InactiveWorkspaceCaptureScope nativeWorkspace(window);
-        const CBox fullBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
+        const CBox fullBox = windowCaptureBounds(window);
         const Rect full = toRect(fullBox);
         auto monitor = window->m_monitor.lock();
         if (!monitor)
@@ -3838,7 +3855,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
         info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
         info.focused = window == Desktop::focusState()->window();
-        info.fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
+        info.fullscreen = isMonitorFullscreenWindow(window);
         info.zIndex = z++;
         const bool dontRound = info.fullscreen;
         info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
@@ -3985,7 +4002,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     info.title = boundedString(window->m_title, MAX_WINDOW_METADATA_BYTES);
     info.appClass = boundedString(window->m_class, MAX_WINDOW_METADATA_BYTES);
     info.focused = window == Desktop::focusState()->window();
-    info.fullscreen = Fullscreen::controller()->getFullscreenModes(window).internal == Fullscreen::FSMODE_FULLSCREEN;
+    info.fullscreen = isMonitorFullscreenWindow(window);
     info.zIndex = 0;
     const bool dontRound = info.fullscreen;
     info.rounding = dontRound ? 0.0 : std::max(0.0F, window->rounding());
@@ -4142,7 +4159,7 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
     // Freeze every observable attribute before the renderer is entered.  The
     // DMA-BUF header and its shadow snapshot remain tied to this render even
     // if the window moves before the receiver consumes the fence.
-    const CBox sampledBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
+    const CBox sampledBox = windowCaptureBounds(window);
     const CBox sampledVisibleBox = renderedWindowGoalMainSurfaceBox(window);
     std::optional<gpuwire::InputGeometry> frozenInput;
     if (!window->m_isX11 && session.targetSurface && window->getPID() > 0) {
@@ -4320,7 +4337,7 @@ std::optional<WindowStreamCapturedFrame> captureWindowStreamFrameImpl(const Wind
 
     // Snapshot both geometry and time before invoking Hyprland's render path.
     // A later PBO mapping must only ever expose this immutable snapshot.
-    const CBox sampledBox = renderedWindowBox(window, window->getFullWindowBoundingBox());
+    const CBox sampledBox = windowCaptureBounds(window);
     const CBox sampledVisibleBox = renderedWindowGoalMainSurfaceBox(window);
     const auto sampledGeometry = windowCaptureGeometry(sampledBox, monitor);
     const int sampledWidth = sampledGeometry.pixelWidth;
@@ -4574,7 +4591,7 @@ void captureWindowStreamTick(SP<CEventLoopTimer> self) {
             return;
         }
     }
-    const Rect windowGeometry = toRect(renderedWindowBox(window, window->getFullWindowBoundingBox()));
+    const Rect windowGeometry = toRect(windowCaptureBounds(window));
     const Rect contentGeometry = toRect(renderedWindowGoalMainSurfaceBox(window));
     const Rect outputGeometry = monitorRect(monitor);
     const Vector2D surfaceSize = session->targetSurface ? session->targetSurface->m_current.size : Vector2D{};

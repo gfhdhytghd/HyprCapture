@@ -588,6 +588,14 @@ The old misspelled `fushion_mode` key is still accepted as a compatibility alias
 
 ### Capture options
 
+A window in compositor/output fullscreen is always captured at its content
+bounds, without compositor borders, shadows, rounded padding or hyprbars, even with
+`window_border = "keep"` and `window_shadow = "keep"`. This also applies to
+window recording and window streams. Hyprland's internal `FSMODE_FULLSCREEN`
+selects this behavior; maximized windows and client-only fake fullscreen keep
+the normal decoration policies. Transparent pixels belonging to the client
+remain subject to `window_background`; no margin is added around its content.
+
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `default_mode` | string | `region` | Default mode for `hl.plugin.hyprcapture.open()`, `open_editor()`, and `quick()`. Supports `region`, `fullscreen`, and `window`. |

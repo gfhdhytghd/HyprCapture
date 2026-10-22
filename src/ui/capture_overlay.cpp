@@ -3989,7 +3989,7 @@ void CaptureOverlay::refreshInitialCursorPosition() {
 
 QRect CaptureOverlay::windowFrameGeometry(const WindowArtifact& window) const {
     QRect frame = window.visibleGeometry.isValid() ? window.visibleGeometry : window.fullGeometry;
-    const int border = std::max(0, static_cast<int>(std::lround(window.borderSize)));
+    const int border = window.fullscreen ? 0 : std::max(0, static_cast<int>(std::lround(window.borderSize)));
     if (border > 0)
         frame = frame.adjusted(-border, -border, border, border);
     return frame;
@@ -4037,7 +4037,7 @@ void CaptureOverlay::endHymissionCaptureInputSuppression() {
 double CaptureOverlay::windowFrameRadius(const WindowArtifact& window, bool selection) const {
     if (selection && window.stagePreview && window.selectionRounding)
         return *window.selectionRounding;
-    if (window.rounding <= 0.0)
+    if (window.fullscreen || window.rounding <= 0.0)
         return 0.0;
 
     const double power = std::clamp(window.roundingPower, 1.0, 10.0);
@@ -4583,7 +4583,7 @@ std::function<QImage()> CaptureOverlay::windowResultRenderer(const WindowArtifac
         ScopedUiTiming timing(QStringLiteral("overlay.render_result_snapshot hdr=%1").arg(hdr));
         const auto* windowArtifact = &window;
         QRect artifactSource = windowArtifact->image.rect();
-        const bool cropDecorations = border == hyprcapture::DecorationPolicy::Remove || shadow == hyprcapture::DecorationPolicy::Remove;
+        const bool cropDecorations = window.fullscreen || border == hyprcapture::DecorationPolicy::Remove || shadow == hyprcapture::DecorationPolicy::Remove;
         if (cropDecorations && windowArtifact->visibleGeometry.isValid() && windowArtifact->fullGeometry.contains(windowArtifact->visibleGeometry)) {
             const double scaleX = static_cast<double>(windowArtifact->image.width()) / std::max(1, windowArtifact->fullGeometry.width());
             const double scaleY = static_cast<double>(windowArtifact->image.height()) / std::max(1, windowArtifact->fullGeometry.height());
@@ -4636,7 +4636,7 @@ std::function<QImage()> CaptureOverlay::windowResultRenderer(const WindowArtifac
             clipWindowBackgroundToFrame(background,
                                         logicalSource,
                                         windowArtifact->visibleGeometry,
-                                        windowArtifact->rounding,
+                                        windowArtifact->fullscreen ? 0.0 : windowArtifact->rounding,
                                         windowArtifact->roundingPower); }
             if (hdr) {
                 QImage linearBackground;
@@ -4900,7 +4900,7 @@ QImage CaptureOverlay::scrollWindowBackground(const QImage& frame, const QRect& 
     if (!painted)
         return QImage{};
     clipWindowBackgroundToFrame(background, geometry, window->visibleGeometry,
-                                window->rounding, window->roundingPower);
+                                window->fullscreen ? 0.0 : window->rounding, window->roundingPower);
     return background;
 }
 
@@ -5094,7 +5094,7 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
     m_editImageRect = captureRectForMode();
     if (m_mode == hyprcapture::CaptureMode::Window) {
         if (const auto* window = selectedWindow()) {
-            const bool crop = currentWindowBorder() == hyprcapture::DecorationPolicy::Remove ||
+            const bool crop = window->fullscreen || currentWindowBorder() == hyprcapture::DecorationPolicy::Remove ||
                 currentWindowShadow() == hyprcapture::DecorationPolicy::Remove;
             m_editImageRect = globalToLocalRect(crop && window->fullGeometry.contains(window->visibleGeometry)
                                                    ? window->visibleGeometry : window->fullGeometry);

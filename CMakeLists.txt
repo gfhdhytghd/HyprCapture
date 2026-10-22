@@ -229,6 +229,9 @@ install(PROGRAMS scripts/install-aec.sh DESTINATION ${CMAKE_INSTALL_BINDIR} RENA
 install(FILES resources/aec/DTLN-LICENSE.txt DESTINATION ${CMAKE_INSTALL_DATADIR}/licenses/hyprcapture)
 
 if(BUILD_TESTING)
+  # Explicit opt-in nested fixture; the live harness never selects host IPC.
+  add_executable(hyprcapture-fullscreen-window-fixture tests/fullscreen_window_fixture.cpp)
+  target_link_libraries(hyprcapture-fullscreen-window-fixture PRIVATE Qt6::Widgets)
   add_executable(hyprcapture-offscreen-render-scope-test tests/offscreen_render_scope_test.cpp)
   target_include_directories(hyprcapture-offscreen-render-scope-test PRIVATE src ${HYPR_DEPS_INCLUDE_DIRS})
   target_link_directories(hyprcapture-offscreen-render-scope-test PRIVATE ${HYPR_DEPS_LIBRARY_DIRS})
