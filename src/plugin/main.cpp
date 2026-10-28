@@ -26,6 +26,7 @@ extern "C" {
 
 #include "plugin/artifact_capture.hpp"
 #include "plugin/capture_options.hpp"
+#include "plugin/config_reload.hpp"
 #include "plugin/notification.hpp"
 #include "plugin/recording.hpp"
 #include "plugin/session_launcher.hpp"
@@ -60,6 +61,7 @@ constexpr std::array  kLuaFunctionNames = {
 std::chrono::steady_clock::time_point g_lastCaptureDispatch {};
 std::chrono::steady_clock::time_point g_lastQuickRejectNotification {};
 std::deque<std::string>               g_configValueNames;
+WP<Config::IConfigManager>            g_registrationManager;
 
 std::string configName(const std::string& suffix) {
     return "plugin:hyprcapture:" + suffix;
@@ -119,7 +121,7 @@ bool configBool(const std::string& suffix, bool fallback) {
 }
 
 CHyprSignalListener g_timingTickListener;
-CHyprSignalListener g_timingReloadListener;
+hyprcapture::ConfigReloadListeners<CHyprSignalListener> g_configReloadListeners;
 std::chrono::steady_clock::time_point g_nextTimingRefresh;
 
 void refreshTimingConfig() {
@@ -307,6 +309,7 @@ void installOverlayLayerRule() {
     rule->registerMatch(RULE_PROP_NAMESPACE, "^hyprcapture-ui$");
     rule->addEffect(LAYER_RULE_EFFECT_NO_ANIM, "1");
     ruleEngine()->registerRule(SP<IRule>{rule});
+    ruleEngine()->updateAllRules();
 }
 
 SDispatchResult openCapture(const std::string& args, bool quick, bool record, bool inPlaceEditToolbar = false, const hyprcapture::CaptureOptions& overrides = {}) {
@@ -590,6 +593,42 @@ int luaDispatch(lua_State* L) {
     return lua_error(L);
 }
 
+void registerLuaFunctions() {
+    if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
+        const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
+            if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hyprcapture", name, fn))
+                hyprcapture::notifyUser(std::string("failed to register Lua function hl.plugin.hyprcapture.") + name, hyprcapture::NotificationLevel::Error, 5000);
+        };
+
+        registerLuaFunction("open", luaOpen);
+        registerLuaFunction("open_editor", luaOpenEditor);
+        registerLuaFunction("quick", luaQuick);
+        registerLuaFunction("record", luaRecord);
+        registerLuaFunction("record_toggle", luaRecordToggle);
+        registerLuaFunction("record_stop", luaRecordStop);
+        registerLuaFunction("record_start", luaRecordStart);
+        registerLuaFunction("window_capture", luaWindowCapture);
+        registerLuaFunction("region_capture", luaRegionCapture);
+        registerLuaFunction("scroll_session_start", luaScrollSessionStart);
+        registerLuaFunction("scroll_session_stop", luaScrollSessionStop);
+        registerLuaFunction("export_pipe", luaExportPipe);
+        registerLuaFunction("window_stream_start", luaWindowStreamStart);
+        registerLuaFunction("window_stream_stop", luaWindowStreamStop);
+        registerLuaFunction("cancel", luaCancel);
+        registerLuaFunction("dispatch", luaDispatch);
+    }
+}
+
+void restoreConfigRegistrations() {
+    hyprcapture::registerForConfigManager(g_registrationManager, Config::mgr(), [] {
+        // Recreate Values V2 after the old manager has gone. Holding their
+        // CConfigValue caches across full-reset would make its earlier cache
+        // flush look up plugin names before preReload can register them.
+        registerConfigValues();
+        registerLuaFunctions();
+    });
+}
+
 void unregisterLuaFunctions() {
     if (!g_pluginHandle || !Config::mgr() || Config::mgr()->type() != Config::CONFIG_LUA)
         return;
@@ -623,36 +662,18 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
     registerConfigValues();
 
-    if (Config::mgr() && Config::mgr()->type() == Config::CONFIG_LUA) {
-        const auto registerLuaFunction = [&](const char* name, PLUGIN_LUA_FN fn) {
-            if (!HyprlandAPI::addLuaFunction(g_pluginHandle, "hyprcapture", name, fn))
-                hyprcapture::notifyUser(std::string("failed to register Lua function hl.plugin.hyprcapture.") + name, hyprcapture::NotificationLevel::Error, 5000);
-        };
-
-        registerLuaFunction("open", luaOpen);
-        registerLuaFunction("open_editor", luaOpenEditor);
-        registerLuaFunction("quick", luaQuick);
-        registerLuaFunction("record", luaRecord);
-        registerLuaFunction("record_toggle", luaRecordToggle);
-        registerLuaFunction("record_stop", luaRecordStop);
-        registerLuaFunction("record_start", luaRecordStart);
-        registerLuaFunction("window_capture", luaWindowCapture);
-        registerLuaFunction("region_capture", luaRegionCapture);
-        registerLuaFunction("scroll_session_start", luaScrollSessionStart);
-        registerLuaFunction("scroll_session_stop", luaScrollSessionStop);
-        registerLuaFunction("export_pipe", luaExportPipe);
-        registerLuaFunction("window_stream_start", luaWindowStreamStart);
-        registerLuaFunction("window_stream_stop", luaWindowStreamStop);
-        registerLuaFunction("cancel", luaCancel);
-        registerLuaFunction("dispatch", luaDispatch);
-    }
+    registerLuaFunctions();
+    g_registrationManager = Config::mgr();
 
     if (!HyprlandAPI::reloadConfig())
         hyprcapture::notifyUser("reloadConfig failed", hyprcapture::NotificationLevel::Error, 5000);
     installOverlayLayerRule();
 
     refreshTimingConfig();
-    g_timingReloadListener = Event::bus()->m_events.config.reloaded.listen([] { refreshTimingConfig(); });
+    g_configReloadListeners.listen(Event::bus()->m_events.config, restoreConfigRegistrations, [] {
+        installOverlayLayerRule();
+        refreshTimingConfig();
+    });
     g_timingTickListener = Event::bus()->m_events.tick.listen([] {
         if (std::chrono::steady_clock::now() >= g_nextTimingRefresh)
             refreshTimingConfig();
@@ -675,10 +696,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
 
 APICALL EXPORT void PLUGIN_EXIT() {
     g_timingTickListener.reset();
-    g_timingReloadListener.reset();
+    g_configReloadListeners.reset();
     hyprcapture::shutdownSessionLock();
     hyprcapture::cancelCaptureHelpers();
     unregisterLuaFunctions();
+    g_registrationManager.reset();
     hyprcapture::shutdownRecording();
     hyprcapture::shutdownArtifactCapture();
     Desktop::Rule::ruleEngine()->unregisterRule(kOverlayLayerRuleName);
