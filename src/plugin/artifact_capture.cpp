@@ -10,6 +10,7 @@
 #include "plugin/window_stream_extent.hpp"
 #include "plugin/window_capture_geometry.hpp"
 #include "plugin/offscreen_render_scope.hpp"
+#include "plugin/real_background_status.hpp"
 #include "plugin/window_stream_cadence.hpp"
 #include "plugin/window_gpu_export.hpp"
 #include "plugin/window_gpu_sender.hpp"
@@ -184,6 +185,7 @@ struct RealBackgroundCaptureState {
     int          height = 0;
     bool         queued = false;
     bool         captured = false;
+    bool         requiresBlur = false;
     bool         awaitingBlurBackground = false;
     bool         blurCaptured = false;
     RgbaReadback readback;
@@ -1677,12 +1679,13 @@ bool isActiveBlurBackgroundPass(Render::CRenderContext& ctx, RealBackgroundCaptu
 void queueRealBackgroundCapturePasses(std::vector<RealBackgroundCaptureState>& states) {
     auto& passes = renderContext().m_pass.m_passElements;
     for (std::size_t i = 0; i < passes.size(); ++i) {
-        const auto* surface = dynamic_cast<const CSurfacePassElement*>(passes[i].element.get());
+        auto* surface = dynamic_cast<CSurfacePassElement*>(passes[i].element.get());
         if (!surface || !surface->m_data.pWindow)
             continue;
         for (auto& state : states) {
             if (state.queued || state.captured || state.window != surface->m_data.pWindow)
                 continue;
+            state.requiresBlur = surface->needsLiveBlur(renderContext()) || surface->needsPrecomputeBlur(renderContext());
             state.queued = true;
             Render::CRenderPass::SPassElementData capture;
             capture.element = makeUnique<RealBackgroundCapturePass>(&state);
@@ -1738,6 +1741,7 @@ void hkRenderTextureWithBlurInternal(void* openGLThisptr, Render::CRenderContext
         return;
     }
 
+    state->requiresBlur = true;
     auto* previousActiveBlurState = context->activeBlurState;
     const bool previousAwaitingBlurBackground = state->awaitingBlurBackground;
     context->activeBlurState = state;
@@ -2765,7 +2769,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
 
     for (std::size_t i = 0; i < states.size(); ++i) {
         auto& state = states[i];
-        if (!state.captured || state.readback.pixels.empty() || state.targetIndex >= readbacks.size())
+        if (!usableRealBackground(state.captured, state.requiresBlur, state.blurCaptured) || state.readback.pixels.empty() || state.targetIndex >= readbacks.size())
             continue;
 
         readbacks[state.targetIndex] = std::move(state.readback);
@@ -2849,7 +2853,18 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
     renderContext().m_data.blockScreenShader = previousBlockShader;
     renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
 
-    return !states.empty() && states.front().captured;
+    return !states.empty() && usableRealBackground(states.front().captured, states.front().requiresBlur, states.front().blurCaptured);
+}
+
+void notifyRealBackgroundFallback(const char* message) {
+    static Time::steady_tp lastWarning;
+    static std::string lastMessage;
+    const auto now = Time::steadyNow();
+    if (lastMessage == message && now - lastWarning < std::chrono::seconds(5))
+        return;
+    lastWarning = now;
+    lastMessage = message;
+    notifyUser(message, NotificationLevel::Warning, 5000);
 }
 
 void renderRealBackgroundArtifactsForMonitor(const PHLMONITOR& monitor,
@@ -2868,8 +2883,12 @@ void renderRealBackgroundArtifactsForMonitor(const PHLMONITOR& monitor,
     auto readbacks = renderRealBackgroundReadbacksForMonitor(monitor, frozenTime, targets);
     for (std::size_t i = 0; i < readbacks.size() && i < requests.size(); ++i) {
         auto* request = requests[i];
-        if (!request || request->windowIndex >= session.windows.size() || readbacks[i].pixels.empty())
+        if (!request || request->windowIndex >= session.windows.size())
             continue;
+        if (readbacks[i].pixels.empty()) {
+            notifyRealBackgroundFallback("Real background unavailable; using the frozen desktop image");
+            continue;
+        }
 
         if (!writeArtifact(request->path, readbacks[i], &budget))
             continue;
@@ -3762,8 +3781,10 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
         return std::nullopt;
 
     if (request.defaults.windowBackground == WindowBackground::Real) {
-        if (!renderOptions.backgroundTexture)
+        if (!renderOptions.backgroundTexture) {
+            notifyRealBackgroundFallback("Real background unavailable; recording uses a solid background");
             compositeContentOverSolidBackground(readback, 30, 34, 38);
+        }
         if (const auto shadowBackground = recordingSolidBackgroundRgb(WindowBackground::FollowSystem))
             compositeOutsideWindowOverSolidBackground(readback,
                                                       artifactBox,
