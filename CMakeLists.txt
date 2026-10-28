@@ -324,6 +324,7 @@ if(BUILD_TESTING)
   # Ignore inherited PYTHONOPTIMIZE/PYTHONPATH: assertions are part of these tests.
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
+    add_test(NAME capture-integration COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/capture_integration_test.py)
     add_test(NAME aec-source-pins COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/aec_sources_test.py)
     set_tests_properties(aec-source-pins PROPERTIES TIMEOUT 45)
     add_test(NAME recording-transcode COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/recording_transcode_test.py $<TARGET_FILE:hyprcapture-ui>)

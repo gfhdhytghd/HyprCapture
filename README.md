@@ -735,7 +735,7 @@ Temporary compositor artifacts and thumbnail/clipboard scratch files are written
 ## Notes
 
 - The repository includes a root [`hyprpm.toml`](hyprpm.toml) manifest, which is expected by `hyprpm`.
-- `window_background = "real"` uses compositor-captured real background data when available and falls back to reconstructing from the frozen desktop snapshot.
+- `window_background = "real"` uses compositor-captured real background data when available and falls back to reconstructing from the frozen desktop snapshot. When the compositor cannot provide an independent blurred background, a notification identifies the fallback. Window recordings use a solid background in that case.
 - Recording applies window decoration cropping and solid/follow-system backgrounds in the compositor-side path. Since plugin-side recording cannot query the helper's Qt palette, `window_background = "follow-system"` uses the same light fallback color as the screenshot helper. `record_solid_alpha = true` lets follow-system/white/black window recordings keep transparent pixels outside the window content when the selected format/codec supports alpha. `window_background = "real"` uses live compositor background data for window recordings and is treated as opaque for recording-format validation. Transparent output requires an alpha-capable format such as `webm`/VP9 or `mkv`/FFV1; MP4/MOV H.264/H.265 output is intentionally rejected for transparent recordings.
 - Do not run `hyprpm update` or reload the plugin while an active screenshot overlay is being used.
 
