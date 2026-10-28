@@ -53,6 +53,7 @@
 #include <hyprland/src/render/pass/PassElement.hpp>
 #include <hyprland/src/render/pass/SurfacePassElement.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/SceneResources.hpp>
 #undef protected
 #undef private
 
@@ -1826,6 +1827,8 @@ void setCaptureImageDescription(const SP<CFramebuffer>& framebuffer, const PHLMO
     if (framebuffer) framebuffer->setImageDescription(monitor->workBufferImageDescription());
 }
 
+#include "plugin/capture_render.inc"
+
 bool ensureFramebuffer(SP<CFramebuffer>& framebuffer, const std::string& name, int width, int height, DRMFormat preferredFormat = DRM_FORMAT_ABGR8888) {
     if (framebuffer && framebuffer->isAllocated() && framebuffer->m_drmFormat == (captureFramebufferFormat()) && positiveRoundedIntFromDouble(framebuffer->m_size.x) == width && positiveRoundedIntFromDouble(framebuffer->m_size.y) == height)
         return true;
@@ -2221,7 +2224,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
 
     g_pHyprOpenGL->makeEGLCurrent();
     setCaptureImageDescription(framebuffer, monitor);
-    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+    if (!beginCaptureRender(monitor, fakeDamage, framebuffer, frozenTime)) {
         restoreRendererState();
         return {};
     }
@@ -2342,7 +2345,7 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
 
     g_pHyprOpenGL->makeEGLCurrent();
     setCaptureImageDescription(framebuffer, monitor);
-    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+    if (!beginCaptureRender(monitor, fakeDamage, framebuffer, frozenTime)) {
         restoreRendererState();
         return false;
     }
@@ -2478,7 +2481,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
         renderContext().m_blockSurfaceFeedback = true;
         setCaptureImageDescription(targetFramebuffer, monitor);
-        if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
+        if (!beginCaptureRender(monitor, fakeDamage, targetFramebuffer, frozenTime, true)) {
             renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
             return false;
         }
@@ -2523,7 +2526,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
             renderContext().m_blockSurfaceFeedback = true;
             setCaptureImageDescription(matteFramebuffer, monitor);
-            if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, matteFramebuffer)) {
+            if (!beginCaptureRender(monitor, fakeDamage, matteFramebuffer, frozenTime, true)) {
                 renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
                 return false;
             }
@@ -2742,7 +2745,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
     g_pHyprOpenGL->makeEGLCurrent();
     renderContext().m_blockSurfaceFeedback = true;
     setCaptureImageDescription(framebuffer, monitor);
-    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+    if (!beginCaptureRender(monitor, fakeDamage, framebuffer, frozenTime)) {
         renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
         clearHookContext();
         return readbacks;
@@ -2825,7 +2828,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
     g_pHyprOpenGL->makeEGLCurrent();
     renderContext().m_blockSurfaceFeedback = true;
     setCaptureImageDescription(framebuffer, monitor);
-    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+    if (!beginCaptureRender(monitor, fakeDamage, framebuffer, frozenTime)) {
         renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
         clearHookContext();
         return false;
