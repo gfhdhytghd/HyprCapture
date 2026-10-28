@@ -226,6 +226,8 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     hyprcapture::ui::ScreenCornerRadii fullscreenPreviewCornerRadii(const QRect& localRect) const;
     QRect regionCaptureBounds() const;
     QRect localScreenRectAt(const QPoint& localPos) const;
+    QRect selectionPaintBounds() const;
+    void updateSelectionPaint();
     QPoint clampedToRect(const QPoint& point, const QRect& bounds) const;
     QRect globalToLocalRect(const QRect& rect) const;
     QRect localToDesktopLogicalRect(const QRect& rect) const;
@@ -321,6 +323,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     bool                      m_overlayActive = true;
     bool                      m_firstPaintPending = true;
     bool                      m_firstVisiblePaintPending = true;
+    QRect                     m_paintedSelectionBounds;
     bool                      m_firstUpdatePending = true;
     // A mapped overlay must already contain the frozen desktop, not a transparent warm-up frame.
     double                    m_overlayOpacity = 1.0;

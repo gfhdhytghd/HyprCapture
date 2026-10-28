@@ -3284,6 +3284,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     painter.fillRect(rect(), Qt::transparent);
     if (startupBlocked || !m_overlayActive || m_scrolling)
         return;
+    m_paintedSelectionBounds = selectionPaintBounds();
     if (!property("hdrFirstParentFrame").toBool()) {
         setProperty("hdrFirstParentFrame", true);
         traceTiming(QStringLiteral("overlay.first_parent_frame.%1.%2 mode=%3")
@@ -3523,7 +3524,7 @@ void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
             if (m_dragging)
                 setSelectionRect(regionSelectionForDrag(event->pos()));
             updateStatus();
-            update();
+            updateSelectionPaint();
             return;
         }
         if (m_mode == hyprcapture::CaptureMode::Window) {
@@ -3538,7 +3539,8 @@ void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
                 }
             }
             updateStatus();
-            update();
+            // Leaving Window mode drops every candidate outline.
+            m_mode == hyprcapture::CaptureMode::Window ? updateSelectionPaint() : update();
             return;
         }
     }
@@ -3547,19 +3549,19 @@ void CaptureOverlay::mouseMoveEvent(QMouseEvent* event) {
         if (m_dragging)
             m_dragEnd = clampedToRect(event->pos(), regionCaptureBounds());
         updateStatus();
-        update();
+        updateSelectionPaint();
         return;
     }
 
     if (m_mode == hyprcapture::CaptureMode::Window) {
         updateStatus();
-        update();
+        updateSelectionPaint();
         return;
     }
     if (!m_dragging)
         return;
     m_dragEnd = clampedToRect(event->pos(), regionCaptureBounds());
-    update();
+    updateSelectionPaint();
 }
 
 void CaptureOverlay::mouseReleaseEvent(QMouseEvent* event) {
@@ -3891,6 +3893,40 @@ hyprcapture::ui::ScreenCornerRadii CaptureOverlay::fullscreenPreviewCornerRadii(
 
 QRect CaptureOverlay::regionCaptureBounds() const {
     return rect();
+}
+
+QRect CaptureOverlay::selectionPaintBounds() const {
+    if (m_editing)
+        return rect();
+    // Everything paintEvent draws that follows the cursor or selection; the
+    // dim mask elsewhere is static, so only this area needs repainting.
+    QRect bounds;
+    const auto addWindow = [&](const WindowArtifact* window) {
+        if (!window)
+            return;
+        const QRect selection = window->selectionGeometry.isValid() ? window->selectionGeometry : windowFrameGeometry(*window);
+        bounds |= globalToLocalRect(windowFrameGeometry(*window));
+        bounds |= globalToLocalRect(hyprcapture::ui::selectionOutlineGeometry(selection, window->selectionClipGeometry, m_overlayLogicalGeometry));
+    };
+    if (m_mode == hyprcapture::CaptureMode::Fullscreen)
+        bounds |= fullscreenCaptureRect();
+    else {
+        bounds |= normalizedSelection().intersected(regionCaptureBounds());
+        addWindow(hoveredWindow());
+        addWindow(selectedWindow());
+        if (m_defaults.fushionMode)
+            bounds |= localScreenRectAt(globalToLocalRect(QRect(cursorLogicalPosition(), QSize(1, 1))).topLeft());
+    }
+    const int margin = kSelectionHandlePaintSize / 2 + 3;
+    return bounds.isValid() ? bounds.adjusted(-margin, -margin, margin, margin) : QRect{};
+}
+
+void CaptureOverlay::updateSelectionPaint() {
+    const QRect next = selectionPaintBounds();
+    if (next == rect())
+        update();
+    else if (const QRegion dirty = QRegion(m_paintedSelectionBounds) | next; !dirty.isEmpty())
+        update(dirty);
 }
 
 QRect CaptureOverlay::localScreenRectAt(const QPoint& localPos) const {
