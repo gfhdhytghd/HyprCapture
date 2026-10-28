@@ -1,10 +1,9 @@
 # HyprCapture
 
 > [!IMPORTANT]
-> This is the experimental `hyprland-master` branch for Hyprland development/main.
-> Its `flake.lock` pins Hyprland `5a78b5e927345860a27e2893bf894f97ee620c48` for reproducible builds.
-> Use HyprCapture's `master` branch with the latest official Hyprland release for the stable setup.
-> The compositor and plugin must use the same Hyprland revision; newer main commits may require further adaptation.
+> Targets Hyprland v0.57.0 as released by [gfhdhytghd/Hyprland](https://github.com/gfhdhytghd/Hyprland/releases/tag/v0.57.0) (`f6725e43`); `flake.lock` pins that commit.
+> Upstream hyprwm v0.57.0 is a different commit with a different plugin ABI.
+> The compositor and plugin must come from the same Hyprland revision; the plugin refuses to load when its headers do not match the running compositor.
 
 HyprCapture is a Hyprland-only screenshot tool split into a compositor plugin and a Qt layer-shell helper. The plugin captures frozen compositor artifacts and launches the helper; the helper provides the selection overlay, output rendering, clipboard integration, and result thumbnail.
 
@@ -117,7 +116,7 @@ Do not also manually `hyprctl plugin load` the same `.so` if you manage it throu
 
 ### Install on Arch Linux
 
-These steps target Arch's official `hyprland` package and Hyprland 0.56 or later. If you use `hyprland-git` or a custom build, keep its matching development headers instead of replacing it with the repository package.
+These steps target Hyprland v0.57.0. Build against the headers of the Hyprland you actually run; `hyprpm` does this for you.
 
 #### 1. Install dependencies
 
@@ -170,14 +169,14 @@ Press **Super + Shift + S**, take a screenshot, and verify saving or copying it.
 
 ### Install on NixOS
 
-For this development branch, the example below pins the adaptation target. Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
+The example below pins the supported Hyprland release. Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
 
 ```nix
 {
   inputs = {
-    hyprland.url = "github:hyprwm/Hyprland/5a78b5e927345860a27e2893bf894f97ee620c48";
+    hyprland.url = "github:gfhdhytghd/Hyprland/v0.57.0";
     hyprcapture = {
-      url = "github:gfhdhytghd/HyprCapture/hyprland-master";
+      url = "github:gfhdhytghd/HyprCapture";
       inputs.hyprland.follows = "hyprland";
     };
   };
