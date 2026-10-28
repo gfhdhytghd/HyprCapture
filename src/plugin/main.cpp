@@ -2,6 +2,7 @@
 #include <array>
 #include <chrono>
 #include <deque>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <typeindex>
@@ -597,6 +598,18 @@ void unregisterLuaFunctions() {
         HyprlandAPI::removeLuaFunction(g_pluginHandle, "hyprcapture", name);
 }
 
+// Reject a build whose headers do not match the running compositor. The hash is
+// computed here because the API's inline client helper may be ELF-interposed by
+// another loaded plugin.
+void requireMatchingABI() {
+    const auto abiPrefix = [](std::string version) { return version.substr(0, version.find_last_of('.')); };
+    const std::string client = std::string(GIT_COMMIT_HASH) + "_aq_" + abiPrefix(AQUAMARINE_VERSION) + "_hu_" + abiPrefix(HYPRUTILS_VERSION) + "_hg_" +
+        abiPrefix(HYPRGRAPHICS_VERSION) + "_hc_" + abiPrefix(HYPRCURSOR_VERSION) + "_hlg_" + abiPrefix(HYPRLANG_VERSION);
+    const std::string runtime = __hyprland_api_get_hash();
+    if (runtime != client)
+        throw std::runtime_error("[HyprCapture] Hyprland header/runtime ABI mismatch: runtime=" + runtime + "; client=" + client);
+}
+
 } // namespace
 
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
@@ -605,6 +618,7 @@ APICALL EXPORT std::string PLUGIN_API_VERSION() {
 
 APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     g_pluginHandle = handle;
+    requireMatchingABI();
     hyprcapture::initializeSessionLock();
 
     registerConfigValues();
