@@ -241,6 +241,7 @@ void ScrollCaptureController::start() {
       {"controlPath", controlPath},
       {"windowAddress", m_windowAddress},
       {"hdr", m_captureHdr},
+      {"motionMetadata", true},
       {"rect", QJsonArray{m_capture.x(), m_capture.y(), m_capture.width(),
                           m_capture.height()}}};
   QFile file(m_requestPath);
@@ -280,7 +281,7 @@ void ScrollCaptureController::acceptFrames() {
 }
 void ScrollCaptureController::readFrames() {
   for (int count = 0; count < 8; ++count) {
-    unsigned char header[WINDOW_STREAM_FRAME_HEADER_BYTES];
+    unsigned char header[SCROLL_STREAM_FRAME_HEADER_BYTES];
     char ancillary[CMSG_SPACE(sizeof(int) * 4)]{};
     iovec vec{header, sizeof(header)};
     msghdr message{};
@@ -356,10 +357,15 @@ void ScrollCaptureController::readFrames() {
     if (m_active) m_watchdog.start(5000);
     {
       std::lock_guard lock(m_mutex);
-      if (m_latest)
+      Frame incoming{frame, geometry, metadata->sequence,
+                     metadata->captureMonotonicNs, m_background, hdr, metadata->scrollMotion};
+      // Keep intermediate motion while stitching runs independently. Preserve
+      // the oldest pending anchors and refresh only the tail under pressure;
+      // memory remains bounded even for native HDR window frames.
+      if (m_frames.size() == 4) {
         ++m_dropped;
-      m_latest = Frame{frame, geometry, metadata->sequence,
-                       metadata->captureMonotonicNs, m_background, hdr};
+        m_frames.back() = std::move(incoming);
+      } else m_frames.push_back(std::move(incoming));
     }
     m_ready.notify_one();
   }
@@ -486,20 +492,25 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
   cv::setNumThreads(1);
   cv::ocl::setUseOpenCL(false);
   ScrollStitcher::Limits limits;
-  if (m_captureHdr) limits.maxPixels = 16LL * 1024 * 1024;
+  if (m_captureHdr) limits.maxPixels = 32LL * 1024 * 1024;
+  limits.maxFrames = 10000; // Cover all30Hz frames within the five-minute session; pixel limits still apply.
   ScrollStitcher stitcher(limits);
   bool aligned = false;
+  uint64_t processedSequence = 0;
   while (!stopToken.stop_requested()) {
     std::optional<Frame> frame;
     bool final = false;
     {
       std::unique_lock lock(m_mutex);
       m_ready.wait(lock, stopToken,
-                   [this] { return m_latest.has_value() || m_finalize; });
+                   [this] { return !m_frames.empty() || m_finalize; });
       if (stopToken.stop_requested())
         break;
-      frame = std::exchange(m_latest, {});
-      final = m_finalize;
+      if (!m_frames.empty()) {
+        frame = std::move(m_frames.front());
+        m_frames.pop_front();
+      }
+      final = m_finalize && m_frames.empty();
     }
     if (frame) {
       const QImage original = m_windowAddress.isEmpty() ? QImage{} : frame->image;
@@ -515,7 +526,26 @@ void ScrollCaptureController::work(std::stop_token stopToken) {
       ScrollStitcher::Result result;
       {
         ScopedUiTiming appendTiming(QStringLiteral("scroll.append seq=%1").arg(frame->sequence));
-        result = stitcher.append(frame->image, original, frame->hdr);
+        result = stitcher.append(frame->image, original, frame->hdr, frame->scrollMotion ? &*frame->scrollMotion : nullptr, frame->timeNs);
+      }
+      traceTiming(QStringLiteral("scroll.tracking seq=%1 status=%2 offset=%3 confidence=%4 reason=%5 viewport=%6 top_mask=%7 bottom_mask=%8 content_width=%9 skipped=%10")
+                      .arg(frame->sequence).arg(QLatin1String(ScrollStitcher::statusName(result.status))).arg(result.displacement)
+                      .arg(result.confidence, 0, 'f', 5).arg(QLatin1String(result.reason))
+                      .arg(stitcher.layout().viewportY).arg(stitcher.layout().topOcclusion)
+                      .arg(stitcher.layout().bottomOcclusion).arg(stitcher.layout().content.width()).arg(frame->sequence > processedSequence ? frame->sequence-processedSequence-1 : 0));
+      traceTiming(QStringLiteral("scroll.prior seq=%1 input_wheel=%2 input_finger=%3 input_continuous=%4 input_legacy=%5 predicted=%6 tolerance=%7 measured=%8 used=%9 gain_wheel=%10 gain_finger=%11 capture_ns=%12 input_ns=%13")
+          .arg(frame->sequence).arg(result.input[0]).arg(result.input[1]).arg(result.input[2]).arg(result.input[3])
+          .arg(result.predictedOffset).arg(result.priorTolerance).arg(result.displacement).arg(result.priorUsed)
+          .arg(result.gain[0]).arg(result.gain[1]).arg(frame->timeNs).arg(frame->scrollMotion ? frame->scrollMotion->lastInputNs : 0));
+      processedSequence = frame->sequence;
+      if (timingEnabled()) {
+        const auto regions=stitcher.layout();
+        traceTiming(QStringLiteral("scroll.regions content=%1,%2,%3,%4 initial=%5,%6,%7,%8 panels=%9")
+            .arg(regions.content.x()).arg(regions.content.y()).arg(regions.content.width()).arg(regions.content.height())
+            .arg(regions.initialContent.x()).arg(regions.initialContent.y()).arg(regions.initialContent.width()).arg(regions.initialContent.height()).arg(regions.panels.size()));
+        for(const auto& panel:regions.panels)
+          traceTiming(QStringLiteral("scroll.panel rect=%1,%2,%3,%4 document=%5 source_top=%6")
+              .arg(panel.rect.x()).arg(panel.rect.y()).arg(panel.rect.width()).arg(panel.rect.height()).arg(panel.documentY).arg(panel.sourceTop));
       }
       // Stability concerns the document's position. GIFs may keep repainting
       // after scrolling stops. Require consecutive accepted frames so a
@@ -590,8 +620,10 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
   m_latestCaptureNs = timeNs;
   if (result.status == ScrollStitcher::Status::Started) {
     traceTiming(QStringLiteral("scroll.baseline_ready seq=%1").arg(sequence));
-    command({{"command", "baseline"}});
+    command({{"command", "baseline"}, {"paced", true}});
   }
+  command({{"command", "tracking"}, {"sequence", qint64(sequence)}, {"aligned", aligned}, {"offset", result.displacement},
+           {"stable", stable}, {"height", std::max(96,layout.content.height()-layout.topOcclusion-layout.bottomOcclusion)}});
   if (!m_active) {
     m_layout = layout;
     m_warmFrame = frame;
@@ -652,7 +684,10 @@ void ScrollCaptureController::present(QImage frame, QRect geometry,
     if (m_editor)
       m_editor->setAnnotationPresentation(false, 0, 0);
     m_hiddenAnnotations = true;
-    setStatus(tr("Cannot align; scroll back slightly"));
+    setStatus(result.status==ScrollStitcher::Status::Ambiguous &&
+                      std::strcmp(result.reason,"identical-pixels-with-pending-input")==0
+                  ? tr("Waiting for page movement")
+                  : tr("Cannot align; scroll back slightly"));
     if (result.status == ScrollStitcher::Status::LimitReached ||
         result.status == ScrollStitcher::Status::SizeChanged) {
       command({{"command", "pause"}});
