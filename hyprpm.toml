@@ -1,9 +1,6 @@
 [repository]
 name = "HyprCapture"
 authors = ["wilf"]
-commit_pins = [
-    ["0.54.3", ""]
-]
 
 [hyprcapture]
 description = "Hyprland-only screenshot overlay"
