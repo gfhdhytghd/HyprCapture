@@ -7,15 +7,14 @@
       "tag": "v0.5.0-v0.57.0",
       "version": "0.5.0",
       "hyprland": "0.57.0",
-      "published_at": "2026-10-29T00:01:39Z",
+      "published_at": "2026-10-29T16:49:00Z",
       "headline": "Hyprland 0.57, on-demand saving and smooth selection on large outputs",
       "sections": [
         {
           "title": "Hyprland 0.57",
           "items": [
-            "Targets Hyprland v0.57.0 from gfhdhytghd/Hyprland (`f6725e43`). Upstream hyprwm v0.57.0 is a different commit with a different plugin ABI.",
-            "The plugin refuses to load when the Hyprland headers it was built with do not match the running compositor; rebuild it for that compositor (`hyprpm update`).",
-            "The Nix flake pins the fork release and its aquamarine."
+            "Targets the latest official Hyprland release, v0.57.0. For Hyprland's development main, use the hyprland-master branch.",
+            "The plugin refuses to load when the Hyprland headers it was built with do not match the running compositor; rebuild it for that compositor (`hyprpm update`)."
           ]
         },
         {
