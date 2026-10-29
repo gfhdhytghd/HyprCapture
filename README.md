@@ -1,8 +1,8 @@
 # HyprCapture
 
 > [!IMPORTANT]
-> `master` targets the latest official Hyprland release, currently v0.57.0 (`hyprwm/Hyprland` `0aa6745f`); `flake.lock` pins that release.
-> For Hyprland's development `main`, use the `hyprland-master` branch.
+> This is the `hyprland-master` branch for Hyprland's development `main` (`hyprwm/Hyprland`); `flake.lock` pins the adapted commit (`7a5e469c`).
+> Use HyprCapture's `master` branch with the latest official Hyprland release for the stable setup.
 > The compositor and plugin must come from the same Hyprland revision; the plugin refuses to load when its headers do not match the running compositor.
 
 HyprCapture is a Hyprland-only screenshot tool split into a compositor plugin and a Qt layer-shell helper. The plugin captures frozen compositor artifacts and launches the helper; the helper provides the selection overlay, output rendering, clipboard integration, and result thumbnail.
@@ -174,9 +174,9 @@ The example below pins the supported Hyprland release. Add HyprCapture to the sa
 ```nix
 {
   inputs = {
-    hyprland.url = "github:hyprwm/Hyprland/v0.57.0";
+    hyprland.url = "github:hyprwm/Hyprland";
     hyprcapture = {
-      url = "github:gfhdhytghd/HyprCapture";
+      url = "github:gfhdhytghd/HyprCapture/hyprland-master";
       inputs.hyprland.follows = "hyprland";
     };
   };
