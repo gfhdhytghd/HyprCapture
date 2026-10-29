@@ -4,6 +4,50 @@
   "site_url": "https://gfhdhytghd.github.io/HyprCapture/",
   "releases": [
     {
+      "tag": "v0.5.0-0.57.0",
+      "version": "0.5.0",
+      "hyprland": "0.57.0",
+      "published_at": "2026-10-29T00:01:39Z",
+      "headline": "Hyprland 0.57, on-demand saving and smooth selection on large outputs",
+      "sections": [
+        {
+          "title": "Hyprland 0.57",
+          "items": [
+            "Targets Hyprland v0.57.0 from gfhdhytghd/Hyprland (`f6725e43`). Upstream hyprwm v0.57.0 is a different commit with a different plugin ABI.",
+            "The plugin refuses to load when the Hyprland headers it was built with do not match the running compositor; rebuild it for that compositor (`hyprpm update`).",
+            "The Nix flake pins the fork release and its aquamarine."
+          ]
+        },
+        {
+          "title": "New",
+          "items": [
+            "Save individual captures on demand (#40): Save in the thumbnail menu, a quick Copy/Save row on unsaved thumbnails, and an editor Save button when automatic saving is off. `open`, `open_editor` and `quick` accept `{ save = ..., clipboard = ... }` to override the defaults for one capture."
+          ]
+        },
+        {
+          "title": "Performance",
+          "items": [
+            "Dragging a region selection repaints only the area around the selection, so selecting stays smooth on 6K and other large outputs.",
+            "The editor layers SDR annotations over an immutable FP16 HDR backdrop and no longer converts the full frame on every interaction."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Fullscreen window captures no longer include borders and shadows.",
+            "The real background stays under fully transparent windows, and background-sampling decorations stay out of offscreen window captures (#34).",
+            "Scrolling captures keep sticky panels, release stale ones, and no longer repeat or stall on fixed bottom overlays.",
+            "The HDR overlay's first frame appears in HDR instead of flashing SDR.",
+            "A config reload no longer drops the rule that keeps compositor animations off the capture overlay.",
+            "`hyprctl reload full-reset` keeps HyprCapture's Lua functions and options.",
+            "Captures no longer advance or dirty the live blur state of the monitor being captured.",
+            "With `render:use_shader_blur_blend`, a real-background window capture reports the blurred background as unavailable instead of saving an unblurred one.",
+            "Recording intermediates are kept when APNG conversion fails, and pointer focus survives touchpad scroll gestures."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.4.2-0.56.2",
       "version": "0.4.2",
       "hyprland": "0.56.2",

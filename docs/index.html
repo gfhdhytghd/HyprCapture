@@ -167,7 +167,7 @@
     <h1>HyprCapture</h1>
     <p class="lede">Release history of the HyprCapture screenshot and screen recording plugin for Hyprland. Each version tag names the plugin version followed by the Hyprland release it was built for.</p>
     <ul class="actions">
-      <li><a class="button primary" href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.4.2-0.56.2">Latest: v0.4.2-0.56.2</a></li>
+      <li><a class="button primary" href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.5.0-0.57.0">Latest: v0.5.0-0.57.0</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture#installation">Installation</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture/releases">All GitHub releases</a></li>
       <li><a class="button" href="https://github.com/gfhdhytghd/HyprCapture">Source code</a></li>
@@ -178,6 +178,7 @@
   <nav class="toc" aria-labelledby="toc-title">
     <h2 id="toc-title">Versions</h2>
     <ol>
+      <li><a href="#v0-5-0-0-57-0">0.5.0 <span>2026-10-29</span></a></li>
       <li><a href="#v0-4-2-0-56-2">0.4.2 <span>2026-10-12</span></a></li>
       <li><a href="#v0-4-1-0-56-2">0.4.1 <span>2026-10-11</span></a></li>
       <li><a href="#v0-4-0-0-56-2">0.4.0 <span>2026-10-11</span></a></li>
@@ -197,10 +198,47 @@
   <main id="changelog" tabindex="-1">
     <ol class="timeline" aria-label="Releases, newest first">
       <li>
+        <article class="entry" id="v0-5-0-0-57-0" aria-labelledby="v0-5-0-0-57-0-title">
+          <div class="entry-head">
+            <h2 id="v0-5-0-0-57-0-title"><a href="#v0-5-0-0-57-0">0.5.0</a></h2>
+            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-29T00:01:39Z">Oct 29, 2026</time><span class="badge">Hyprland 0.57.0</span><code>v0.5.0-0.57.0</code></div>
+          </div>
+          <p class="headline">Hyprland 0.57, on-demand saving and smooth selection on large outputs</p>
+          <h3>Hyprland 0.57</h3>
+          <ul>
+            <li>Targets Hyprland v0.57.0 from gfhdhytghd/Hyprland (<code>f6725e43</code>). Upstream hyprwm v0.57.0 is a different commit with a different plugin ABI.</li>
+            <li>The plugin refuses to load when the Hyprland headers it was built with do not match the running compositor; rebuild it for that compositor (<code>hyprpm update</code>).</li>
+            <li>The Nix flake pins the fork release and its aquamarine.</li>
+          </ul>
+          <h3>New</h3>
+          <ul>
+            <li>Save individual captures on demand (<a href="https://github.com/gfhdhytghd/HyprCapture/issues/40">#40</a>): Save in the thumbnail menu, a quick Copy/Save row on unsaved thumbnails, and an editor Save button when automatic saving is off. <code>open</code>, <code>open_editor</code> and <code>quick</code> accept <code>{ save = ..., clipboard = ... }</code> to override the defaults for one capture.</li>
+          </ul>
+          <h3>Performance</h3>
+          <ul>
+            <li>Dragging a region selection repaints only the area around the selection, so selecting stays smooth on 6K and other large outputs.</li>
+            <li>The editor layers SDR annotations over an immutable FP16 HDR backdrop and no longer converts the full frame on every interaction.</li>
+          </ul>
+          <h3>Fixed</h3>
+          <ul>
+            <li>Fullscreen window captures no longer include borders and shadows.</li>
+            <li>The real background stays under fully transparent windows, and background-sampling decorations stay out of offscreen window captures (<a href="https://github.com/gfhdhytghd/HyprCapture/issues/34">#34</a>).</li>
+            <li>Scrolling captures keep sticky panels, release stale ones, and no longer repeat or stall on fixed bottom overlays.</li>
+            <li>The HDR overlay&#x27;s first frame appears in HDR instead of flashing SDR.</li>
+            <li>A config reload no longer drops the rule that keeps compositor animations off the capture overlay.</li>
+            <li><code>hyprctl reload full-reset</code> keeps HyprCapture&#x27;s Lua functions and options.</li>
+            <li>Captures no longer advance or dirty the live blur state of the monitor being captured.</li>
+            <li>With <code>render:use_shader_blur_blend</code>, a real-background window capture reports the blurred background as unavailable instead of saving an unblurred one.</li>
+            <li>Recording intermediates are kept when APNG conversion fails, and pointer focus survives touchpad scroll gestures.</li>
+          </ul>
+          <div class="entry-foot"><a href="https://github.com/gfhdhytghd/HyprCapture/releases/tag/v0.5.0-0.57.0">Release notes for v0.5.0-0.57.0 on GitHub</a><a href="https://github.com/gfhdhytghd/HyprCapture/compare/v0.4.2-0.56.2...v0.5.0-0.57.0">Compare with v0.4.2-0.56.2</a></div>
+        </article>
+      </li>
+      <li>
         <article class="entry" id="v0-4-2-0-56-2" aria-labelledby="v0-4-2-0-56-2-title">
           <div class="entry-head">
             <h2 id="v0-4-2-0-56-2-title"><a href="#v0-4-2-0-56-2">0.4.2</a></h2>
-            <div class="meta"><span class="badge latest">Latest</span><time datetime="2026-10-12T07:02:45Z">Oct 12, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.4.2-0.56.2</code></div>
+            <div class="meta"><time datetime="2026-10-12T07:02:45Z">Oct 12, 2026</time><span class="badge">Hyprland 0.56.2</span><code>v0.4.2-0.56.2</code></div>
           </div>
           <p class="headline">Window highlights follow Hymission thumbnails</p>
           <h3>Fixed</h3>
