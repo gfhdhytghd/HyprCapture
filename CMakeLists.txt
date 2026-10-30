@@ -31,16 +31,7 @@ add_compile_options(
   --no-gnu-unique
 )
 
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(HYPR_DEPS REQUIRED hyprland)
-pkg_check_modules(GIO REQUIRED gio-2.0 gio-unix-2.0)
-pkg_check_modules(LUA REQUIRED lua)
-pkg_check_modules(PULSE REQUIRED IMPORTED_TARGET libpulse)
-pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
-pkg_check_modules(FFMPEG_MUX REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil)
-
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Svg DBus Network)
-find_package(LayerShellQt REQUIRED)
+include(cmake/Dependencies.cmake)
 # Native HDR presentation is independent of the SDR Qt raster backing store.
 add_library(hyprcapture-hdr-backdrop STATIC src/ui/hdr_backdrop.cpp src/ui/hdr_gpu.cpp src/ui/hdr_shm.cpp
   src/ui/clipboard_utils.cpp src/shared/process_environment.cpp src/shared/trusted_path.cpp)
@@ -88,8 +79,6 @@ if(HYPRCAPTURE_GAINMAP_HEIC)
   target_compile_definitions(hyprcapture-hdr PRIVATE HYPRCAPTURE_HAVE_ULTRAHDR=1)
   target_link_libraries(hyprcapture-hdr PRIVATE ${HYPRCAPTURE_ULTRAHDR_TARGET})
 endif()
-find_package(nlohmann_json REQUIRED)
-find_package(OpenCV REQUIRED COMPONENTS core imgproc)
 include_directories(${OpenCV_INCLUDE_DIRS})
 
 set(HYPRLAND_SOURCE_DIR "" CACHE PATH "Optional Hyprland source checkout to use for plugin headers")
@@ -189,8 +178,6 @@ target_link_options(hyprcapture-ui PRIVATE -Wl,-z,relro -Wl,-z,now -Wl,-z,noexec
 
 # Optional inference stays outside the compositor and UI. No TensorFlow headers
 # are needed here; the pinned CPU runtime is loaded through its stable C ABI.
-pkg_check_modules(FFTW REQUIRED IMPORTED_TARGET fftw3)
-pkg_check_modules(SWRESAMPLE REQUIRED IMPORTED_TARGET libswresample libavutil)
 add_library(hyprcapture-dtln STATIC src/audio/dtln.cpp src/audio/dtln_stream.cpp)
 set_target_properties(hyprcapture-dtln PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(hyprcapture-dtln PUBLIC src)
@@ -324,6 +311,8 @@ if(BUILD_TESTING)
   # Ignore inherited PYTHONOPTIMIZE/PYTHONPATH: assertions are part of these tests.
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   if(Python3_Interpreter_FOUND)
+    add_test(NAME build-dependencies COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/build_dependencies_test.py)
+    set_tests_properties(build-dependencies PROPERTIES TIMEOUT 60)
     add_test(NAME capture-integration COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/capture_integration_test.py)
     add_test(NAME aec-source-pins COMMAND ${Python3_EXECUTABLE} -E ${CMAKE_CURRENT_SOURCE_DIR}/tests/aec_sources_test.py)
     set_tests_properties(aec-source-pins PROPERTIES TIMEOUT 45)
