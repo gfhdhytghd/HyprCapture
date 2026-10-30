@@ -97,6 +97,8 @@ After a Hyprland update, a notification offers to rebuild. `omarchy plugin updat
 
 ### Install with `hyprpm`
 
+Install the [dependencies](#dependencies) before running `hyprpm`; it builds the plugin but does not install missing system packages. On Arch Linux, start with [Install on Arch Linux](#install-on-arch-linux), including its dependency command.
+
 Use `hyprpm` for the compositor plugin:
 
 ```sh
@@ -125,11 +127,13 @@ Perform a full system upgrade while installing the build tools and libraries:
 ```sh
 sudo pacman -Syu --needed base-devel cmake git cpio \
     hyprland nlohmann-json lua glib2 \
-    qt6-base qt6-svg qt6-wayland layer-shell-qt opencv \
+    qt6-base qt6-svg qt6-wayland layer-shell-qt opencv vtk hdf5 \
     pipewire libpipewire fftw libpulse ffmpeg wl-clipboard
 ```
 
 `base-devel` supplies GCC, Make, and `pkgconf` (the `pkg-config` command), but not CMake. [Qt SVG](https://archlinux.org/packages/extra/x86_64/qt6-svg/) is a separate package; `qt6-wayland` supplies the helper's native Wayland support. `libpipewire` supplies the PipeWire development files, and `ffmpeg` supplies both the recording tools and the required FFmpeg libraries. `git` and `cpio` are used by `hyprpm` when preparing sources and headers.
+
+`opencv` supplies the OpenCV headers, libraries, and CMake package configuration required by the build. [Arch lists `vtk` and `hdf5` as optional OpenCV dependencies](https://archlinux.org/packages/extra/x86_64/opencv/); the command includes them because installing this package set resolved the build failure reported in [issue #42](https://github.com/gfhdhytghd/HyprCapture/issues/42#issuecomment-6526089875). HyprCapture itself requests only OpenCV's `core` and `imgproc` components, not VTK or HDF5 directly.
 
 For sound recording, use a running PulseAudio server or PipeWire's PulseAudio compatibility service. If your desktop uses PipeWire, install the service and session manager if missing:
 
@@ -166,6 +170,23 @@ test -x "$HOME/.local/bin/hyprcapture-ui" && echo "HyprCapture helper installed"
 ```
 
 Press **Super + Shift + S**, take a screenshot, and verify saving or copying it. If the build reports missing `Qt6Svg`, install `qt6-svg`; if it reports missing `libpipewire-0.3`, install `libpipewire`. For a Hyprland version/header mismatch after an upgrade, restart into the updated Hyprland session, run `hyprpm update`, then `hyprpm reload`.
+
+### Troubleshoot `hyprpm` build failures
+
+Run this when no capture overlay or recording is active:
+
+```sh
+hyprctl version
+hyprpm update -v
+```
+
+Read the first CMake or compiler error after `Building hyprcapture`. The summary `Plugin hyprcapture failed to build` does not identify the cause. The later `Hyprland's ABI changed` warning can appear when a missing dependency prevents rebuilding; it does not by itself prove that HyprCapture is incompatible with your Hyprland version.
+
+CMake checks required system libraries before downloading the private HEIC dependencies. If any are missing, it prints a `HyprCapture: missing required build dependencies` summary with the missing names and an Arch Linux installation command. Installers on other distributions should install the matching development packages. `hyprpm` hides build output unless `-v` is enabled, so use `hyprpm update -v` to see this summary. Optional HDR and inference capabilities are checked separately.
+
+For example, the verbose logs in [issue #42](https://github.com/gfhdhytghd/HyprCapture/issues/42) stopped at `find_package(OpenCV)` because CMake could not find `OpenCVConfig.cmake` or `opencv-config.cmake`. On Arch Linux, install the packages above, including `opencv vtk hdf5`, then retry `hyprpm update -v`. Missing `Makefile`, helper binaries, or plugin output after a failed CMake configuration are follow-on errors; fix the configuration error first.
+
+After the rebuild succeeds, run `hyprpm reload`. If it still fails, include `hyprctl version` and the first CMake or compiler error, with the surrounding lines, in your report.
 
 ### Install on NixOS
 
