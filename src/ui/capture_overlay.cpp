@@ -19,6 +19,7 @@
 #include <QColorSpace>
 
 #include "ui/clipboard_utils.hpp"
+#include "ui/color_mix.hpp"
 #include "ui/overlay_paint.hpp"
 #include "ui/remembered_settings.hpp"
 #include "audio/aec_policy.hpp"
@@ -696,10 +697,7 @@ QString cssRgba(QColor color, int alpha = -1) {
     return QStringLiteral("rgba(%1,%2,%3,%4)").arg(color.red()).arg(color.green()).arg(color.blue()).arg(color.alpha());
 }
 
-QColor mixedColor(QColor a, QColor b, double amount) {
-    const auto mix = [&](int av, int bv) { return static_cast<int>(std::round(av * (1.0 - amount) + bv * amount)); };
-    return QColor(mix(a.red(), b.red()), mix(a.green(), b.green()), mix(a.blue(), b.blue()), mix(a.alpha(), b.alpha()));
-}
+using hyprcapture::ui::mixedColor;
 
 QString toolbarStyleSheet(const QPalette& palette) {
     const QColor window = palette.color(QPalette::Window);
