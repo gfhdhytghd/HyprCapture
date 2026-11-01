@@ -1,6 +1,7 @@
 #include "ui/annotation_editor.hpp"
 #include "ui/hdr_image.hpp"
 #include "ui/hdr_backdrop.hpp"
+#include "ui/color_mix.hpp"
 #include "ui/timing.hpp"
 #include <QColorSpace>
 #include <QWindow>
@@ -58,10 +59,7 @@ namespace {
 enum class Tool { Select, Rectangle, Ellipse, Arrow, Line, Pen, Highlighter, Text, Number, Mosaic, Spotlight };
 enum class Variant { Outline, Filled, Rounded, RoundedFilled, Straight, Curved, DoubleHeaded, DoubleCurved };
 
-QColor mixedColor(QColor a, QColor b, double amount) {
-    const auto mix = [&](int av, int bv) { return static_cast<int>(std::round(av * (1.0 - amount) + bv * amount)); };
-    return QColor(mix(a.red(), b.red()), mix(a.green(), b.green()), mix(a.blue(), b.blue()), mix(a.alpha(), b.alpha()));
-}
+using hyprcapture::ui::mixedColor;
 
 struct ThemeColors { QColor surface, border, ink, selected, hover, focus, accent; };
 
