@@ -58,6 +58,29 @@ namespace {
 enum class Tool { Select, Rectangle, Ellipse, Arrow, Line, Pen, Highlighter, Text, Number, Mosaic, Spotlight };
 enum class Variant { Outline, Filled, Rounded, RoundedFilled, Straight, Curved, DoubleHeaded, DoubleCurved };
 
+QColor mixedColor(QColor a, QColor b, double amount) {
+    const auto mix = [&](int av, int bv) { return static_cast<int>(std::round(av * (1.0 - amount) + bv * amount)); };
+    return QColor(mix(a.red(), b.red()), mix(a.green(), b.green()), mix(a.blue(), b.blue()), mix(a.alpha(), b.alpha()));
+}
+
+struct ThemeColors { QColor surface, border, ink, selected, hover, focus, accent; };
+
+// Follow the Qt palette, like the capture toolbar, while the chosen editor theme
+// matches its brightness; forcing the opposite theme keeps the built-in colors.
+ThemeColors themeColors(bool dark) {
+    const QPalette palette = QApplication::palette();
+    const QColor window = palette.color(QPalette::Window);
+    const QColor accent = palette.color(QPalette::Highlight);
+    if ((window.lightness() < 128) == dark) {
+        const QColor button = palette.color(QPalette::Button);
+        const QColor text = palette.color(QPalette::WindowText);
+        return {window, mixedColor(text, window, 0.55), text, mixedColor(button, accent, 0.32), mixedColor(button, accent, 0.16), accent, accent};
+    }
+    if (dark)
+        return {QColor("#222b36"), QColor("#526171"), QColor("#e9f0f6"), QColor("#315577"), QColor("#354352"), QColor("#91b8db"), accent};
+    return {QColor("#ffffff"), QColor("#cbd4de"), QColor("#26313d"), QColor("#dcecff"), QColor("#edf3f9"), QColor("#6291bd"), accent};
+}
+
 struct Annotation {
     Tool tool = Tool::Rectangle;
     Variant variant = Variant::Outline;
@@ -596,13 +619,13 @@ class TextBoxFrame final : public QFrame {
         QFrame::paintEvent(event);
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(QColor("#69bfff"), 1));
+        painter.setPen(QPen(palette().color(QPalette::Highlight), 1));
         painter.setBrush(Qt::white);
-        painter.setPen(QPen(QColor("#69bfff"), 3, Qt::SolidLine, Qt::RoundCap));
-        painter.setPen(QPen(QColor("#69bfff"), 1));
+        painter.setPen(QPen(palette().color(QPalette::Highlight), 3, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(palette().color(QPalette::Highlight), 1));
         for (const QPointF point : {QPointF(3, 3), QPointF(width()-4, 3), QPointF(3, height()-4), QPointF(width()-4, height()-4)})
             painter.drawRoundedRect(QRectF(point - QPointF(2, 2), QSizeF(4, 4)), 1, 1);
-        painter.setPen(QPen(QColor("#69bfff"), 3, Qt::SolidLine, Qt::RoundCap));
+        painter.setPen(QPen(palette().color(QPalette::Highlight), 3, Qt::SolidLine, Qt::RoundCap));
         const qreal cx = (width()-1)/2.0, cy = (height()-1)/2.0;
         painter.drawLine(QPointF(cx-18, 3), QPointF(cx+18, 3));
         painter.drawLine(QPointF(cx-18, height()-4), QPointF(cx+18, height()-4));
@@ -1165,14 +1188,14 @@ class AnnotationCanvas final : public QWidget {
                 }
             } else selectedPath=annotationPath(selected);
             const QRectF selectedBounds=selectedPath.boundingRect();
-            painter.setPen(QPen(QColor("#69bfff"), 1.5 / transform.m11(), Qt::DashLine));
+            painter.setPen(QPen(palette().color(QPalette::Highlight), 1.5 / transform.m11(), Qt::DashLine));
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(selectedBounds.adjusted(-5.0 / transform.m11(), -5.0 / transform.m11(), 5.0 / transform.m11(), 5.0 / transform.m11()));
         }
         painter.restore();
         if (!resizeBounds.isEmpty()) {
             const QRectF frame = QRectF(displayRect()).adjusted(0.5, 0.5, -0.5, -0.5);
-            painter.setPen(QPen(QColor("#69bfff"), 1));
+            painter.setPen(QPen(palette().color(QPalette::Highlight), 1));
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(frame);
             painter.setBrush(QColor("#ffffff"));
@@ -1583,7 +1606,7 @@ class AnnotationCanvas final : public QWidget {
 
 // Official Material Symbols Rounded, rendered directly from SVG at device DPI.
 QIcon toolIcon(Tool tool, Variant variant, bool dark, const QColor&) {
-    const QColor ink(dark ? "#e9f0f6" : "#26313d");
+    const QColor ink = themeColors(dark).ink;
     const bool filled = variant == Variant::Filled || variant == Variant::RoundedFilled;
     const char* name = "arrow_selector_tool";
     qreal rotation = 0;
@@ -1610,7 +1633,7 @@ QIcon toolIcon(Tool tool, Variant variant, bool dark, const QColor&) {
 }
 
 QIcon actionIcon(const QString& action, bool dark, const QColor&) {
-    const QColor ink(dark ? "#e9f0f6" : "#26313d");
+    const QColor ink = themeColors(dark).ink;
     static const std::map<QString, std::string_view> names{
         {"color", "palette"}, {"undo", "undo"}, {"redo", "redo"},
         {"save", "save"}, {"pin", "push_pin"}, {"confirm", "check"}, {"cancel", "close"},
@@ -1624,11 +1647,12 @@ QIcon actionIcon(const QString& action, bool dark, const QColor&) {
 void paintStripButton(QWidget* widget, const QString& hint, const QIcon& icon, bool dark, bool checked, bool hover, bool focus) {
     QPainter painter(widget);
     painter.setRenderHint(QPainter::Antialiasing);
+    const ThemeColors colors = themeColors(dark);
     const QRectF highlight = QRectF(widget->rect()).adjusted(2, 3, -2, -3);
     if (checked || hover)
-        painter.fillPath([&] { QPainterPath path; path.addRoundedRect(highlight, 5, 5); return path; }(), QColor(checked ? (dark ? "#315577" : "#dcecff") : (dark ? "#354352" : "#edf3f9")));
+        painter.fillPath([&] { QPainterPath path; path.addRoundedRect(highlight, 5, 5); return path; }(), checked ? colors.selected : colors.hover);
     if (focus) {
-        painter.setPen(QPen(QColor(dark ? "#91b8db" : "#6291bd"), 1, Qt::DotLine));
+        painter.setPen(QPen(colors.focus, 1, Qt::DotLine));
         painter.setBrush(Qt::NoBrush);
         painter.drawRoundedRect(highlight, 5, 5);
     }
@@ -1641,13 +1665,13 @@ void paintStripButton(QWidget* widget, const QString& hint, const QIcon& icon, b
         QFont font = QApplication::font();
         font.setPixelSize(14);
         painter.setFont(font);
-        painter.setPen(QColor(dark ? "#e9f0f6" : "#26313d"));
+        painter.setPen(colors.ink);
         painter.drawText(QRect(left, (widget->height() - 20) / 2, labelWidth, 20), Qt::AlignCenter, hint + ":");
     }
     icon.paint(&painter, QRect(left + labelWidth + (labelWidth ? 2 : 0), (widget->height() - 22) / 2, 22, 22), Qt::AlignCenter, QIcon::Normal);
     if (widget->property("annotationAccent").isValid()) {
         const QRectF swatch(left + labelWidth + (labelWidth ? 2 : 0) + 2, widget->height() - 5, 18, 3);
-        painter.setPen(QPen(QColor(dark ? "#718297" : "#aab8c6"), 0.5));
+        painter.setPen(QPen(colors.border, 0.5));
         painter.setBrush(widget->property("annotationAccent").value<QColor>());
         painter.drawRoundedRect(swatch, 1.5, 1.5);
     }
@@ -1947,10 +1971,8 @@ struct AnnotationEditor::Impl {
         }
     }
     void applyTheme() {
-        const QString surface = dark ? "#222b36" : "#ffffff";
-        const QString border = dark ? "#526171" : "#cbd4de";
-        const QString ink = dark ? "#e9f0f6" : "#26313d";
-        const QString selected = dark ? "#315577" : "#dcecff";
+        const ThemeColors colors = themeColors(dark);
+        const QString surface = colors.surface.name(), border = colors.border.name(), ink = colors.ink.name(), selected = colors.selected.name();
         for (auto* frame : {toolbar, variantPanel, colorPanel, morePanel})
             frame->setStyleSheet(QString("QFrame#%1 { background: %2; border: 1px solid %3; border-radius: 6px; } QLabel { color: %4; } QSpinBox { color: %4; background: %2; border: 1px solid %3; border-radius: 4px; padding: 1px 2px; selection-background-color: %5; selection-color: %4; } QToolButton#annotationWidthDecrease, QToolButton#annotationWidthIncrease { color:%4; background:%2; border:1px solid %3; border-radius:4px; } QToolButton#annotationWidthDecrease:hover, QToolButton#annotationWidthIncrease:hover { background:%5; }")
                 .arg(frame->objectName(), surface, border, ink, selected));
@@ -2227,7 +2249,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         auto* swatch = new QToolButton(ui.colorPanel);
         swatch->setObjectName("annotationColor" + value.mid(1));
         swatch->setFixedSize(18, 18);
-        swatch->setStyleSheet(QString("background: %1; border: 1px solid #79889b; border-radius: 4px;").arg(value));
+        swatch->setStyleSheet(QString("background: %1; border: 1px solid %2; border-radius: 4px;").arg(value, themeColors(m_impl->dark).border.name()));
         swatch->setToolTip(value);
         swatch->setAccessibleName(value);
         swatches->addWidget(swatch);
@@ -2271,8 +2293,12 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         panel->setMouseTracking(true);
         panel->setMinimumSize(std::min(240, std::max(1, width()-16)), std::min(100, std::max(1, height()-16)));
         const bool dark = m_impl->dark;
-        panel->setStyleSheet(QString("QFrame#annotationTextPanel { background:rgba(80,120,160,18); border:1px solid #69bfff; border-radius:5px; } QWidget#annotationTextControls, QLabel#annotationTextDragHandle { background:%1; color:%2; border-radius:3px; } QPlainTextEdit { background:transparent; border:0; } QLineEdit, QSpinBox, QListWidget { background:%1; color:%2; } ")
-            .arg(dark ? "#222b36" : "#ffffff", dark ? "#e9f0f6" : "#26313d"));
+        const ThemeColors theme = themeColors(dark);
+        const QString surface = theme.surface.name(), ink = theme.ink.name(), border = theme.border.name();
+        QColor tint = theme.accent;
+        tint.setAlpha(18);
+        panel->setStyleSheet(QString("QFrame#annotationTextPanel { background:%3; border:1px solid %4; border-radius:5px; } QWidget#annotationTextControls, QLabel#annotationTextDragHandle { background:%1; color:%2; border-radius:3px; } QPlainTextEdit { background:transparent; border:0; } QLineEdit, QSpinBox, QListWidget { background:%1; color:%2; } ")
+            .arg(surface, ink, tint.name(QColor::HexArgb), theme.accent.name()));
         auto* layout = new QVBoxLayout(panel);
         layout->setContentsMargins(8, 8, 8, 8);
         layout->setSpacing(5);
@@ -2283,7 +2309,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         controlsFont.setPixelSize(12);
         controls->setFont(controlsFont);
         controls->setStyleSheet(QString("QFrame#annotationTextControls { background:%1; border:1px solid %3; border-radius:6px; } QLineEdit, QSpinBox, QPushButton { color:%2; background:%1; border:1px solid %3; border-radius:4px; padding:1px 4px; }")
-            .arg(dark ? "#222b36" : "#ffffff", dark ? "#e9f0f6" : "#26313d", dark ? "#536171" : "#cbd5e1"));
+            .arg(surface, ink, border));
         auto* rows = new QVBoxLayout(controls);
         rows->setContentsMargins(5, 5, 5, 5); rows->setSpacing(4);
         auto* styleRow = new QHBoxLayout;
@@ -2322,7 +2348,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
             step->setAutoRepeat(true);
             step->setAccessibleName(tr("Font size") + (direction > 0 ? " +" : " −"));
             step->setStyleSheet(QString("QToolButton { color:%1; background:%2; border:1px solid %3; padding:0; }")
-                .arg(dark ? "#e9f0f6" : "#26313d", dark ? "#222b36" : "#ffffff", dark ? "#536171" : "#cbd5e1"));
+                .arg(ink, surface, border));
             sizeSteps->addWidget(step);
             connect(step, &QToolButton::clicked, size, [size, direction] { size->stepBy(direction); });
         }
@@ -2341,7 +2367,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         auto* textPalette = new QFrame(this);
         textPalette->setObjectName("annotationTextPalette");
         textPalette->setAttribute(Qt::WA_StyledBackground);
-        textPalette->setStyleSheet(QString("QFrame#annotationTextPalette { background:%1; border:1px solid #79889b; border-radius:6px; }").arg(dark ? "#222b36" : "#ffffff"));
+        textPalette->setStyleSheet(QString("QFrame#annotationTextPalette { background:%1; border:1px solid %2; border-radius:6px; }").arg(surface, border));
         auto* paletteRows = new QVBoxLayout(textPalette);
         paletteRows->setContentsMargins(10, 10, 10, 10); paletteRows->setSpacing(8);
         auto* paletteLayout = new QHBoxLayout;
@@ -2376,7 +2402,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
             auto* swatch = new QToolButton(controls);
             swatch->setObjectName("annotationTextPreset" + hex.mid(1));
             swatch->setFixedSize(16, 16); swatch->setToolTip(hex); swatch->setAccessibleName(hex);
-            swatch->setStyleSheet(QString("background:%1; border:1px solid #79889b; border-radius:4px").arg(hex));
+            swatch->setStyleSheet(QString("background:%1; border:1px solid %2; border-radius:4px").arg(hex, border));
             colors->addWidget(swatch);
             connect(swatch, &QToolButton::clicked, color, [color, hex] { color->setText(hex); });
         }
@@ -2406,8 +2432,8 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         for (const QString& family : QFontDatabase::families())
             if (QFontDatabase::isSmoothlyScalable(family)) fonts->addItem(family);
         fonts->hide();
-        fonts->setStyleSheet(QString("QListWidget { background:%1; color:%2; border:1px solid #79889b; border-radius:4px; }")
-            .arg(dark ? "#222b36" : "#ffffff", dark ? "#e9f0f6" : "#26313d"));
+        fonts->setStyleSheet(QString("QListWidget { background:%1; color:%2; border:1px solid %3; border-radius:4px; }")
+            .arg(surface, ink, border));
         const auto positionControls = [this, panel, controls, fonts, textPalette] {
             controls->adjustSize();
             controls->resize(std::min(360, width()-16), controls->sizeHint().height());
