@@ -18,6 +18,7 @@
 #include <QTextLayout>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSpinBox>
@@ -660,6 +661,36 @@ class AnnotationEditorTest final : public QObject {
         QCOMPARE(editor.resultImage().pixelColor(90, 80), QColor("#ff5252"));
     }
 
+    void selectionOutlineStaysVisibleWhenHighlightMatchesImage() {
+        const QPalette original = QApplication::palette();
+        const auto restore = qScopeGuard([&] { QApplication::setPalette(original); });
+        QPalette palette = original;
+        palette.setColor(QPalette::Highlight, Qt::white);
+        QApplication::setPalette(palette);
+        AnnotationEditor editor;
+        const QImage source = image(QSize(240, 160), Qt::white);
+        initialize(editor, source);
+        selectTool(editor, 5);
+        drag(editor, QPoint(20, 30), QPoint(100, 70));
+        auto* canvas = editor.findChild<QWidget*>("annotationCanvas");
+        QVERIFY(canvas);
+        const QRect imageArea(displayed(QPoint()), source.size() * 2);
+        const auto darkPixels = [&] {
+            const QImage rendered = canvas->grab().toImage();
+            int count = 0;
+            for (int y = imageArea.top(); y <= imageArea.bottom(); ++y)
+                for (int x = imageArea.left(); x <= imageArea.right(); ++x)
+                    count += rendered.pixelColor(x, y).lightness() < 128;
+            return count;
+        };
+        QCOMPARE(darkPixels(), 0);
+        selectTool(editor, 0);
+        QTest::mouseClick(canvas, Qt::LeftButton, Qt::NoModifier, displayed(QPoint(60, 50)));
+        QApplication::processEvents();
+        // A white highlight vanishes on a white capture; the dark under-stroke must not.
+        QVERIFY(darkPixels() > 100);
+    }
+
     void allDrawingToolsExport() {
         AnnotationEditor editor;
         const QImage source = image();
@@ -720,7 +751,8 @@ class AnnotationEditorTest final : public QObject {
         auto* minus = editor.findChild<QToolButton*>("annotationWidthDecrease");
         auto* plus = editor.findChild<QToolButton*>("annotationWidthIncrease");
         QVERIFY(spin && minus && plus);
-        QCOMPARE(spin->buttonSymbols(), QAbstractSpinBox::NoButtons);
+        // No native arrows beside the custom -/+ buttons, and the value has room to render.
+        QCOMPARE(spin->findChild<QLineEdit*>()->width(), spin->width());
         spin->setValue(4);
         QTest::mouseClick(plus, Qt::LeftButton); QCOMPARE(spin->value(), 5);
         QTest::mouseClick(minus, Qt::LeftButton); QCOMPARE(spin->value(), 4);
@@ -757,6 +789,7 @@ class AnnotationEditorTest final : public QObject {
         QVERIFY(panel->findChildren<QLabel*>().isEmpty());
         QCOMPARE(font->height(), size->height());
         QCOMPARE(color->height(), size->height());
+        QCOMPARE(size->findChild<QLineEdit*>()->width(), size->width());
         auto* controls = editor.findChild<QWidget*>("annotationTextControls");
         QVERIFY(controls && controls->isVisible());
         QCOMPARE(controls->parentWidget(), &editor);
