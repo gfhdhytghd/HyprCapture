@@ -70,9 +70,8 @@ ThemeColors themeColors(bool dark) {
     const QColor window = palette.color(QPalette::Window);
     const QColor accent = palette.color(QPalette::Highlight);
     if ((window.lightness() < 128) == dark) {
-        const QColor button = palette.color(QPalette::Button);
         const QColor text = palette.color(QPalette::WindowText);
-        return {window, mixedColor(text, window, 0.55), text, mixedColor(button, accent, 0.32), mixedColor(button, accent, 0.16), accent, accent};
+        return {window, mixedColor(text, window, 0.55), text, mixedColor(window, accent, 0.32), mixedColor(window, accent, 0.16), accent, accent};
     }
     if (dark)
         return {QColor("#222b36"), QColor("#526171"), QColor("#e9f0f6"), QColor("#315577"), QColor("#354352"), QColor("#91b8db"), accent};

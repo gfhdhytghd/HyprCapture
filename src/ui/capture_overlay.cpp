@@ -701,13 +701,12 @@ using hyprcapture::ui::mixedColor;
 
 QString toolbarStyleSheet(const QPalette& palette) {
     const QColor window = palette.color(QPalette::Window);
-    const QColor button = palette.color(QPalette::Button);
     const QColor text = palette.color(QPalette::WindowText);
     const QColor highlight = palette.color(QPalette::Highlight);
     const QColor highlightedText = palette.color(QPalette::HighlightedText);
     const QColor border = mixedColor(text, window, 0.55);
-    const QColor hover = mixedColor(button, highlight, 0.16);
-    const QColor checked = mixedColor(button, highlight, 0.32);
+    const QColor hover = mixedColor(window, highlight, 0.16);
+    const QColor checked = mixedColor(window, highlight, 0.32);
     const QColor modeChecked = mixedColor(text, window, 0.72);
     const QColor recordArmed = mixedColor(text, window, 0.68);
     const QColor recordChecked(212, 48, 62);
@@ -752,12 +751,11 @@ QString toolbarStyleSheet(const QPalette& palette) {
 
 QString popupStyleSheet(const QPalette& palette) {
     const QColor window = palette.color(QPalette::Window);
-    const QColor button = palette.color(QPalette::Button);
     const QColor text = palette.color(QPalette::WindowText);
     const QColor highlight = palette.color(QPalette::Highlight);
     const QColor highlightedText = palette.color(QPalette::HighlightedText);
     const QColor border = mixedColor(text, window, 0.55);
-    const QColor hover = mixedColor(button, highlight, 0.16);
+    const QColor hover = mixedColor(window, highlight, 0.16);
 
     return QStringLiteral(
                "#inlineSelectPopup { background: %1; border: 1px solid %2; border-radius: 7px; }"
