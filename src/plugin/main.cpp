@@ -690,7 +690,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         .name = "HyprCapture",
         .description = "Hyprland-only screenshot overlay",
         .author = "wilf",
-        .version = "0.5.0",
+        .version = "0.6.0",
     };
 }
 

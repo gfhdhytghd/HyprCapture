@@ -4,6 +4,29 @@
   "site_url": "https://gfhdhytghd.github.io/HyprCapture/",
   "releases": [
     {
+      "tag": "v0.6.0-v0.57.0",
+      "version": "0.6.0",
+      "hyprland": "0.57.0",
+      "published_at": "2026-11-02T18:01:06Z",
+      "headline": "The annotation editor follows your Qt theme",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            "The annotation editor's toolbar, popups, text box and selection accents follow the Qt palette, like the capture toolbar (#43). Forcing the opposite Dark/Light mode falls back to the built-in colors."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Selection and resize markers draw over a dark under-stroke, so they stay visible when the theme highlight matches the captured image.",
+            "Selected and hover fills in the capture toolbar and editor blend from the window color, so they match the rest of the theme.",
+            "The text size and stroke width fields show their values again."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.5.0-v0.57.0",
       "version": "0.5.0",
       "hyprland": "0.57.0",
