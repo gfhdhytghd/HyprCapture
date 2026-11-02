@@ -78,6 +78,19 @@ ThemeColors themeColors(bool dark) {
     return {QColor("#ffffff"), QColor("#cbd4de"), QColor("#26313d"), QColor("#dcecff"), QColor("#edf3f9"), QColor("#6291bd"), accent};
 }
 
+// Draw a palette-coloured marker over a dark under-stroke, so it stays visible
+// even when the theme highlight matches the captured image underneath.
+void drawMarker(QPainter& painter, QPen pen, qreal halo, const std::function<void()>& draw) {
+    const QPen marker = pen;
+    pen.setColor(QColor(0, 0, 0, 150));
+    pen.setStyle(Qt::SolidLine);
+    pen.setWidthF(pen.widthF() + 2 * halo);
+    painter.setPen(pen);
+    draw();
+    painter.setPen(marker);
+    draw();
+}
+
 struct Annotation {
     Tool tool = Tool::Rectangle;
     Variant variant = Variant::Outline;
@@ -616,18 +629,23 @@ class TextBoxFrame final : public QFrame {
         QFrame::paintEvent(event);
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(palette().color(QPalette::Highlight), 1));
+        const QColor highlight = palette().color(QPalette::Highlight);
+        // Dark line just inside the stylesheet's highlight border.
+        painter.setPen(QPen(QColor(0, 0, 0, 150), 1));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRoundedRect(QRectF(rect()).adjusted(1.5, 1.5, -1.5, -1.5), 4, 4);
         painter.setBrush(Qt::white);
-        painter.setPen(QPen(palette().color(QPalette::Highlight), 3, Qt::SolidLine, Qt::RoundCap));
-        painter.setPen(QPen(palette().color(QPalette::Highlight), 1));
-        for (const QPointF point : {QPointF(3, 3), QPointF(width()-4, 3), QPointF(3, height()-4), QPointF(width()-4, height()-4)})
-            painter.drawRoundedRect(QRectF(point - QPointF(2, 2), QSizeF(4, 4)), 1, 1);
-        painter.setPen(QPen(palette().color(QPalette::Highlight), 3, Qt::SolidLine, Qt::RoundCap));
+        drawMarker(painter, QPen(highlight, 1), 1, [&] {
+            for (const QPointF point : {QPointF(3, 3), QPointF(width()-4, 3), QPointF(3, height()-4), QPointF(width()-4, height()-4)})
+                painter.drawRoundedRect(QRectF(point - QPointF(2, 2), QSizeF(4, 4)), 1, 1);
+        });
         const qreal cx = (width()-1)/2.0, cy = (height()-1)/2.0;
-        painter.drawLine(QPointF(cx-18, 3), QPointF(cx+18, 3));
-        painter.drawLine(QPointF(cx-18, height()-4), QPointF(cx+18, height()-4));
-        painter.drawLine(QPointF(3, cy-18), QPointF(3, cy+18));
-        painter.drawLine(QPointF(width()-4, cy-18), QPointF(width()-4, cy+18));
+        drawMarker(painter, QPen(highlight, 3, Qt::SolidLine, Qt::RoundCap), 1, [&] {
+            painter.drawLine(QPointF(cx-18, 3), QPointF(cx+18, 3));
+            painter.drawLine(QPointF(cx-18, height()-4), QPointF(cx+18, height()-4));
+            painter.drawLine(QPointF(3, cy-18), QPointF(3, cy+18));
+            painter.drawLine(QPointF(width()-4, cy-18), QPointF(width()-4, cy+18));
+        });
     }
   private:
     int edgesAt(QPointF p) const {
@@ -1185,21 +1203,24 @@ class AnnotationCanvas final : public QWidget {
                 }
             } else selectedPath=annotationPath(selected);
             const QRectF selectedBounds=selectedPath.boundingRect();
-            painter.setPen(QPen(palette().color(QPalette::Highlight), 1.5 / transform.m11(), Qt::DashLine));
             painter.setBrush(Qt::NoBrush);
-            painter.drawRect(selectedBounds.adjusted(-5.0 / transform.m11(), -5.0 / transform.m11(), 5.0 / transform.m11(), 5.0 / transform.m11()));
+            drawMarker(painter, QPen(palette().color(QPalette::Highlight), 1.5 / transform.m11(), Qt::DashLine), 1.0 / transform.m11(), [&] {
+                painter.drawRect(selectedBounds.adjusted(-5.0 / transform.m11(), -5.0 / transform.m11(), 5.0 / transform.m11(), 5.0 / transform.m11()));
+            });
         }
         painter.restore();
         if (!resizeBounds.isEmpty()) {
             const QRectF frame = QRectF(displayRect()).adjusted(0.5, 0.5, -0.5, -0.5);
-            painter.setPen(QPen(palette().color(QPalette::Highlight), 1));
+            const QPen highlight(palette().color(QPalette::Highlight), 1);
             painter.setBrush(Qt::NoBrush);
-            painter.drawRect(frame);
+            drawMarker(painter, highlight, 1, [&] { painter.drawRect(frame); });
             painter.setBrush(QColor("#ffffff"));
-            for (const QPointF p : {frame.topLeft(), frame.topRight(), frame.bottomLeft(), frame.bottomRight(),
-                 QPointF(frame.center().x(), frame.top()), QPointF(frame.center().x(), frame.bottom()),
-                 QPointF(frame.left(), frame.center().y()), QPointF(frame.right(), frame.center().y())})
-                painter.drawRoundedRect(QRectF(p - QPointF(3, 3), QSizeF(6, 6)), 1.5, 1.5);
+            drawMarker(painter, highlight, 1, [&] {
+                for (const QPointF p : {frame.topLeft(), frame.topRight(), frame.bottomLeft(), frame.bottomRight(),
+                     QPointF(frame.center().x(), frame.top()), QPointF(frame.center().x(), frame.bottom()),
+                     QPointF(frame.left(), frame.center().y()), QPointF(frame.right(), frame.center().y())})
+                    painter.drawRoundedRect(QRectF(p - QPointF(3, 3), QSizeF(6, 6)), 1.5, 1.5);
+            });
         }
     }
 
