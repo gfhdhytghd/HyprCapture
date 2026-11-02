@@ -751,7 +751,8 @@ class AnnotationEditorTest final : public QObject {
         auto* minus = editor.findChild<QToolButton*>("annotationWidthDecrease");
         auto* plus = editor.findChild<QToolButton*>("annotationWidthIncrease");
         QVERIFY(spin && minus && plus);
-        QCOMPARE(spin->buttonSymbols(), QAbstractSpinBox::NoButtons);
+        // No native arrows beside the custom -/+ buttons, and the value has room to render.
+        QCOMPARE(spin->findChild<QLineEdit*>()->width(), spin->width());
         spin->setValue(4);
         QTest::mouseClick(plus, Qt::LeftButton); QCOMPARE(spin->value(), 5);
         QTest::mouseClick(minus, Qt::LeftButton); QCOMPARE(spin->value(), 4);
@@ -788,6 +789,7 @@ class AnnotationEditorTest final : public QObject {
         QVERIFY(panel->findChildren<QLabel*>().isEmpty());
         QCOMPARE(font->height(), size->height());
         QCOMPARE(color->height(), size->height());
+        QCOMPARE(size->findChild<QLineEdit*>()->width(), size->width());
         auto* controls = editor.findChild<QWidget*>("annotationTextControls");
         QVERIFY(controls && controls->isVisible());
         QCOMPARE(controls->parentWidget(), &editor);

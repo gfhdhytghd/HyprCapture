@@ -1992,7 +1992,7 @@ struct AnnotationEditor::Impl {
         const ThemeColors colors = themeColors(dark);
         const QString surface = colors.surface.name(), border = colors.border.name(), ink = colors.ink.name(), selected = colors.selected.name();
         for (auto* frame : {toolbar, variantPanel, colorPanel, morePanel})
-            frame->setStyleSheet(QString("QFrame#%1 { background: %2; border: 1px solid %3; border-radius: 6px; } QLabel { color: %4; } QSpinBox { color: %4; background: %2; border: 1px solid %3; border-radius: 4px; padding: 1px 2px; selection-background-color: %5; selection-color: %4; } QToolButton#annotationWidthDecrease, QToolButton#annotationWidthIncrease { color:%4; background:%2; border:1px solid %3; border-radius:4px; } QToolButton#annotationWidthDecrease:hover, QToolButton#annotationWidthIncrease:hover { background:%5; }")
+            frame->setStyleSheet(QString("QFrame#%1 { background: %2; border: 1px solid %3; border-radius: 6px; } QLabel { color: %4; } QSpinBox { color: %4; background: %2; border: 1px solid %3; border-radius: 4px; padding: 1px 2px; selection-background-color: %5; selection-color: %4; } QToolButton#annotationWidthDecrease, QToolButton#annotationWidthIncrease { color:%4; background:%2; border:1px solid %3; border-radius:4px; } QToolButton#annotationWidthDecrease:hover, QToolButton#annotationWidthIncrease:hover { background:%5; } QSpinBox::up-button, QSpinBox::down-button { width:0; border:0; }")
                 .arg(frame->objectName(), surface, border, ink, selected));
         for (const auto& [button, action] : std::vector<std::pair<StripActionButton*, QString>>{{save, "save"}, {undo, "undo"}, {redo, "redo"}, {pin, "pin"}, {confirm, "confirm"}, {cancel, "cancel"}, {clear, "clear"}, {fit, "fit"}, {reselect, "reselect"}, {more, "more"}}) {
             button->dark = dark;
@@ -2225,7 +2225,6 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     ui.width->setObjectName("annotationWidth");
     ui.width->setRange(1, 24);
     ui.width->setValue(static_cast<int>(ui.canvas->strokeWidth));
-    ui.width->setButtonSymbols(QAbstractSpinBox::NoButtons);
     ui.width->setAlignment(Qt::AlignCenter);
     ui.width->setFixedSize(36, 26);
     for (int direction : {-1, 1}) {
@@ -2326,7 +2325,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         QFont controlsFont = controls->font();
         controlsFont.setPixelSize(12);
         controls->setFont(controlsFont);
-        controls->setStyleSheet(QString("QFrame#annotationTextControls { background:%1; border:1px solid %3; border-radius:6px; } QLineEdit, QSpinBox, QPushButton { color:%2; background:%1; border:1px solid %3; border-radius:4px; padding:1px 4px; }")
+        controls->setStyleSheet(QString("QFrame#annotationTextControls { background:%1; border:1px solid %3; border-radius:6px; } QLineEdit, QSpinBox, QPushButton { color:%2; background:%1; border:1px solid %3; border-radius:4px; padding:1px 4px; } QSpinBox::up-button, QSpinBox::down-button { width:0; border:0; }")
             .arg(surface, ink, border));
         auto* rows = new QVBoxLayout(controls);
         rows->setContentsMargins(5, 5, 5, 5); rows->setSpacing(4);
@@ -2339,7 +2338,6 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         auto* size = new QSpinBox(controls);
         size->setObjectName("annotationTextSize");
         size->setRange(6, 192); size->setSuffix(" px");
-        size->setButtonSymbols(QAbstractSpinBox::NoButtons);
         size->setFixedWidth(70);
         size->setAccessibleName(tr("Font size")); size->setToolTip(tr("Font size"));
         QFont font = existing.textFont.pixelSize() > 0 ? existing.textFont : annotationFont(existing.width);
