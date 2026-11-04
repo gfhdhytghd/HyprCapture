@@ -582,6 +582,11 @@ if(BUILD_TESTING)
   target_compile_options(hyprcapture-recording-cursor-test PRIVATE -UNDEBUG)
   add_test(NAME recording-cursor COMMAND hyprcapture-recording-cursor-test)
 
+  add_executable(hyprcapture-recording-cursor-composite-test tests/recording_cursor_composite_test.cpp)
+  target_include_directories(hyprcapture-recording-cursor-composite-test PRIVATE src)
+  target_compile_options(hyprcapture-recording-cursor-composite-test PRIVATE -UNDEBUG)
+  add_test(NAME recording-cursor-composite COMMAND hyprcapture-recording-cursor-composite-test)
+
   add_executable(hyprcapture-window-stream-cadence-test tests/window_stream_cadence_test.cpp)
   target_include_directories(hyprcapture-window-stream-cadence-test PRIVATE src)
   target_compile_options(hyprcapture-window-stream-cadence-test PRIVATE -UNDEBUG)

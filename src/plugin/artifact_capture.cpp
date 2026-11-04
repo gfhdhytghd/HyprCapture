@@ -10,6 +10,7 @@
 #include "plugin/window_stream_extent.hpp"
 #include "plugin/window_capture_geometry.hpp"
 #include "plugin/recording_cursor.hpp"
+#include "plugin/recording_cursor_composite.hpp"
 #include "plugin/offscreen_render_scope.hpp"
 #include "plugin/window_stream_cadence.hpp"
 #include "plugin/window_gpu_export.hpp"
@@ -165,8 +166,8 @@ struct RgbaReadback {
     int                        width = 0;
     int                        height = 0;
     std::int64_t               captureMonotonicUs = 0;
-    // Protect the cursor from dark-shadow reconstruction after readback.
-    std::optional<RecordingCursorBox> cursorBox;
+    // Composite after shadow reconstruction, never exempt a rectangle from repair.
+    std::optional<RecordingCursorImage> cursorImage;
 };
 
 struct PixelBounds {
@@ -274,6 +275,7 @@ struct WindowRenderOptions {
     bool       clipBackgroundToWindow = false;
     bool       postprocessAlpha = true;
     bool       includeCursor = false;
+    bool       deferCursor = false;
 };
 
 struct ShadowColorBytes {
@@ -326,7 +328,7 @@ struct AsyncPboReadbackState {
 
     GLuint      buffers[BUFFER_COUNT] = {0, 0, 0};
     std::int64_t captureTimesUs[BUFFER_COUNT] = {};
-    std::optional<RecordingCursorBox> cursorBoxes[BUFFER_COUNT];
+    std::optional<RecordingCursorImage> cursorImages[BUFFER_COUNT];
     std::size_t bytes = 0;
     int         width = 0;
     int         height = 0;
@@ -1117,10 +1119,10 @@ RgbaReadback cropReadback(const RgbaReadback& readback, const PixelBounds& bound
         return {};
     cropped.pixels.assign(pixelBytes, 0);
     cropped.referenceNits = readback.referenceNits;
-    cropped.cursorBox = readback.cursorBox;
-    if (cropped.cursorBox) {
-        cropped.cursorBox->x -= bounds.x;
-        cropped.cursorBox->y -= bounds.y;
+    cropped.cursorImage = readback.cursorImage;
+    if (cropped.cursorImage) {
+        cropped.cursorImage->box.x -= bounds.x;
+        cropped.cursorImage->box.y -= bounds.y;
     }
     if (!readback.linear.empty()) cropped.linear.assign(pixelBytes, 0);
 
@@ -1335,7 +1337,7 @@ bool ensureAsyncPboReadback(AsyncPboReadbackState& state, int width, int height,
 }
 
 bool issueAsyncPboReadback(AsyncPboReadbackState& state, const RgbaReadbackRegion& region, int framebufferHeight, bool directGlY, std::int64_t captureUs,
-                          std::optional<RecordingCursorBox> cursorBox) {
+                          std::optional<RecordingCursorImage> cursorImage) {
     if (state.pending >= AsyncPboReadbackState::BUFFER_COUNT)
         return false;
 
@@ -1346,7 +1348,7 @@ bool issueAsyncPboReadback(AsyncPboReadbackState& state, const RgbaReadbackRegio
     glReadPixels(region.srcX, readY, region.srcWidth, region.srcHeight, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     state.captureTimesUs[target] = captureUs;
-    state.cursorBoxes[target] = cursorBox;
+    state.cursorImages[target] = std::move(cursorImage);
     ++state.pending;
     state.next = (target + 1) % AsyncPboReadbackState::BUFFER_COUNT;
     return true;
@@ -1368,7 +1370,7 @@ bool mapPendingPboReadback(AsyncPboReadbackState& state, RgbaReadback& readback,
     glUnmapBuffer(GL_PIXEL_PACK_BUFFER);
     glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
     readback.captureMonotonicUs = state.captureTimesUs[source];
-    readback.cursorBox = state.cursorBoxes[source];
+    readback.cursorImage = std::move(state.cursorImages[source]);
     --state.pending;
     return true;
 }
@@ -1381,7 +1383,7 @@ GLuint framebufferId(CFramebuffer& framebuffer) {
 SP<CFramebuffer> resolveSdrFramebuffer(CFramebuffer& source, const PHLMONITOR& monitor);
 
 RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int cropTopY, int cropWidth, int cropHeight, bool directGlY = false, bool asyncPbo = false,
-                                      std::int64_t captureUs = 0, std::optional<RecordingCursorBox> cursorBox = {}) {
+                                      std::int64_t captureUs = 0, std::optional<RecordingCursorImage> cursorImage = {}) {
     const int framebufferWidth = positiveRoundedIntFromDouble(framebuffer.m_size.x);
     const int framebufferHeight = positiveRoundedIntFromDouble(framebuffer.m_size.y);
     RgbaReadbackRegion region;
@@ -1391,7 +1393,7 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
     if (!captureUs) captureUs = audio::monotonicUs();
     RgbaReadback readback;
     readback.captureMonotonicUs = captureUs;
-    readback.cursorBox = cursorBox;
+    readback.cursorImage = cursorImage;
     readback.cropX = region.outputCropX;
     readback.cropTopY = region.outputCropTopY;
     readback.width = region.outputWidth;
@@ -1452,12 +1454,12 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
 
         if (useAsyncPbo && ensureAsyncPboReadback(g_windowRecordingPboReadback, region.outputWidth, region.outputHeight, region.outputBytes)) {
             bool hasMappedFrame = mapPendingPboReadback(g_windowRecordingPboReadback, readback);
-            if (!issueAsyncPboReadback(g_windowRecordingPboReadback, region, framebufferHeight, directGlY, captureUs, cursorBox)) {
+            if (!issueAsyncPboReadback(g_windowRecordingPboReadback, region, framebufferHeight, directGlY, captureUs, cursorImage)) {
                 hasMappedFrame = mapPendingPboReadback(g_windowRecordingPboReadback, readback, true);
                 if (!hasMappedFrame)
                     resetAsyncPboReadback(g_windowRecordingPboReadback);
                 else
-                    issueAsyncPboReadback(g_windowRecordingPboReadback, region, framebufferHeight, directGlY, captureUs, cursorBox);
+                    issueAsyncPboReadback(g_windowRecordingPboReadback, region, framebufferHeight, directGlY, captureUs, cursorImage);
             }
             if (!hasMappedFrame) {
                 const int readY = directGlY ? region.srcTopY : framebufferHeight - region.srcTopY - region.srcHeight;
@@ -2198,7 +2200,12 @@ class WindowAnimationGoalOverride {
 // a window export can extend beyond that monitor. The enclosing capture pass
 // supplies projection, scale and CaptureColorScope; the texture's image
 // description therefore follows the frame's CM/linear resolve, including HDR.
-std::optional<RecordingCursorBox> renderRecordingCursor(const CBox& target, double scale, bool requirePointerInside) {
+struct RecordingCursorRenderData {
+    SP<CTexture> texture;
+    RecordingCursorBox box;
+};
+
+std::optional<RecordingCursorRenderData> currentRecordingCursor(const CBox& target, double scale, bool requirePointerInside) {
     if (!Pointer::mgr() || !g_pHyprRenderer->shouldRenderCursor())
         return std::nullopt;
     const auto position = Pointer::mgr()->position();
@@ -2211,9 +2218,16 @@ std::optional<RecordingCursorBox> renderRecordingCursor(const CBox& target, doub
     auto texture = Pointer::mgr()->getCurrentCursorTexture();
     if (!texture)
         return std::nullopt;
+    return RecordingCursorRenderData{std::move(texture), *box};
+}
+
+void renderRecordingCursor(const CBox& target, double scale, bool requirePointerInside) {
+    const auto cursor = currentRecordingCursor(target, scale, requirePointerInside);
+    if (!cursor)
+        return;
+    const auto& box = cursor->box;
     g_pHyprRenderer->addPassElement(renderContext(), makeUnique<CTexPassElement>(CTexPassElement::SRenderData{
-        .tex = std::move(texture), .box = CBox{box->x, box->y, box->width, box->height}}));
-    return box;
+        .tex = cursor->texture, .box = CBox{box.x, box.y, box.width, box.height}}));
 }
 
 RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
@@ -2457,6 +2471,49 @@ class WindowLocalProjectionScope {
     std::array<GLint, 4> m_viewport{};
 };
 
+// Shadow repair needs the window without the cursor. Capture a small transparent
+// cursor layer in the same color space, then attach it to that window's PBO slot.
+std::optional<RecordingCursorImage> readRecordingCursor(const PHLMONITOR& monitor, const CBox& target, double scale, const Time::steady_tp& frozenTime) {
+    const auto cursor = currentRecordingCursor(target, scale, true);
+    if (!cursor)
+        return std::nullopt;
+    const int width = positiveRoundedIntFromDouble(cursor->box.width);
+    const int height = positiveRoundedIntFromDouble(cursor->box.height);
+    std::size_t bytes = 0;
+    if (!checkedRgbaByteSize(width, height, bytes))
+        return std::nullopt;
+    auto framebuffer = createFramebuffer("hyprcapture-recording-cursor", width, height);
+    if (!framebuffer)
+        return std::nullopt;
+
+    const bool previousBlockFeedback = renderContext().m_blockSurfaceFeedback;
+    const bool previousBlockShader = renderContext().m_data.blockScreenShader;
+    {
+        WindowLocalProjectionScope projection(monitor);
+        OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
+        CRegion damage{0, 0, width, height};
+        setCaptureImageDescription(framebuffer, monitor);
+        if (!g_pHyprRenderer->beginFullFakeRender(monitor, damage, framebuffer))
+            return std::nullopt;
+        projection.apply(width, height);
+        offscreen.activate();
+        renderContext().m_blockSurfaceFeedback = true;
+        g_pHyprRenderer->draw(renderContext(), CClearPassElement::SClearData{CHyprColor{0.0, 0.0, 0.0, 0.0}});
+        g_pHyprRenderer->startRenderPass(renderContext());
+        g_pHyprRenderer->addPassElement(renderContext(), makeUnique<CTexPassElement>(CTexPassElement::SRenderData{
+            .tex = cursor->texture, .box = CBox{0, 0, width, height}}));
+        renderContext().m_data.blockScreenShader = true;
+        g_pHyprRenderer->endRender();
+        renderContext().m_data.blockScreenShader = previousBlockShader;
+        renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
+    }
+    auto image = readRgbaFramebufferRegion(*framebuffer, 0, 0, width, height);
+    if (image.pixels.empty())
+        return std::nullopt;
+    unpremultiplyAlpha(image);
+    return RecordingCursorImage{cursor->box, std::make_shared<const std::vector<unsigned char>>(std::move(image.pixels))};
+}
+
 RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
                                           const PHLMONITOR& monitor,
                                           const Time::steady_tp& frozenTime,
@@ -2509,7 +2566,6 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
     const bool previousBlockShader = renderContext().m_data.blockScreenShader;
     const bool previousRenderingSnapshot = renderContext().m_renderingSnapshot;
 
-    std::optional<RecordingCursorBox> cursorBox;
     const auto renderIntoFramebuffer = [&](SP<CFramebuffer> targetFramebuffer, SP<CFramebuffer> backgroundMatte = {}) {
         if (!targetFramebuffer)
             return false;
@@ -2541,8 +2597,8 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         g_pHyprRenderer->renderWindow(renderContext(), window, monitor, window->presentation().renderPresentation(), frozenTime, decorate, RENDER_PASS_ALL, false, false);
         renderContext().m_renderingSnapshot = previousRenderingSnapshot;
 
-        if (options.includeCursor)
-            cursorBox = renderRecordingCursor(CBox{geometry.x, geometry.y, geometry.width, geometry.height}, scale, true);
+        if (options.includeCursor && !options.deferCursor)
+            renderRecordingCursor(CBox{geometry.x, geometry.y, geometry.width, geometry.height}, scale, true);
 
         renderContext().m_data.blockScreenShader = true;
         g_pHyprRenderer->endRender();
@@ -2604,9 +2660,11 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         return {.pixels = {}, .cropX = cropX, .cropTopY = cropY, .width = width, .height = height};
     }
 
+    const auto cursorImage = options.includeCursor && options.deferCursor ?
+        readRecordingCursor(monitor, CBox{geometry.x, geometry.y, geometry.width, geometry.height}, scale, frozenTime) : std::nullopt;
     ScopedTiming timing("window.readback");
     readback = readRgbaFramebufferRegion(*framebuffer, 0, 0, width, height, false, options.asyncReadback,
-        std::chrono::duration_cast<std::chrono::microseconds>(frozenTime.time_since_epoch()).count(), cursorBox);
+        std::chrono::duration_cast<std::chrono::microseconds>(frozenTime.time_since_epoch()).count(), cursorImage);
     if (readback.pixels.empty())
         return {};
 
@@ -3392,9 +3450,9 @@ void expandReadbackToShadowBounds(RgbaReadback& readback, CBox& artifactBox, con
     readback.pixels = std::move(expanded);
     artifactBox.x -= static_cast<double>(padLeft) / scaleX;
     artifactBox.y -= static_cast<double>(padTop) / scaleY;
-    if (readback.cursorBox) {
-        readback.cursorBox->x += padLeft;
-        readback.cursorBox->y += padTop;
+    if (readback.cursorImage) {
+        readback.cursorImage->box.x += padLeft;
+        readback.cursorImage->box.y += padTop;
     }
     artifactBox.w = static_cast<double>(newWidth) / scaleX;
     artifactBox.h = static_cast<double>(newHeight) / scaleY;
@@ -3435,8 +3493,6 @@ void repairTransparentShadow(RgbaReadback& readback, const CBox& artifactBox, co
     const int    cutoutBottom = std::clamp(static_cast<int>(std::ceil(cutoutAbsBottom)), cutoutTop, repairBottom);
 
     const auto repairPixel = [&](int x, int y, bool testCutout) {
-        if (readback.cursorBox && readback.cursorBox->contains(x, y))
-            return;
         const double centerX = x - shadowLeft + 0.5;
         const double centerY = y - shadowTop + 0.5;
         if (testCutout &&
@@ -3766,6 +3822,8 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
     const bool solidAlpha = request.defaults.recordSolidAlpha &&
         (request.defaults.windowBackground == WindowBackground::White || request.defaults.windowBackground == WindowBackground::Black ||
          request.defaults.windowBackground == WindowBackground::FollowSystem);
+    renderOptions.deferCursor = request.defaults.windowShadow == DecorationPolicy::Keep &&
+        (request.defaults.windowBackground == WindowBackground::Transparent || solidAlpha);
     const auto solidBackground = recordingSolidBackgroundColor(request.defaults.windowBackground);
     const auto solidBackgroundRgb = recordingSolidBackgroundRgb(request.defaults.windowBackground);
     const auto frozenTime = Time::steadyNow();
@@ -3832,6 +3890,8 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
         compositeContentOverSolidBackground(readback, (*solidBackgroundRgb)[0], (*solidBackgroundRgb)[1], (*solidBackgroundRgb)[2]);
     }
 
+    if (readback.cursorImage)
+        compositeRecordingCursor(readback.pixels, readback.width, readback.height, *readback.cursorImage);
     return RecordingFrame{.rgba = std::move(readback.pixels), .width = readback.width, .height = readback.height, .captureMonotonicUs = captureUs};
 }
 
