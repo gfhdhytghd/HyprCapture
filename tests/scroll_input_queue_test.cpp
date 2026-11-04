@@ -23,6 +23,24 @@ Input finger(unsigned time, double delta, int axis = 0) {
 }
 int main() {
   std::deque<Input> pending;
+  // Before release, even a negotiated pacing flag must not discard a
+  // reversal, source switch, or either axis-stop from the initial gesture.
+  for (bool paced : {false, true}) {
+    auto wheel = finger(1, 15);
+    wheel.event.source = 0;
+    wheel.event.deltaDiscrete = 120;
+    require(queueScrollInput(pending, wheel, false, false, paced, false) ==
+                ScrollInputDisposition::Queued, "pre-baseline wheel must wait");
+    for (const auto input : {finger(2, 3), finger(3, -3), finger(4, 0), finger(5, 0, 1)})
+      require(queueScrollInput(pending, input, false, false, paced, true) ==
+                  ScrollInputDisposition::Queued, "pre-baseline finger input must wait");
+    require(pending.size() == 5, "pre-baseline changes must retain every event");
+    for (unsigned i = 0; i < pending.size(); ++i)
+      require(pending[i].event.timeMs == i + 1, "pre-baseline event order must be preserved");
+    require(pending[3].event.axis == 0 && pending[4].event.axis == 1,
+            "pre-baseline axis-stops must remain separate");
+    pending.clear();
+  }
   // A region waits for its first image before forwarding the gesture.
   for (unsigned time = 1; time <= 20; ++time)
     require(queueScrollInput(pending, finger(time, 2), false, false, false, true) ==

@@ -12,7 +12,7 @@ template <class Input>
 ScrollInputDisposition queueScrollInput(std::deque<Input>& pending, Input input,
                                        bool released, bool draining, bool paced,
                                        bool finger) {
-  if (paced && !draining && !pending.empty() &&
+  if (released && paced && !draining && !pending.empty() &&
       (input.event.delta * pending.back().event.delta < 0 ||
        (input.event.delta && finger &&
         pending.back().event.source != input.event.source)))
@@ -22,11 +22,11 @@ ScrollInputDisposition queueScrollInput(std::deque<Input>& pending, Input input,
   if (!paced && released && !draining)
     return ScrollInputDisposition::Deliver;
   if (pending.size() >= 256)
-    return paced && !draining ? ScrollInputDisposition::Dropped
+    return released && paced && !draining ? ScrollInputDisposition::Dropped
                               : ScrollInputDisposition::Overflow;
   // Only coalesce wheel input. Finger events retain both axes and their stop
   // boundaries while the baseline queue is draining.
-  if (paced && !draining && !finger && !pending.empty()) {
+  if (released && paced && !draining && !finger && !pending.empty()) {
     auto& back = pending.back();
     if (back.native == input.native && back.pointer == input.pointer &&
         back.event.axis == input.event.axis &&
