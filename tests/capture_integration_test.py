@@ -15,9 +15,18 @@ assert 'g_configReloadListeners.reset();' in main, 'reload callbacks survive plu
 # All native standalone render entries must select isolated scene resources.
 assert '#include "plugin/capture_render.inc"' in artifact
 assert not re.search(r'g_pHyprRenderer->begin(?:FullFake)?Render\(', artifact), 'capture bypasses isolated render entry'
-assert artifact.count('beginCaptureRender(') == 6, 'monitor/cursor/window/matte/real-background route missing'
+assert artifact.count('beginCaptureRender(') == 7, 'monitor/cursor/window/matte/recording-cursor/real-background route missing'
 # Both CPU artifact publication and the recording framebuffer must reject the
 # provisional raw prepass when the compositor did not expose a blur-only draw.
 assert 'usableRealBackground(state.captured, state.requiresBlur, state.blurCaptured)' in artifact
 assert 'usableRealBackground(states.front().captured, states.front().requiresBlur, states.front().blurCaptured)' in artifact
 print('PASS production reload, isolated capture and background publication wiring')
+
+# The cursor must follow window shadow reconstruction and solid-background
+# assembly; otherwise transparent texels punch a hole or dark edges are repaired.
+recording = artifact[artifact.index('std::optional<RecordingFrame> captureWindowRecordingFrame('):artifact.index('\n} // namespace', artifact.index('std::optional<RecordingFrame> captureWindowRecordingFrame('))]
+assert recording.index('compositeRecordingCursor(') > recording.index('repairTransparentShadow(')
+assert recording.index('compositeRecordingCursor(') > recording.index('compositeContentOverSolidBackground(')
+assert 'readback.cursorImage = std::move(state.cursorImages[source]);' in artifact, 'cursor layer not paired with its PBO frame'
+assert 'if (options.includeCursor && !options.deferCursor)' in artifact, 'deferred cursor rendered twice'
+print('PASS deferred cursor placement and readback pairing')
