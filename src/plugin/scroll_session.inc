@@ -187,42 +187,13 @@ void scrollInput(ScrollSession &s, ScrollInput input) {
     s.timer->updateTimeout(std::chrono::milliseconds(1));
   }
   scrollNotify(s, {{"event", "motion"}, {"delta", input.event.delta}});
-  if (s.paced && !s.pending.empty() &&
-      (input.event.delta*s.pending.back().event.delta<0 ||
-       (input.event.delta && input.event.source==WL_POINTER_AXIS_SOURCE_FINGER &&
-        s.pending.back().event.source!=WL_POINTER_AXIS_SOURCE_FINGER)))
-    s.pending.clear();
-  // Native touchpad motion must retain its cadence and axis-stop framing.
-  // Matching runs asynchronously; it must never gate each finger event.
-  if (s.released && input.event.source == WL_POINTER_AXIS_SOURCE_FINGER) {
-    scrollDeliver(s,input);
-    return;
-  }
-  if (s.paced || !s.released || s.draining) {
-    if (s.pending.size() >= 256) {
-      // Bounded backpressure: ignore excess momentum rather than ending a
-      // valid capture or replaying a huge delayed flick.
-      if (s.paced) return;
-      s.failed = true;
-      return;
-    }
-    // Merge consecutive small events while the worker is busy, retaining
-    // axis-stop boundaries. Do not replay hundreds of tiny delayed steps.
-    if (s.paced && !s.pending.empty()) {
-      auto &back = s.pending.back();
-      if (back.native == input.native && back.pointer == input.pointer &&
-          back.event.source == input.event.source &&
-          back.event.relativeDirection == input.event.relativeDirection &&
-          back.event.delta * input.event.delta > 0) {
-        back.event.delta += input.event.delta;
-        back.event.deltaDiscrete += input.event.deltaDiscrete;
-        back.event.timeMs = input.event.timeMs;
-        return;
-      }
-    }
-    s.pending.push_back(input);
-  } else
+  const auto disposition = queueScrollInput(
+      s.pending, input, s.released, s.draining, s.paced,
+      input.event.source == WL_POINTER_AXIS_SOURCE_FINGER);
+  if (disposition == ScrollInputDisposition::Deliver)
     scrollDeliver(s, input);
+  else if (disposition == ScrollInputDisposition::Overflow)
+    s.failed = true;
 }
 int scrollControlReadable(int fd, uint32_t mask, void *data) {
   if (sessionLocked()) return 0;
@@ -410,7 +381,7 @@ void scrollTick(SP<CEventLoopTimer> timer) {
       if (input.event.delta) s->lastDelivered = Time::steadyNow();
     }
     if (nativeFrame) g_pInputManager->onPointerFrame();
-    s->draining = false;
+    s->draining = s->draining && !s->pending.empty();
   }
   if (s->draining && !s->paced) {
     const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(Time::steadyNow() - s->replayStarted).count();

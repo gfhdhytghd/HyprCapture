@@ -18,6 +18,7 @@
 #include "shared/sdr_resolve_shader.hpp"
 #include "shared/audio_timeline.hpp"
 #include "shared/scroll_pacing.hpp"
+#include "shared/scroll_input_queue.hpp"
 
 #include <hyprland/src/plugins/PluginAPI.hpp>
 

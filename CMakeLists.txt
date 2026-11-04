@@ -353,6 +353,10 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-scroll-pacing-test PRIVATE src)
   add_test(NAME scroll-pacing COMMAND hyprcapture-scroll-pacing-test)
 
+  add_executable(hyprcapture-scroll-input-queue-test tests/scroll_input_queue_test.cpp)
+  target_include_directories(hyprcapture-scroll-input-queue-test PRIVATE src)
+  add_test(NAME scroll-input-queue COMMAND hyprcapture-scroll-input-queue-test)
+
   add_executable(hyprcapture-scroll-motion-test tests/scroll_motion_test.cpp)
   target_include_directories(hyprcapture-scroll-motion-test PRIVATE src)
   add_test(NAME scroll-motion COMMAND hyprcapture-scroll-motion-test)
