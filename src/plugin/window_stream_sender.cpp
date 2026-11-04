@@ -165,8 +165,8 @@ WindowStreamSender::SendResult WindowStreamSender::sendFrame(const Frame& frame,
         m_failure.store(WindowStreamSenderFailure::Socket, std::memory_order_release);
         return SendResult::Disconnected;
     }
-    const auto header = encodeWindowStreamFrameHeader(frame.metadata);
-    iovec iov{.iov_base = const_cast<unsigned char*>(header.data()), .iov_len = header.size()};
+    const auto header = encodeScrollStreamFrameHeader(frame.metadata);
+    iovec iov{.iov_base = const_cast<unsigned char*>(header.data()), .iov_len = frame.metadata.scrollMotion ? SCROLL_STREAM_FRAME_HEADER_BYTES : WINDOW_STREAM_FRAME_HEADER_BYTES};
     alignas(cmsghdr) std::array<unsigned char, CMSG_SPACE(sizeof(int))> control{};
     msghdr message{};
     message.msg_iov = &iov;
@@ -179,7 +179,7 @@ WindowStreamSender::SendResult WindowStreamSender::sendFrame(const Frame& frame,
     cmsg->cmsg_len = CMSG_LEN(sizeof(int));
     std::memcpy(CMSG_DATA(cmsg), &fd->fd, sizeof(fd->fd));
     const auto sent = sendmsg(socketFd, &message, MSG_DONTWAIT | MSG_NOSIGNAL);
-    if (sent == static_cast<ssize_t>(header.size()))
+    if (sent == static_cast<ssize_t>(iov.iov_len))
         return SendResult::Sent;
     if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
         m_failure.store(WindowStreamSenderFailure::SendWouldBlock, std::memory_order_release);

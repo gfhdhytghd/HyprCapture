@@ -7,6 +7,7 @@
 #include <QTimer>
 #include <QWidget>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -68,6 +69,7 @@ private:
     QRect geometry;
     quint64 sequence = 0, timeNs = 0;
     QImage background, hdr;
+    std::optional<ScrollMotionSnapshot> scrollMotion;
   };
   void acceptFrames();
   void readFrames();
@@ -119,7 +121,7 @@ private:
   bool m_editorPrepared = false;
   std::mutex m_mutex;
   std::condition_variable_any m_ready;
-  std::optional<Frame> m_latest;
+  std::deque<Frame> m_frames;
   bool m_finalize = false;
   std::jthread m_worker;
   quint64 m_sequence = 0, m_lastAcceptedSequence = 0, m_dropped = 0;

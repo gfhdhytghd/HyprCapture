@@ -45,6 +45,8 @@ int main(int argc, char** argv) {
         dynamic.append(dynamicFrame(400, tick++, fixed));
         for (int offset : {520, 640, 460, 300, 400, 700}) {
             const auto result = dynamic.append(dynamicFrame(offset, tick++, fixed));
+            if(result.status != Status::Appended && result.status != Status::Relocated)
+                std::cerr << "dynamic fixed=" << fixed << " offset=" << offset << " status=" << int(result.status) << " reason=" << result.reason << " delta=" << result.displacement << '\n';
             require(result.status == Status::Appended || result.status == Status::Relocated,
                     "animation and interior fixed panel allow bidirectional scrolling");
             require(dynamic.layout().viewportY == offset-400,
