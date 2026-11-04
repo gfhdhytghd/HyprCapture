@@ -2500,7 +2500,7 @@ std::optional<RecordingCursorImage> readRecordingCursor(const PHLMONITOR& monito
         OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
         CRegion damage{0, 0, width, height};
         setCaptureImageDescription(framebuffer, monitor);
-        if (!g_pHyprRenderer->beginFullFakeRender(monitor, damage, framebuffer))
+        if (!beginCaptureRender(monitor, damage, framebuffer, frozenTime, true))
             return std::nullopt;
         projection.apply(width, height);
         offscreen.activate();
