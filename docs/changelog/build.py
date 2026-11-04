@@ -64,8 +64,9 @@ def validate(data):
         seen.add(tag)
         fail_unless(VERSION_RE.match(release.get("version", "")), f"{where}: version must look like 1.2.3")
         fail_unless(HYPRLAND_RE.match(release.get("hyprland", "")), f"{where}: hyprland must look like 0.56 or 0.56.2")
-        expected = f"v{release['version']}-{release['hyprland']}"
-        fail_unless(tag == expected, f"{where}: tag should be {expected} given version and hyprland")
+        # Releases up to 0.4.2 used v<version>-<hyprland>; later ones use v<version>-v<hyprland>.
+        expected = (f"v{release['version']}-v{release['hyprland']}", f"v{release['version']}-{release['hyprland']}")
+        fail_unless(tag in expected, f"{where}: tag should be {expected[0]} given version and hyprland")
         published = release.get("published_at", "")
         fail_unless(TIMESTAMP_RE.match(published), f"{where}: published_at must be UTC like 2026-01-31T12:00:00Z")
         datetime.datetime.strptime(published, "%Y-%m-%dT%H:%M:%SZ")

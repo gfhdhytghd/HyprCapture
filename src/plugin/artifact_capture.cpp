@@ -12,6 +12,7 @@
 #include "plugin/recording_cursor.hpp"
 #include "plugin/recording_cursor_composite.hpp"
 #include "plugin/offscreen_render_scope.hpp"
+#include "plugin/real_background_status.hpp"
 #include "plugin/window_stream_cadence.hpp"
 #include "plugin/window_gpu_export.hpp"
 #include "plugin/window_gpu_sender.hpp"
@@ -55,6 +56,7 @@
 #include <hyprland/src/render/pass/PassElement.hpp>
 #include <hyprland/src/render/pass/SurfacePassElement.hpp>
 #include <hyprland/src/render/Renderer.hpp>
+#include <hyprland/src/render/SceneResources.hpp>
 #undef protected
 #undef private
 
@@ -187,6 +189,7 @@ struct RealBackgroundCaptureState {
     int          height = 0;
     bool         queued = false;
     bool         captured = false;
+    bool         requiresBlur = false;
     bool         awaitingBlurBackground = false;
     bool         blurCaptured = false;
     RgbaReadback readback;
@@ -1693,12 +1696,13 @@ bool isActiveBlurBackgroundPass(Render::CRenderContext& ctx, RealBackgroundCaptu
 void queueRealBackgroundCapturePasses(std::vector<RealBackgroundCaptureState>& states) {
     auto& passes = renderContext().m_pass.m_passElements;
     for (std::size_t i = 0; i < passes.size(); ++i) {
-        const auto* surface = dynamic_cast<const CSurfacePassElement*>(passes[i].element.get());
+        auto* surface = dynamic_cast<CSurfacePassElement*>(passes[i].element.get());
         if (!surface || !surface->m_data.pWindow)
             continue;
         for (auto& state : states) {
             if (state.queued || state.captured || state.window != surface->m_data.pWindow)
                 continue;
+            state.requiresBlur = surface->needsLiveBlur(renderContext()) || surface->needsPrecomputeBlur(renderContext());
             state.queued = true;
             Render::CRenderPass::SPassElementData capture;
             capture.element = makeUnique<RealBackgroundCapturePass>(&state);
@@ -1754,6 +1758,7 @@ void hkRenderTextureWithBlurInternal(void* openGLThisptr, Render::CRenderContext
         return;
     }
 
+    state->requiresBlur = true;
     auto* previousActiveBlurState = context->activeBlurState;
     const bool previousAwaitingBlurBackground = state->awaitingBlurBackground;
     context->activeBlurState = state;
@@ -1842,6 +1847,8 @@ SP<CFramebuffer> createFramebuffer(const std::string& name, int width, int heigh
 void setCaptureImageDescription(const SP<CFramebuffer>& framebuffer, const PHLMONITOR& monitor) {
     if (framebuffer) framebuffer->setImageDescription(monitor->workBufferImageDescription());
 }
+
+#include "plugin/capture_render.inc"
 
 bool ensureFramebuffer(SP<CFramebuffer>& framebuffer, const std::string& name, int width, int height, DRMFormat preferredFormat = DRM_FORMAT_ABGR8888) {
     if (framebuffer && framebuffer->isAllocated() && framebuffer->m_drmFormat == (captureFramebufferFormat()) && positiveRoundedIntFromDouble(framebuffer->m_size.x) == width && positiveRoundedIntFromDouble(framebuffer->m_size.y) == height)
@@ -2274,7 +2281,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
 
     g_pHyprOpenGL->makeEGLCurrent();
     setCaptureImageDescription(framebuffer, monitor);
-    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+    if (!beginCaptureRender(monitor, fakeDamage, framebuffer, frozenTime)) {
         restoreRendererState();
         return {};
     }
@@ -2397,7 +2404,7 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
 
     g_pHyprOpenGL->makeEGLCurrent();
     setCaptureImageDescription(framebuffer, monitor);
-    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+    if (!beginCaptureRender(monitor, fakeDamage, framebuffer, frozenTime)) {
         restoreRendererState();
         return false;
     }
@@ -2576,7 +2583,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
         OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
         renderContext().m_blockSurfaceFeedback = true;
         setCaptureImageDescription(targetFramebuffer, monitor);
-        if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, targetFramebuffer)) {
+        if (!beginCaptureRender(monitor, fakeDamage, targetFramebuffer, frozenTime, true)) {
             renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
             return false;
         }
@@ -2624,7 +2631,7 @@ RgbaReadback renderWindowArtifactReadback(const PHLWINDOW& window,
             OffscreenRenderScope offscreen(renderContext().m_data.renderModif);
             renderContext().m_blockSurfaceFeedback = true;
             setCaptureImageDescription(matteFramebuffer, monitor);
-            if (!g_pHyprRenderer->beginFullFakeRender(monitor, fakeDamage, matteFramebuffer)) {
+            if (!beginCaptureRender(monitor, fakeDamage, matteFramebuffer, frozenTime, true)) {
                 renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
                 return false;
             }
@@ -2845,7 +2852,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
     g_pHyprOpenGL->makeEGLCurrent();
     renderContext().m_blockSurfaceFeedback = true;
     setCaptureImageDescription(framebuffer, monitor);
-    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+    if (!beginCaptureRender(monitor, fakeDamage, framebuffer, frozenTime)) {
         renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
         clearHookContext();
         return readbacks;
@@ -2865,7 +2872,7 @@ std::vector<RgbaReadback> renderRealBackgroundReadbacksForMonitor(const PHLMONIT
 
     for (std::size_t i = 0; i < states.size(); ++i) {
         auto& state = states[i];
-        if (!state.captured || state.readback.pixels.empty() || state.targetIndex >= readbacks.size())
+        if (!usableRealBackground(state.captured, state.requiresBlur, state.blurCaptured) || state.readback.pixels.empty() || state.targetIndex >= readbacks.size())
             continue;
 
         readbacks[state.targetIndex] = std::move(state.readback);
@@ -2928,7 +2935,7 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
     g_pHyprOpenGL->makeEGLCurrent();
     renderContext().m_blockSurfaceFeedback = true;
     setCaptureImageDescription(framebuffer, monitor);
-    if (!g_pHyprRenderer->beginRender(monitor, fakeDamage, RENDER_MODE_FULL_FAKE, nullptr, framebuffer)) {
+    if (!beginCaptureRender(monitor, fakeDamage, framebuffer, frozenTime)) {
         renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
         clearHookContext();
         return false;
@@ -2949,7 +2956,18 @@ bool renderRealBackgroundFramebufferForMonitor(const PHLMONITOR& monitor,
     renderContext().m_data.blockScreenShader = previousBlockShader;
     renderContext().m_blockSurfaceFeedback = previousBlockFeedback;
 
-    return !states.empty() && states.front().captured;
+    return !states.empty() && usableRealBackground(states.front().captured, states.front().requiresBlur, states.front().blurCaptured);
+}
+
+void notifyRealBackgroundFallback(const char* message) {
+    static Time::steady_tp lastWarning;
+    static std::string lastMessage;
+    const auto now = Time::steadyNow();
+    if (lastMessage == message && now - lastWarning < std::chrono::seconds(5))
+        return;
+    lastWarning = now;
+    lastMessage = message;
+    notifyUser(message, NotificationLevel::Warning, 5000);
 }
 
 void renderRealBackgroundArtifactsForMonitor(const PHLMONITOR& monitor,
@@ -2968,8 +2986,12 @@ void renderRealBackgroundArtifactsForMonitor(const PHLMONITOR& monitor,
     auto readbacks = renderRealBackgroundReadbacksForMonitor(monitor, frozenTime, targets);
     for (std::size_t i = 0; i < readbacks.size() && i < requests.size(); ++i) {
         auto* request = requests[i];
-        if (!request || request->windowIndex >= session.windows.size() || readbacks[i].pixels.empty())
+        if (!request || request->windowIndex >= session.windows.size())
             continue;
+        if (readbacks[i].pixels.empty()) {
+            notifyRealBackgroundFallback("Real background unavailable; using the frozen desktop image");
+            continue;
+        }
 
         if (!writeArtifact(request->path, readbacks[i], &budget))
             continue;
@@ -3876,8 +3898,10 @@ std::optional<RecordingFrame> captureWindowRecordingFrame(const RecordingFrameRe
         return std::nullopt;
 
     if (request.defaults.windowBackground == WindowBackground::Real) {
-        if (!renderOptions.backgroundTexture)
+        if (!renderOptions.backgroundTexture) {
+            notifyRealBackgroundFallback("Real background unavailable; recording uses a solid background");
             compositeContentOverSolidBackground(readback, 30, 34, 38);
+        }
         if (const auto shadowBackground = recordingSolidBackgroundRgb(WindowBackground::FollowSystem))
             compositeOutsideWindowOverSolidBackground(readback,
                                                       artifactBox,

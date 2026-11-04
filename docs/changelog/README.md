@@ -23,9 +23,9 @@ When publishing a release:
 
    ```json
    {
-     "tag": "v0.2.9-0.56.2",
-     "version": "0.2.9",
-     "hyprland": "0.56.2",
+     "tag": "v0.5.1-v0.57.0",
+     "version": "0.5.1",
+     "hyprland": "0.57.0",
      "published_at": "2026-10-20T12:00:00Z",
      "headline": "One-line theme of the release",
      "sections": [{ "title": "New", "items": ["..."] }]
