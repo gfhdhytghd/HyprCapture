@@ -11,17 +11,20 @@ namespace {
 
 constexpr std::array<unsigned char, 4> MAGIC{'H', 'C', 'S', 'F'};
 
-void writeU16(std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES>& bytes, std::size_t offset, std::uint16_t value) {
+template <std::size_t N>
+void writeU16(std::array<unsigned char, N>& bytes, std::size_t offset, std::uint16_t value) {
     bytes[offset] = static_cast<unsigned char>(value >> 8U);
     bytes[offset + 1] = static_cast<unsigned char>(value);
 }
 
-void writeU32(std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES>& bytes, std::size_t offset, std::uint32_t value) {
+template <std::size_t N>
+void writeU32(std::array<unsigned char, N>& bytes, std::size_t offset, std::uint32_t value) {
     for (int index = 3; index >= 0; --index)
         bytes[offset + static_cast<std::size_t>(3 - index)] = static_cast<unsigned char>(value >> (index * 8));
 }
 
-void writeU64(std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES>& bytes, std::size_t offset, std::uint64_t value) {
+template <std::size_t N>
+void writeU64(std::array<unsigned char, N>& bytes, std::size_t offset, std::uint64_t value) {
     for (int index = 7; index >= 0; --index)
         bytes[offset + static_cast<std::size_t>(7 - index)] = static_cast<unsigned char>(value >> (index * 8));
 }
@@ -44,7 +47,8 @@ std::uint64_t readU64(const unsigned char* bytes, std::size_t offset) {
     return value;
 }
 
-void writeDouble(std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES>& bytes, std::size_t offset, double value) {
+template <std::size_t N>
+void writeDouble(std::array<unsigned char, N>& bytes, std::size_t offset, double value) {
     writeU64(bytes, offset, std::bit_cast<std::uint64_t>(value));
 }
 
@@ -63,6 +67,13 @@ bool validWindowStreamFrameMetadata(const WindowStreamFrameMetadata& metadata) {
         metadata.pixelWidth == 0 || metadata.pixelHeight == 0 || (metadata.format != WINDOW_STREAM_FORMAT_STRAIGHT_RGBA_TOP_DOWN && metadata.format != WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR))
         return false;
 
+    if (metadata.scrollMotion) {
+        const auto &motion=*metadata.scrollMotion;
+        if(motion.lastInputNs>metadata.captureMonotonicNs) return false;
+        for(int i=0;i<4;++i)
+            if(!std::isfinite(motion.amount[i]) || !std::isfinite(motion.travel[i]) ||
+               motion.travel[i]<std::abs(motion.amount[i]) || motion.travel[i]>1e12) return false;
+    }
     const auto minimumStride = static_cast<std::uint64_t>(metadata.pixelWidth) * RGBA_BYTES_PER_PIXEL;
     if (metadata.stride != minimumStride)
         return false;
@@ -93,9 +104,23 @@ std::array<unsigned char, WINDOW_STREAM_FRAME_HEADER_BYTES> encodeWindowStreamFr
     return bytes;
 }
 
+std::array<unsigned char, SCROLL_STREAM_FRAME_HEADER_BYTES> encodeScrollStreamFrameHeader(const WindowStreamFrameMetadata& metadata) {
+    std::array<unsigned char, SCROLL_STREAM_FRAME_HEADER_BYTES> bytes{};
+    const auto base=encodeWindowStreamFrameHeader(metadata);
+    std::copy(base.begin(),base.end(),bytes.begin());
+    if(!metadata.scrollMotion || !validWindowStreamFrameMetadata(metadata)) return bytes;
+    writeU16(bytes,4,2);writeU16(bytes,6,bytes.size());
+    for(int i=0;i<4;++i) {
+        writeDouble(bytes,96+i*8,metadata.scrollMotion->amount[i]);
+        writeDouble(bytes,128+i*8,metadata.scrollMotion->travel[i]);
+    }
+    writeU64(bytes,160,metadata.scrollMotion->lastInputNs);
+    return bytes;
+}
+
 std::optional<WindowStreamFrameMetadata> decodeWindowStreamFrameHeader(const unsigned char* bytes, std::size_t length) {
-    if (!bytes || length != WINDOW_STREAM_FRAME_HEADER_BYTES || !std::equal(MAGIC.begin(), MAGIC.end(), bytes) ||
-        readU16(bytes, 4) != WINDOW_STREAM_FRAME_VERSION || readU16(bytes, 6) != WINDOW_STREAM_FRAME_HEADER_BYTES || readU64(bytes, 88) != 0)
+    if (!bytes || (length != WINDOW_STREAM_FRAME_HEADER_BYTES && length != SCROLL_STREAM_FRAME_HEADER_BYTES) || !std::equal(MAGIC.begin(), MAGIC.end(), bytes) ||
+        readU16(bytes, 4) != (length==SCROLL_STREAM_FRAME_HEADER_BYTES?2:WINDOW_STREAM_FRAME_VERSION) || readU16(bytes, 6) != length || readU64(bytes, 88) != 0)
         return std::nullopt;
     WindowStreamFrameMetadata metadata{
         .sequence = readU64(bytes, 8),
@@ -111,6 +136,11 @@ std::optional<WindowStreamFrameMetadata> decodeWindowStreamFrameHeader(const uns
         .format = readU32(bytes, 76),
         .payloadBytes = readU64(bytes, 80),
     };
+    if(length==SCROLL_STREAM_FRAME_HEADER_BYTES) {
+        ScrollMotionSnapshot motion;
+        for(int i=0;i<4;++i) {motion.amount[i]=readDouble(bytes,96+i*8);motion.travel[i]=readDouble(bytes,128+i*8);}
+        motion.lastInputNs=readU64(bytes,160);metadata.scrollMotion=motion;
+    }
     return validWindowStreamFrameMetadata(metadata) ? std::optional{metadata} : std::nullopt;
 }
 
