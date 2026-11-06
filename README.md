@@ -763,3 +763,25 @@ Temporary compositor artifacts and thumbnail/clipboard scratch files are written
 To verify application audio isolation against a running PipeWire server, run `python3 tests/audio_application_live_test.py build-codex/hyprcapture-ui`. This creates private test outputs without changing the default output, and checks multiple streams, subprocess matching, late playback and live metering.
 
 AEC integration test: `python3 tests/audio_echo_live_test.py build-codex/hyprcapture-ui` uses private synthetic playback/microphone nodes to check echo suppression, double talk, unmodified defaults and node cleanup.
+
+## AI-powered maintenance
+
+This repository uses AI-powered automated maintenance, shared with the maintainer's other
+Hyprland plugins and the [Hyprland fork](https://github.com/gfhdhytghd/Hyprland). An agent
+checks new issues, pull requests and comments every two hours (replies and reviews within
+about ten minutes), so your [issues](https://github.com/gfhdhytghd/HyprCapture/issues) and
+[pull requests](https://github.com/gfhdhytghd/HyprCapture/pulls) will usually be handled or
+receive a response within three hours. Human maintainers periodically review the project and
+its changes to ensure code quality.
+
+The agent may reply, review, request changes, fix reproducible bugs, merge contributor pull
+requests, and push to the long-lived branches (`master`, `hyprland-master`, `omarchy-
+marketplace`) and keep them in sync. Before anything is merged or pushed, the change is
+built and tested in a sandbox against the exact Hyprland revision each branch targets,
+loaded into a private headless compositor, and reviewed independently. Larger changes (hooks
+or ABI, config semantics, Hyprland pin bumps, packaging) are opened as a pull request for
+the maintainer instead. Releases, tags and marketplace submissions stay manual.
+
+If you want a human to look at something, say so in the issue or pull request; the agent
+then steps back and briefs the maintainer. The pipeline is documented in
+[hymission/maintenance](https://github.com/gfhdhytghd/hymission/tree/master/maintenance).
