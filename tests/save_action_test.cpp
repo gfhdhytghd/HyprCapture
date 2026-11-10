@@ -41,6 +41,18 @@ int main(int argc, char** argv) {
     assert(defaultImage && defaultCard && defaultImage->geometry() == QRect(0, 0, 179, 112));
     assert(defaultCard->size() == QSize(203, 136) && thumbnail.size() == defaultCard->size());
     assert(!thumbnail.graphicsEffect());
+    // Frozen HEAD~2 default geometry with save=false: 24px card padding,
+    // 6px spacing and a 41px action row below the image make a 71px gap.
+    thumbnail.setSaveCapture(capture);
+    thumbnail.show();
+    app.processEvents();
+    const QRect defaultRect(defaultImage->mapTo(&thumbnail, QPoint{}), defaultImage->size());
+    assert(defaultRect.top() == 0 && defaultRect.size() == QSize(179, 112));
+    assert(thumbnail.height() - defaultRect.bottom() - 1 == 71);
+    auto *defaultQuick = thumbnail.findChild<QPushButton *>("thumbnailQuickSave")->parentWidget();
+    assert(defaultQuick->mapTo(&thumbnail, QPoint{}).y() == defaultRect.bottom() + 1 + 24 + 6);
+    assert(defaultQuick->height() == 41);
+
     for (const char *position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
         CaptureDefaults style;
         style.thumbnailMaxWidth = 320;
@@ -71,7 +83,11 @@ int main(int argc, char** argv) {
         const auto anchoredImage = [&] {
             const QRect rect(preview->mapTo(&custom, QPoint{}), preview->size());
             assert((left ? rect.left() : custom.width() - rect.right() - 1) == style.thumbnailMargin);
-            assert((top ? rect.top() : custom.height() - rect.bottom() - 1) == style.thumbnailMargin);
+            auto *quick = custom.findChild<QPushButton *>("thumbnailQuickSave")->parentWidget();
+            const int actionsBelow = quick->isVisible() ? quick->height() + 6 : 0;
+            assert((top ? rect.top() : custom.height() - rect.bottom() - 1) == style.thumbnailMargin + (top ? 0 : actionsBelow));
+            if (quick->isVisible())
+                assert(quick->mapTo(&custom, QPoint{}).y() > rect.bottom());
             // Simulate the layer-shell anchor on a fixed screen. The offscreen
             // platform cannot position a layer surface, but lays out all widgets.
             return rect.translated(left ? 0 : 1920 - custom.width(), top ? 0 : 1080 - custom.height());
@@ -80,7 +96,8 @@ int main(int argc, char** argv) {
         pending->savedPath = dir.filePath("layout-saved.png");
         custom.refreshSaveActions();
         app.processEvents();
-        assert(anchoredImage() == unsavedImage);
+        const auto savedImage = anchoredImage();
+        assert(top ? savedImage == unsavedImage : savedImage.top() > unsavedImage.top());
         // Also cover the quick row appearing again, not only disappearing.
         pending->savedPath.clear();
         custom.refreshSaveActions();

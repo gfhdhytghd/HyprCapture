@@ -457,16 +457,16 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     actions->addWidget(m_quickSaveButton);
     m_actionRow->hide();
 
-    // Keep the image nearest the anchored edge. Controls grow inward, so the
-    // quick row and menus cannot displace it when they appear or disappear.
+    // Quick actions always follow the image. Preserve the original bottom
+    // layout; top anchors put the image first so actions grow inward.
     if (alignment.testFlag(Qt::AlignTop)) {
         layout->addWidget(m_card, 0, horizontal);
         layout->addWidget(m_actionRow, 0, horizontal);
         layout->addWidget(m_menuShell, 0, horizontal);
     } else {
         layout->addWidget(m_menuShell, 0, horizontal);
-        layout->addWidget(m_actionRow, 0, horizontal);
         layout->addWidget(m_card, 0, horizontal);
+        layout->addWidget(m_actionRow, 0, horizontal);
     }
 
     adjustSize();
@@ -536,6 +536,7 @@ void ResultThumbnail::setHdrImage(const QImage& image) {
     if (image.isNull() || m_defaults.thumbnailOpacity != 100)
         return;
     m_hdrBackdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), true);
+    m_hdrBackdrop->setClipRect(QRect(m_card->mapTo(this, QPoint{}), m_card->size()));
     m_hdrBackdrop->setReadyCallback([this](bool ready) {
         if (ready) m_imageLabel->clear();
         updateHdrGeometry();
@@ -550,6 +551,7 @@ void ResultThumbnail::setHdrImage(const QImage& image) {
 }
 void ResultThumbnail::updateHdrGeometry() {
     if (m_hdrBackdrop) {
+        m_hdrBackdrop->setClipRect(QRect(m_card->mapTo(this, QPoint{}), m_card->size()));
         m_hdrBackdrop->setGeometry(QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()));
         m_hdrBackdrop->setVisible(isVisible());
     }

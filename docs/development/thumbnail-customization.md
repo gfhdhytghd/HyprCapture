@@ -57,7 +57,10 @@ before argv/JSON construction. Old sessions with absent fields retain defaults. 
 clamps numeric values again, defaults malformed values/corners, bounds strings,
 and converts supported colors to numeric CSS values without CSS interpolation.
 
-Controls grow inward from the selected anchor: the image stays at the configured
-margin when quick actions or menus appear and disappear. For left anchors the
+Quick actions always appear below the image. Top anchors keep the image at the
+configured top margin while actions grow inward. Bottom anchors preserve the
+original image/card/actions order, including the action row and spacing in the
+image's distance from the bottom edge (71 px at defaults with `save=false`).
+Native HDR pixels are clipped to the card, matching SDR clipping during swipes. For left anchors the
 open-with submenu grows to the right of the main menu; right anchors retain the
 original submenu placement on the left.

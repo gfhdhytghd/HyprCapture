@@ -520,6 +520,7 @@ struct HdrBackdrop::Impl {
   std::set<struct wp_presentation_feedback *> feedback;
   std::map<struct wp_presentation_feedback*, int64_t> feedbackStarts;
   QRect destination, clippedDestination;
+  std::optional<QRect> clipRect;
   QSize imageSize;
   QPointer<QWindow> parent;
   bool aboveParent = false, synchronized = false;
@@ -578,6 +579,9 @@ struct HdrBackdrop::Impl {
   void attach() {
     if (!surface || !globals || globals->closed)
       return;
+    // Upload completion can attach directly without another setVisible call.
+    if (clipRect && clippedDestination.isEmpty())
+      visible = false;
     ScopedUiTiming timing("hdr.attach_commit_flush");
     if (visible && buffer && (contentDirty || attachedBuffer != buffer || !attachedVisible)) {
       // Never resubmit a busy buffer after hide/show: a queued release for its
@@ -997,7 +1001,7 @@ void HdrBackdrop::setGeometry(const QRect &destination) {
     m->pendingDestination = destination;
   if (!m->surface || !m->parent || !destination.isValid() || m->globals->closed)
     return;
-  auto clipped = destination.intersected(QRect(QPoint{}, m->parent->size()));
+  const auto clipped = hdrBackdropVisibleRect(destination, QRect(QPoint{}, m->parent->size()), m->clipRect);
   if (destination == m->destination && clipped == m->clippedDestination)
     return;
   m->destination = destination;
@@ -1018,6 +1022,14 @@ void HdrBackdrop::setGeometry(const QRect &destination) {
   m->attach();
 #endif
 }
+void HdrBackdrop::setClipRect(std::optional<QRect> clip) {
+#ifdef HYPRCAPTURE_HDR_WAYLAND
+  if (clip == m->clipRect)
+    return;
+  m->clipRect = std::move(clip);
+  setGeometry(m->destination);
+#endif
+}
 void HdrBackdrop::stackAbove(const HdrBackdrop& lower) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   if (!m->surface || !m->subsurface || !lower.m->surface || m->parent != lower.m->parent ||
@@ -1029,9 +1041,11 @@ void HdrBackdrop::stackAbove(const HdrBackdrop& lower) {
 void HdrBackdrop::setVisible(bool visible) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   m->requestedVisible = visible;
-  if (!ready() || m->visible == visible)
+  // A fully clipped child must stay detached even when its parent is visible.
+  const bool shown = visible && (!m->clipRect || !m->clippedDestination.isEmpty());
+  if (!ready() || m->visible == shown)
     return;
-  m->visible = visible;
+  m->visible = shown;
   m->attach();
 #endif
 }
