@@ -11,6 +11,11 @@ static void equal(const HdrShmUpdate &update, const QImage &image) {
                         image.constScanLine(y), size_t(image.bytesPerLine())));
 }
 int main() {
+  // The rounded HDR path must copy premultiplied alpha bits unchanged.
+  HdrShmPool alphaPool;
+  QImage alpha(8, 8, QImage::Format_A2RGB30_Premultiplied);
+  alpha.fill(0x55555555U);
+  equal(alphaPool.prepare(alpha, alpha.rect()), alpha);
   HdrShmPool pool;
   QImage image(96, 64, QImage::Format_RGB30);
   image.fill(Qt::black);

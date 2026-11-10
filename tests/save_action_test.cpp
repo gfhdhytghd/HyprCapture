@@ -54,6 +54,25 @@ int main(int argc, char** argv) {
     assert(defaultQuick->mapTo(&thumbnail, QPoint{}).y() == defaultRect.bottom() + 1 + 24 + 6);
     assert(thumbnail.height() - defaultRect.bottom() - 1 == 24 + 6 + defaultQuick->height());
 
+    // The border grows outside the image; neither its pixels nor radius shrink.
+    {
+        CaptureDefaults borderedStyle;
+        borderedStyle.thumbnailBorderSize = 6;
+        borderedStyle.thumbnailRounding = 12;
+        ResultThumbnail bordered(QPixmap::fromImage(image), {}, {}, {}, 0, false, nullptr, nullptr, borderedStyle);
+        auto *label = bordered.findChild<QLabel *>("thumbnailImage");
+        auto *card = bordered.findChild<QWidget *>("thumbnailImageCard");
+        assert(label && card);
+        assert(label->size() == defaultImage->size() + QSize(12, 12));
+        assert(label->contentsMargins() == QMargins(6, 6, 6, 6));
+        assert(label->contentsRect() == QRect(6, 6, 179, 112));
+        assert(label->pixmap().deviceIndependentSize() == QSizeF(179, 112));
+        assert(card->size() == defaultCard->size() + QSize(12, 12));
+        const auto preview = label->pixmap().toImage();
+        assert(preview.pixelColor(0, 0).alpha() == 0);
+        assert(preview.pixelColor(89, 56).alpha() == 255);
+    }
+
     for (const char *position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
         CaptureDefaults style;
         style.thumbnailMaxWidth = 320;

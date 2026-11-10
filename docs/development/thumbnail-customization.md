@@ -13,7 +13,7 @@ the in-progress scroll-capture controls are separate UI and are not customized.
 | Placement | Bottom-right overlay, zero layer margins; card adds 24 logical pixels on right and bottom | Configurable corner and card edge margin; retain exact default layout |
 | Surface | Frameless, no focus/activation, overlay layer, no exclusive zone, transparent root/image | Retain shell/input behaviour |
 | Opacity | Fully opaque image; palette-derived menu alpha below | Configurable overall opacity, percent |
-| Image corners/border/shadow | Square image; no border; no shadow; native HDR child surface | `thumbnail_border_size` (default 0) and `thumbnail_border_color` draw a frame inside the image bounds; `thumbnail_rounding` (default 0) clips the image and border to rounded corners; HDR surface is inset by the border width, and rounding > 0 uses the SDR preview; no shadow key |
+| Image corners/border/shadow | Square image; no border; no shadow; native HDR child surface | `thumbnail_border_size` (default 0) and `thumbnail_border_color` add a frame outside the full-size image; `thumbnail_rounding` (default 0) is the image radius R, and a border of width b has outer radius R+b; HDR surface is inset by the border width, and rounding > 0 retains native HDR with an ARGB2101010 corner mask when supported, otherwise uses the SDR preview; no shadow key |
 | Menu panels | Qt Window RGB at alpha 242; no border; radius 0 | Fixed: no border, square, palette colors; not configurable |
 | Menu buttons | WindowText RGB at alpha 255; disabled alpha 100; hover Highlight RGB at alpha 75; radius 0; padding 7 vertical / 10 horizontal; left text | Fixed palette colors and square buttons; retain padding/text alignment |
 | Layout | Main/menu-shell spacing 6; menu/action-row margins 6 each; menu/action-row spacing 2; right alignment; open-with panels bottom-aligned | Retain spacing; align to configured corner |
@@ -32,7 +32,17 @@ these two `KeepAspectRatio` resamples produce 179 x 112 pixels, not 180 x 112.
 The default card is therefore 203 x 136, including its 24 px padding. The tests
 compare against the frozen original algorithm and preserve this rounding.
 Non-default overall opacity uses Qt raster composition. Native HDR presentation
-has no alpha control, so translucent thumbnails use their existing SDR preview.
+does not apply overall Qt opacity, so translucent thumbnails use their existing SDR preview.
+Rounded HDR thumbnails bake an antialiased premultiplied ARGB2101010 mask into
+the PQ image. Its 2-bit alpha has four levels, so corners have limited smoothness.
+The image retains its full scaled size. A border of width b grows outward at a
+constant distance: the label adds 2b on each axis, its contents margins are b,
+and the Qt ring runs from outer radius R+b to inner image radius R. The HDR
+surface covers the label rectangle inset by b and uses mask radius R (not R+b).
+The mask maps logical pixels through the inner destination size to source
+pixels, including HiDPI scaling. Transparent corners
+are not declared opaque. Missing ARGB2101010 support or upload failure retains
+the rounded SDR preview; radius zero retains opaque XRGB2101010.
 Saved files, clipboard content and drag file representations retain their formats.
 
 ## Transport and reload coverage

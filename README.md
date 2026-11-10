@@ -690,9 +690,9 @@ remain subject to `window_background`; no margin is added around its content.
 | `thumbnail_max_height` | int | `120` | Result image maximum height in logical px; clamped to 48..1024. |
 | `thumbnail_position` | string | `bottom_right` | `top_left`, `top_right`, `bottom_left`, or `bottom_right`; invalid values use `bottom_right`. |
 | `thumbnail_margin` | int | `24` | Logical px of card padding at the chosen screen edges; clamped to 0..512. |
-| `thumbnail_rounding` | int | `0` | Thumbnail image corner radius in logical px, clamped to 0..128; the border follows it. Above 0, HDR thumbnails use the SDR preview. Menus are always square and borderless. |
+| `thumbnail_rounding` | int | `0` | Thumbnail image corner radius in logical px, clamped to 0..128. The image keeps its full size; a border of width b grows outward with outer radius R+b around image radius R. Above 0, HDR thumbnails use a premultiplied ARGB2101010 corner mask when supported (four alpha levels); unsupported formats or upload failures use the SDR preview. Menus are always square and borderless. |
 | `thumbnail_opacity` | int | `100` | Overall thumbnail opacity in percent, clamped to 0..100. Below 100 uses the SDR preview instead of the native HDR surface. |
-| `thumbnail_border_size` | int | `0` | Thumbnail image border width in logical px, drawn inside the image bounds; clamped to 0..16. Menus never draw a border. |
+| `thumbnail_border_size` | int | `0` | Thumbnail image border width in logical px, added outside the image bounds without shrinking the image; clamped to 0..16. Menus never draw a border. |
 | `thumbnail_border_color` | string | `""` | Thumbnail image border color; empty/invalid uses foreground RGB with alpha 90/255. |
 | `thumbnail_animation` | bool | `true` | Enable swipe reset/dismissal animations. Does not disable recording progress animation. |
 | `helper` | string | empty | Optional absolute helper override. By default the plugin tries `HYPRCAPTURE_HELPER`, then `$HOME/.local/bin/hyprcapture-ui`, then trusted system install paths. |
