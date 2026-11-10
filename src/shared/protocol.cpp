@@ -127,9 +127,6 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"thumbnailBorderSize", std::clamp<std::int64_t>(defaults.thumbnailBorderSize, 0, 16)},
         {"thumbnailPosition", validThumbnailPosition(defaults.thumbnailPosition) ? defaults.thumbnailPosition : "bottom_right"},
         {"thumbnailBorderColor", normalizedThumbnailColor(defaults.thumbnailBorderColor)},
-        {"thumbnailBackground", normalizedThumbnailColor(defaults.thumbnailBackground)},
-        {"thumbnailForeground", normalizedThumbnailColor(defaults.thumbnailForeground)},
-        {"thumbnailAccent", normalizedThumbnailColor(defaults.thumbnailAccent)},
         {"thumbnailAnimation", defaults.thumbnailAnimation},
         {"watermark", boundedString(defaults.watermark, MAX_PATH_BYTES)},
         {"watermarkPosition", toString(defaults.watermarkPosition)},
@@ -345,9 +342,6 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         int64Value(obj, "thumbnailBorderSize", defaults.thumbnailBorderSize, 0, 16, false) &&
         stringValue(obj, "thumbnailPosition", defaults.thumbnailPosition, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "thumbnailBorderColor", defaults.thumbnailBorderColor, kThumbnailColorMaxBytes, false) &&
-        stringValue(obj, "thumbnailBackground", defaults.thumbnailBackground, kThumbnailColorMaxBytes, false) &&
-        stringValue(obj, "thumbnailForeground", defaults.thumbnailForeground, kThumbnailColorMaxBytes, false) &&
-        stringValue(obj, "thumbnailAccent", defaults.thumbnailAccent, kThumbnailColorMaxBytes, false) &&
         validThumbnailPosition(defaults.thumbnailPosition) && boolValue(obj, "thumbnailAnimation", defaults.thumbnailAnimation, false) &&
         stringValue(obj, "watermark", defaults.watermark, MAX_PATH_BYTES, false) &&
         stringValue(obj, "watermarkWidth", defaults.watermarkWidth, MAX_METADATA_STRING_BYTES, false) &&

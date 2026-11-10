@@ -121,7 +121,7 @@ class SwipeBackdrop final : public QWidget {
 
 class ImageBorderOverlay final : public QWidget {
   public:
-    ImageBorderOverlay(int size, QColor color, QWidget* parent) : QWidget(parent), m_size(size), m_color(color) {
+    ImageBorderOverlay(int size, qreal radius, QColor color, QWidget* parent) : QWidget(parent), m_size(size), m_radius(radius), m_color(color) {
         setAttribute(Qt::WA_TransparentForMouseEvents);
     }
 
@@ -130,16 +130,19 @@ class ImageBorderOverlay final : public QWidget {
         if (m_size <= 0)
             return;
         QPainter painter(this);
-        painter.setCompositionMode(QPainter::CompositionMode_Source);
-        const int b = std::min({m_size, width() / 2, height() / 2});
-        painter.fillRect(QRect(0, 0, width(), b), m_color);
-        painter.fillRect(QRect(0, height() - b, width(), b), m_color);
-        painter.fillRect(QRect(0, b, b, height() - 2 * b), m_color);
-        painter.fillRect(QRect(width() - b, b, b, height() - 2 * b), m_color);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF outer(rect());
+        const qreal b = std::min<qreal>(m_size, std::min(outer.width(), outer.height()) / 2.0);
+        QPainterPath ring;
+        ring.addRoundedRect(outer, m_radius, m_radius);
+        QPainterPath inner;
+        inner.addRoundedRect(outer.adjusted(b, b, -b, -b), std::max<qreal>(0, m_radius - b), std::max<qreal>(0, m_radius - b));
+        painter.fillPath(ring.subtracted(inner), m_color);
     }
 
   private:
     int m_size;
+    qreal m_radius;
     QColor m_color;
 };
 
@@ -339,7 +342,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     const auto alignment = thumbnail::positionAlignment(m_defaults);
     const auto horizontal = alignment & Qt::AlignHorizontal_Mask;
 
-    setStyleSheet(hyprcapture::ui::thumbnail::resultStyleSheet(QApplication::palette(), m_defaults));
+    setStyleSheet(hyprcapture::ui::thumbnail::resultStyleSheet(QApplication::palette()));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -443,6 +446,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     m_menuShell->hide();
 
     QPixmap scaledPixmap = thumbnail::scaledPixmap(pixmap, targetScreen, thumbnail::maximumSize(m_defaults));
+    scaledPixmap = thumbnail::roundedPixmap(scaledPixmap, static_cast<qreal>(m_defaults.thumbnailRounding));
     m_dragPreview = scaledPixmap;
     const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize();
     m_card = new QWidget(this);
@@ -460,7 +464,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     m_imageLabel->setPixmap(scaledPixmap);
     m_imageLabel->setGeometry(thumbnail::cardImageRect(scaledLogicalSize, m_defaults));
     if (m_defaults.thumbnailBorderSize > 0) {
-        auto* border = new ImageBorderOverlay(static_cast<int>(m_defaults.thumbnailBorderSize), thumbnail::imageBorderColor(QApplication::palette(), m_defaults), m_imageLabel);
+        auto* border = new ImageBorderOverlay(static_cast<int>(m_defaults.thumbnailBorderSize), static_cast<qreal>(m_defaults.thumbnailRounding), thumbnail::imageBorderColor(QApplication::palette(), m_defaults), m_imageLabel);
         border->setGeometry(m_imageLabel->rect());
     }
     m_transcodeOverlay = new TranscodeProgressOverlay(m_imageLabel);
@@ -561,7 +565,8 @@ ResultThumbnail::~ResultThumbnail() = default;
 
 void ResultThumbnail::setHdrImage(const QImage& image) {
     // The independent native HDR surface cannot participate in Qt opacity effects.
-    if (image.isNull() || m_defaults.thumbnailOpacity != 100)
+    // Native HDR surfaces cannot be clipped to rounded corners, so rounding uses the SDR preview.
+    if (image.isNull() || m_defaults.thumbnailOpacity != 100 || m_defaults.thumbnailRounding > 0)
         return;
     m_hdrBackdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), true);
     m_hdrBackdrop->setClipRect(QRect(m_card->mapTo(this, QPoint{}), m_card->size()));
@@ -888,7 +893,8 @@ void ResultThumbnail::setImagePixmap(const QPixmap& pixmap) {
     if (!m_imageLabel || pixmap.isNull())
         return;
     m_hdrBackdrop.reset();
-    m_dragPreview = thumbnail::scaledPixmap(pixmap, m_targetScreen, thumbnail::maximumSize(m_defaults));
+    m_dragPreview = thumbnail::roundedPixmap(thumbnail::scaledPixmap(pixmap, m_targetScreen, thumbnail::maximumSize(m_defaults)),
+                                           static_cast<qreal>(m_defaults.thumbnailRounding));
     m_imageLabel->setPixmap(m_dragPreview);
 }
 

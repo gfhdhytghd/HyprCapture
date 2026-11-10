@@ -356,17 +356,13 @@ int main() {
         styled.defaults.thumbnailOpacity = 64;
         styled.defaults.thumbnailBorderSize = 3;
         styled.defaults.thumbnailBorderColor = "#12345678";
-        styled.defaults.thumbnailBackground = "rgba(abcdef80)";
-        styled.defaults.thumbnailForeground = "0xff123456";
-        styled.defaults.thumbnailAccent = "#abcdef";
         styled.defaults.thumbnailAnimation = false;
         const auto roundTrip = decodeSessionJson(encodeSessionJson(styled));
         require(roundTrip.has_value(), "styled thumbnail round trip");
         const auto &options = roundTrip->defaults;
         require(options.thumbnailMaxWidth == 384 && options.thumbnailMaxHeight == 256 && options.thumbnailMargin == 12 && options.thumbnailRounding == 19 &&
                     options.thumbnailOpacity == 64 && options.thumbnailBorderSize == 3 && options.thumbnailPosition == "top_left" &&
-                    options.thumbnailBorderColor == "#12345678" && options.thumbnailBackground == "rgba(abcdef80)" &&
-                    options.thumbnailForeground == "0xff123456" && options.thumbnailAccent == "#abcdef" && !options.thumbnailAnimation,
+                    options.thumbnailBorderColor == "#12345678" && !options.thumbnailAnimation,
                 "all thumbnail fields survive JSON");
         const auto valid = nlohmann::ordered_json::parse(encodeSessionJson(styled));
         const auto checkInteger = [&](const char *key, std::int64_t low, std::int64_t high) {
@@ -393,15 +389,14 @@ int main() {
         checkInteger("thumbnailRounding", 0, 128);
         checkInteger("thumbnailOpacity", 0, 100);
         checkInteger("thumbnailBorderSize", 0, 16);
-        for (const char *key : {"thumbnailPosition", "thumbnailBorderColor", "thumbnailBackground", "thumbnailForeground", "thumbnailAccent"}) {
+        for (const char *key : {"thumbnailPosition", "thumbnailBorderColor"}) {
             auto invalid = valid;
             invalid["defaults"][key] = 42;
             require(!decodeSessionJson(invalid.dump()), "thumbnail string type rejected");
             invalid["defaults"][key] = std::string(4097, 'x');
             require(!decodeSessionJson(invalid.dump()), "thumbnail string length rejected");
         }
-        for (auto member : {&CaptureDefaults::thumbnailBorderColor, &CaptureDefaults::thumbnailBackground, &CaptureDefaults::thumbnailForeground,
-                            &CaptureDefaults::thumbnailAccent}) {
+        for (auto member : {&CaptureDefaults::thumbnailBorderColor}) {
             auto oversized = styled;
             oversized.defaults.*member = std::string(140000, 'x');
             const auto arguments = thumbnailStyleArguments(oversized.defaults);
@@ -412,7 +407,7 @@ int main() {
             oversized.defaults.*member = "not-a-color";
             require((normalizedThumbnailDefaults(oversized.defaults).*member).empty(), "invalid short thumbnail color cleared");
         }
-        for (const char *key : {"thumbnailBorderColor", "thumbnailBackground", "thumbnailForeground", "thumbnailAccent"}) {
+        for (const char *key : {"thumbnailBorderColor"}) {
             for (const auto length : {65, 140000}) {
                 auto oversized = valid;
                 oversized["defaults"][key] = std::string(length, 'x');
@@ -428,7 +423,7 @@ int main() {
         auto legacy = valid;
         for (const char *key :
              {"thumbnailMaxWidth", "thumbnailMaxHeight", "thumbnailPosition", "thumbnailMargin", "thumbnailRounding", "thumbnailOpacity", "thumbnailBorderSize",
-              "thumbnailBorderColor", "thumbnailBackground", "thumbnailForeground", "thumbnailAccent", "thumbnailAnimation"})
+              "thumbnailBorderColor", "thumbnailAnimation"})
             legacy["defaults"].erase(key);
         const auto old = decodeSessionJson(legacy.dump());
         require(old.has_value() && thumbnailStyleArguments(old->defaults) == thumbnailStyleArguments(CaptureDefaults{}),

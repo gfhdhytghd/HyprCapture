@@ -87,9 +87,6 @@ struct CaptureDefaults {
     std::int64_t thumbnailBorderSize = 0;
     std::string thumbnailPosition = "bottom_right";
     std::string thumbnailBorderColor = "";
-    std::string thumbnailBackground = "";
-    std::string thumbnailForeground = "";
-    std::string thumbnailAccent = "";
     bool thumbnailAnimation = true;
     std::string      watermark;
     WatermarkPosition watermarkPosition = WatermarkPosition::Central;

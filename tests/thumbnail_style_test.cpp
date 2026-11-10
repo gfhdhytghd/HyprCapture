@@ -21,12 +21,12 @@ QString legacyStyle(const QPalette &palette) {
     const QColor highlight = palette.color(QPalette::Highlight);
     return hyprcapture::ui::thumbnail::imageStyleSheet() +
            QStringLiteral("#thumbnail { background: transparent; border: none; }"
-                          "#thumbnailMenu { background: rgba(%1,%2,%3,242); border: none; border-radius: 0px; }"
-                          "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,242); border: none; border-radius: 0px; }"
-                          "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; border-radius: "
-                          "0px; text-align: left; }"
+                          "#thumbnailMenu { background: rgba(%1,%2,%3,242); border: none; }"
+                          "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,242); border: none; }"
+                          "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; "
+                          "text-align: left; }"
                           "#thumbnailOpenWithMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; "
-                          "border-radius: 0px; text-align: left; }"
+                          "text-align: left; }"
                           "#thumbnailMenu QPushButton:disabled { color: rgba(%4,%5,%6,100); }"
                           "#thumbnailMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }"
                           "#thumbnailOpenWithMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }")
@@ -78,11 +78,10 @@ int main(int argc, char **argv) {
         palette.setColor(QPalette::Highlight, sameColors ? QColor(10, 20, 30, 13) : QColor(70, 80, 90, 13));
         require(resultStyleSheet(palette).toUtf8() == legacyStyle(palette).toUtf8(), "default stylesheet bytes unchanged");
         CaptureDefaults invalidColors;
-        invalidColors.thumbnailBackground = "red; } QWidget { color: red";
-        invalidColors.thumbnailForeground = "#gg000000";
-        invalidColors.thumbnailAccent = "rgba(123)";
         invalidColors.thumbnailBorderColor = "#123";
-        require(resultStyleSheet(palette, invalidColors) == legacyStyle(palette), "invalid colors preserve palette defaults");
+        QColor expectedBorder = palette.color(QPalette::WindowText);
+        expectedBorder.setAlpha(90);
+        require(imageBorderColor(palette, invalidColors) == expectedBorder, "invalid border color falls back to palette text at alpha 90");
     }
     for (const auto dpr : {1.0, 1.25, 2.0, 4.0, 5.0}) {
         for (const auto size : {QSize(1, 1), QSize(40, 20), QSize(721, 481), QSize(1280, 800), QSize(900, 100), QSize(100, 900)}) {
@@ -112,18 +111,19 @@ int main(int argc, char **argv) {
     for (const auto text : {"", "red", "#fff", "#12345g", "rgba(1234567g)", "0x123456", "#123456789", "#１２３４５６"})
         require(!parseColor(text).isValid(), "invalid color rejected");
     CaptureDefaults custom;
-    custom.thumbnailBackground = "#10203040";
-    custom.thumbnailForeground = "#50607080";
-    custom.thumbnailAccent = "#90a0b0c0";
     custom.thumbnailBorderColor = "0x10203040";
     custom.thumbnailBorderSize = 4;
     custom.thumbnailRounding = 5;
-    auto style = resultStyleSheet(app.palette(), custom);
-    require(style.contains("background: rgba(16,32,48,64)") && style.contains("color: rgba(80,96,112,128)") &&
-                style.contains("background: rgba(144,160,176,192)") && !style.contains("solid") &&
-                imageBorderColor(app.palette(), custom) == QColor(32, 48, 64, 16) &&
-                style.contains("border-radius: 5px") && style.contains("border-radius: 3px"),
-            "explicit colors/alpha/radius; menu border fixed; image border color");
+    auto style = resultStyleSheet(app.palette());
+    require(!style.contains("solid") && !style.contains("radius") && imageBorderColor(app.palette(), custom) == QColor(32, 48, 64, 16),
+            "menus have no border or radius; image border color configurable");
+    {
+        QPixmap square(40, 40);
+        square.fill(Qt::red);
+        const auto rounded = roundedPixmap(square, 12).toImage();
+        require(rounded.pixelColor(0, 0).alpha() == 0 && rounded.pixelColor(20, 20).alpha() == 255 && roundedPixmap(square, 0).toImage() == square.toImage(),
+                "rounded image clips corners only");
+    }
     for (const auto position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
         custom.thumbnailPosition = position;
         custom.thumbnailMargin = 31;
@@ -159,11 +159,10 @@ int main(int argc, char **argv) {
                 parsed.thumbnailOpacity == 100 && parsed.thumbnailRounding == 0 && parsed.thumbnailMargin == 512 && parsed.thumbnailBorderSize == 16 &&
                 parsed.thumbnailAnimation,
             "UI clamps or defaults invalid helper input");
-    for (const char *key : {"thumbnail-border-color", "thumbnail-background", "thumbnail-foreground", "thumbnail-accent"}) {
+    for (const char *key : {"thumbnail-border-color"}) {
         require(parser.parse({"thumbnail-test", "--" + QString::fromLatin1(key), QString(140000, 'x')}), "oversized helper color parses");
         readStyleOptions(parser, parsed);
-        require(parsed.thumbnailBorderColor.empty() && parsed.thumbnailBackground.empty() && parsed.thumbnailForeground.empty() &&
-                    parsed.thumbnailAccent.empty(),
+        require(parsed.thumbnailBorderColor.empty(),
                 "UI independently clears oversized helper colors");
     }
     const auto paddedColor = std::string(57, ' ') + "#123456";
