@@ -1,4 +1,5 @@
 #include "ui/capture_output.hpp"
+#include "shared/thumbnail_config.hpp"
 #include "ui/timing.hpp"
 #include "ui/mapped_image.hpp"
 #include "ui/scroll_capture.hpp"
@@ -668,13 +669,15 @@ QString thumbnailDeleteRoot(const hyprcapture::CaptureDefaults& defaults) {
     return QString::fromStdString(hyprcapture::expandUserPath(defaults.saveDir).string());
 }
 
-QString saveThumbnailPreview(const QImage& image) {
+QString saveThumbnailPreview(const QImage &image, const hyprcapture::CaptureDefaults &defaults) {
     if (image.isNull())
         return {};
 
     QElapsedTimer timer;
     timer.start();
-    const QSize maxSize(kThumbnailPreviewMaxWidth, kThumbnailPreviewMaxHeight);
+    const auto bounded = hyprcapture::normalizedThumbnailDefaults(defaults);
+    const QSize maxSize(std::max<int>(kThumbnailPreviewMaxWidth, bounded.thumbnailMaxWidth * 4),
+                        std::max<int>(kThumbnailPreviewMaxHeight, bounded.thumbnailMaxHeight * 4));
     QImage preview = image;
     if (preview.width() > maxSize.width() || preview.height() > maxSize.height())
         preview = preview.scaled(maxSize, Qt::KeepAspectRatio, Qt::FastTransformation);
@@ -5600,7 +5603,7 @@ void CaptureOverlay::renderAndSaveCapture() {
         (m_defaults.clipboard && m_defaults.showThumbnail) ? hyprcapture::ui::runtimeFile("clipboard", ".json") : QString{};
     bool thumbnailStarted = false;
     if (m_defaults.showThumbnail && m_defaults.save && !edited) {
-        const QString previewPath = saveThumbnailPreview(image);
+        const QString previewPath = saveThumbnailPreview(image, m_defaults);
         if (!previewPath.isEmpty()) {
             showThumbnail(previewPath, targetPath, restoreClipboardPath, hdrImage);
             thumbnailStarted = true;
@@ -5675,8 +5678,8 @@ void CaptureOverlay::saveImage(const QImage& image,
                     if (defaults.save)
                         hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
                     if (result.showThumbnail && !thumbnailStarted)
-                        showThumbnail(defaults.screenshotFormat == "heic" ? saveThumbnailPreview(image) : result.savedPath,
-                                      result.savedPath, result.restoreClipboardPath, hdrImage, image);
+                        showThumbnail(defaults.screenshotFormat == "heic" ? saveThumbnailPreview(image, m_defaults) : result.savedPath, result.savedPath,
+                                      result.restoreClipboardPath, hdrImage, image);
                     qApp->quit();
                 };
                 if (edited) {
@@ -5700,6 +5703,8 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
     const QString hdrPath = hyprcapture::ui::saveHdrThumbnail(hdrPreview);
     if (!hdrPath.isEmpty()) args << "--thumbnail-hdr-preview" << hdrPath;
     args << "--thumbnail-monitor" << qString(m_defaults.thumbnailMonitor);
+    for (const auto &argument : hyprcapture::thumbnailStyleArguments(m_defaults))
+        args << qString(argument);
     args << "--language" << qString(m_defaults.language);
     hyprcapture::CaptureSession saveSession;
     saveSession.id = "thumbnail-save";

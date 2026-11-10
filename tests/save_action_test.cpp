@@ -7,6 +7,8 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QPushButton>
+#include <QLabel>
+#include <QGraphicsOpacityEffect>
 #include <cassert>
 #include <QColorSpace>
 #include <QContextMenuEvent>
@@ -31,6 +33,36 @@ int main(int argc, char** argv) {
     capture->image = image;
     ResultThumbnail thumbnail(QPixmap::fromImage(image), {}, {}, {}, 0);
     ResultThumbnail second(QPixmap::fromImage(image), {}, {}, {}, 0);
+
+    // The original two KeepAspectRatio resamples yield 179x112 for 1280x800.
+    // Preserve this rounding and the original 24px padding.
+    auto *defaultImage = thumbnail.findChild<QLabel *>("thumbnailImage");
+    auto *defaultCard = thumbnail.findChild<QWidget *>("thumbnailImageCard");
+    assert(defaultImage && defaultCard && defaultImage->geometry() == QRect(0, 0, 179, 112));
+    assert(defaultCard->size() == QSize(203, 136) && thumbnail.size() == defaultCard->size());
+    assert(!thumbnail.graphicsEffect());
+    for (const char *position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
+        CaptureDefaults style;
+        style.thumbnailMaxWidth = 320;
+        style.thumbnailMaxHeight = 200;
+        style.thumbnailPosition = position;
+        style.thumbnailMargin = 11;
+        style.thumbnailOpacity = 50;
+        style.thumbnailAnimation = false;
+        ResultThumbnail custom(QPixmap::fromImage(image), {}, {}, {}, 0, false, nullptr, nullptr, style);
+        auto *preview = custom.findChild<QLabel *>("thumbnailImage");
+        auto *card = custom.findChild<QWidget *>("thumbnailImageCard");
+        const bool left = std::string_view(position).ends_with("left");
+        const bool top = std::string_view(position).starts_with("top");
+        assert(preview && card && preview->geometry() == QRect(left ? 11 : 0, top ? 11 : 0, 320, 200));
+        assert(card->size() == QSize(331, 211));
+        auto *opacity = qobject_cast<QGraphicsOpacityEffect *>(custom.graphicsEffect());
+        assert(opacity && opacity->opacity() == 0.5);
+        const QImage rendered = custom.grab().toImage();
+        const auto center = preview->mapTo(&custom, preview->rect().center());
+        assert(rendered.pixelColor(center).alpha() >= 126 && rendered.pixelColor(center).alpha() <= 128);
+    }
+
     thumbnail.setSaveCapture(capture);
     second.setSaveCapture(capture);
     QObject::connect(&thumbnail, &ResultThumbnail::captureSaved, &second, &ResultThumbnail::refreshSaveActions);

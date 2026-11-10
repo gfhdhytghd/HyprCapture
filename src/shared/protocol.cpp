@@ -1,4 +1,5 @@
 #include "shared/protocol.hpp"
+#include "shared/thumbnail_config.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -118,6 +119,18 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"recordCountdownSeconds", std::clamp<std::int64_t>(defaults.recordCountdownSeconds, 0, MAX_RECORD_COUNTDOWN_SECONDS)},
         {"thumbnailTimeoutMs", std::clamp<std::int64_t>(defaults.thumbnailTimeoutMs, 0, 60 * 60 * 1000)},
         {"thumbnailMonitor", boundedString(defaults.thumbnailMonitor, MAX_METADATA_STRING_BYTES)},
+        {"thumbnailMaxWidth", std::clamp<std::int64_t>(defaults.thumbnailMaxWidth, 48, 1024)},
+        {"thumbnailMaxHeight", std::clamp<std::int64_t>(defaults.thumbnailMaxHeight, 48, 1024)},
+        {"thumbnailMargin", std::clamp<std::int64_t>(defaults.thumbnailMargin, 0, 512)},
+        {"thumbnailRounding", std::clamp<std::int64_t>(defaults.thumbnailRounding, 0, 128)},
+        {"thumbnailOpacity", std::clamp<std::int64_t>(defaults.thumbnailOpacity, 0, 100)},
+        {"thumbnailBorderSize", std::clamp<std::int64_t>(defaults.thumbnailBorderSize, 0, 16)},
+        {"thumbnailPosition", validThumbnailPosition(defaults.thumbnailPosition) ? defaults.thumbnailPosition : "bottom_right"},
+        {"thumbnailBorderColor", boundedString(defaults.thumbnailBorderColor, MAX_METADATA_STRING_BYTES)},
+        {"thumbnailBackground", boundedString(defaults.thumbnailBackground, MAX_METADATA_STRING_BYTES)},
+        {"thumbnailForeground", boundedString(defaults.thumbnailForeground, MAX_METADATA_STRING_BYTES)},
+        {"thumbnailAccent", boundedString(defaults.thumbnailAccent, MAX_METADATA_STRING_BYTES)},
+        {"thumbnailAnimation", defaults.thumbnailAnimation},
         {"watermark", boundedString(defaults.watermark, MAX_PATH_BYTES)},
         {"watermarkPosition", toString(defaults.watermarkPosition)},
         {"watermarkWidth", boundedString(defaults.watermarkWidth, MAX_METADATA_STRING_BYTES)},
@@ -324,6 +337,18 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         int64Value(obj, "recordCountdownSeconds", defaults.recordCountdownSeconds, 0, MAX_RECORD_COUNTDOWN_SECONDS, false) &&
         int64Value(obj, "thumbnailTimeoutMs", defaults.thumbnailTimeoutMs, 0, 60 * 60 * 1000, false) &&
         stringValue(obj, "thumbnailMonitor", defaults.thumbnailMonitor, MAX_METADATA_STRING_BYTES, false) &&
+        int64Value(obj, "thumbnailMaxWidth", defaults.thumbnailMaxWidth, 48, 1024, false) &&
+        int64Value(obj, "thumbnailMaxHeight", defaults.thumbnailMaxHeight, 48, 1024, false) &&
+        int64Value(obj, "thumbnailMargin", defaults.thumbnailMargin, 0, 512, false) &&
+        int64Value(obj, "thumbnailRounding", defaults.thumbnailRounding, 0, 128, false) &&
+        int64Value(obj, "thumbnailOpacity", defaults.thumbnailOpacity, 0, 100, false) &&
+        int64Value(obj, "thumbnailBorderSize", defaults.thumbnailBorderSize, 0, 16, false) &&
+        stringValue(obj, "thumbnailPosition", defaults.thumbnailPosition, MAX_METADATA_STRING_BYTES, false) &&
+        stringValue(obj, "thumbnailBorderColor", defaults.thumbnailBorderColor, MAX_METADATA_STRING_BYTES, false) &&
+        stringValue(obj, "thumbnailBackground", defaults.thumbnailBackground, MAX_METADATA_STRING_BYTES, false) &&
+        stringValue(obj, "thumbnailForeground", defaults.thumbnailForeground, MAX_METADATA_STRING_BYTES, false) &&
+        stringValue(obj, "thumbnailAccent", defaults.thumbnailAccent, MAX_METADATA_STRING_BYTES, false) &&
+        validThumbnailPosition(defaults.thumbnailPosition) && boolValue(obj, "thumbnailAnimation", defaults.thumbnailAnimation, false) &&
         stringValue(obj, "watermark", defaults.watermark, MAX_PATH_BYTES, false) &&
         stringValue(obj, "watermarkWidth", defaults.watermarkWidth, MAX_METADATA_STRING_BYTES, false) &&
         stringValue(obj, "watermarkOffset", defaults.watermarkOffset, MAX_METADATA_STRING_BYTES, false) &&

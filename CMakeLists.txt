@@ -431,6 +431,12 @@ if(BUILD_TESTING)
   add_test(NAME save-action COMMAND hyprcapture-save-action-test)
   set_tests_properties(save-action PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen" TIMEOUT 60)
 
+  add_executable(hyprcapture-thumbnail-style-test tests/thumbnail_style_test.cpp)
+  target_include_directories(hyprcapture-thumbnail-style-test PRIVATE src)
+  target_link_libraries(hyprcapture-thumbnail-style-test PRIVATE Qt6::Widgets)
+  add_test(NAME thumbnail-style COMMAND hyprcapture-thumbnail-style-test)
+  set_tests_properties(thumbnail-style PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORMTHEME=;QT_LINUX_ACCESSIBILITY_ALWAYS_ON=0;DBUS_SESSION_BUS_ADDRESS=unix:path=/tmp/hyprcapture-tests-no-bus" TIMEOUT 20)
+
   add_executable(hyprcapture-config-test
     tests/config_test.cpp
     src/shared/config.cpp

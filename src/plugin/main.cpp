@@ -206,6 +206,18 @@ void registerConfigValues() {
     addIntConfig("record_countdown_seconds", "Recording start countdown in seconds", 0);
     addIntConfig("thumbnail_timeout_ms", "Thumbnail auto-close timeout in milliseconds", 5000);
     addStringConfig("thumbnail_monitor", "Thumbnail target monitor: active, primary, all, or an output name", "active");
+    addIntConfig("thumbnail_max_width", "Result thumbnail max width", 180);
+    addIntConfig("thumbnail_max_height", "Result thumbnail max height", 120);
+    addIntConfig("thumbnail_margin", "Result thumbnail margin", 24);
+    addIntConfig("thumbnail_rounding", "Result thumbnail rounding", 7);
+    addIntConfig("thumbnail_opacity", "Result thumbnail opacity", 100);
+    addIntConfig("thumbnail_border_size", "Result thumbnail border size", 1);
+    addStringConfig("thumbnail_position", "Result thumbnail position", "bottom_right");
+    addStringConfig("thumbnail_border_color", "Result thumbnail border color", "");
+    addStringConfig("thumbnail_background", "Result thumbnail background", "");
+    addStringConfig("thumbnail_foreground", "Result thumbnail foreground", "");
+    addStringConfig("thumbnail_accent", "Result thumbnail accent", "");
+    addBoolConfig("thumbnail_animation", "Animate result thumbnail swipe reset and dismissal", true);
     addStringConfig("helper", "Optional helper executable override", "");
     addStringConfig("watermark", "Watermark path or built-in name", "");
     addStringConfig("watermark_position", "Watermark position", "central");
@@ -292,6 +304,18 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.recordCountdownSeconds = std::clamp<std::int64_t>(configInt("record_countdown_seconds", defaults.recordCountdownSeconds), 0, 60);
     defaults.thumbnailTimeoutMs = configInt("thumbnail_timeout_ms", defaults.thumbnailTimeoutMs);
     defaults.thumbnailMonitor = configString("thumbnail_monitor", defaults.thumbnailMonitor);
+    defaults.thumbnailMaxWidth = configInt("thumbnail_max_width", defaults.thumbnailMaxWidth);
+    defaults.thumbnailMaxHeight = configInt("thumbnail_max_height", defaults.thumbnailMaxHeight);
+    defaults.thumbnailMargin = configInt("thumbnail_margin", defaults.thumbnailMargin);
+    defaults.thumbnailRounding = configInt("thumbnail_rounding", defaults.thumbnailRounding);
+    defaults.thumbnailOpacity = configInt("thumbnail_opacity", defaults.thumbnailOpacity);
+    defaults.thumbnailBorderSize = configInt("thumbnail_border_size", defaults.thumbnailBorderSize);
+    defaults.thumbnailPosition = configString("thumbnail_position", defaults.thumbnailPosition);
+    defaults.thumbnailBorderColor = configString("thumbnail_border_color", defaults.thumbnailBorderColor);
+    defaults.thumbnailBackground = configString("thumbnail_background", defaults.thumbnailBackground);
+    defaults.thumbnailForeground = configString("thumbnail_foreground", defaults.thumbnailForeground);
+    defaults.thumbnailAccent = configString("thumbnail_accent", defaults.thumbnailAccent);
+    defaults.thumbnailAnimation = configBool("thumbnail_animation", defaults.thumbnailAnimation);
     defaults.watermark = configString("watermark", defaults.watermark);
     defaults.watermarkPosition =
         hyprcapture::parseWatermarkPosition(configString("watermark_position", hyprcapture::toString(defaults.watermarkPosition)), defaults.watermarkPosition);
