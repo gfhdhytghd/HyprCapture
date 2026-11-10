@@ -79,6 +79,18 @@ struct CaptureDefaults {
     std::int64_t     recordCountdownSeconds = 0;
     std::int64_t     thumbnailTimeoutMs = 5000;
     std::string      thumbnailMonitor = "active";
+    std::int64_t thumbnailMaxWidth = 180;
+    std::int64_t thumbnailMaxHeight = 120;
+    std::int64_t thumbnailMargin = 24;
+    std::int64_t thumbnailRounding = 7;
+    std::int64_t thumbnailOpacity = 100;
+    std::int64_t thumbnailBorderSize = 1;
+    std::string thumbnailPosition = "bottom_right";
+    std::string thumbnailBorderColor = "";
+    std::string thumbnailBackground = "";
+    std::string thumbnailForeground = "";
+    std::string thumbnailAccent = "";
+    bool thumbnailAnimation = true;
     std::string      watermark;
     WatermarkPosition watermarkPosition = WatermarkPosition::Central;
     std::string      watermarkWidth = "20%";

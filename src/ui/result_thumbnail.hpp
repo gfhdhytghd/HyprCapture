@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/hdr_backdrop.hpp"
+#include "shared/thumbnail_config.hpp"
 #include "ui/capture_output.hpp"
 #include <vector>
 #include <QPixmap>
@@ -22,14 +23,8 @@ class ResultThumbnail final : public QWidget {
     Q_OBJECT
 
   public:
-    ResultThumbnail(const QPixmap& pixmap,
-                    QString path,
-                    QString restoreClipboardPath,
-                    QString deleteRoot,
-                    int timeoutMs,
-                    bool copyFile = false,
-                    QScreen* targetScreen = nullptr,
-                    QWidget* parent = nullptr);
+    ResultThumbnail(const QPixmap &pixmap, QString path, QString restoreClipboardPath, QString deleteRoot, int timeoutMs, bool copyFile = false,
+                    QScreen *targetScreen = nullptr, QWidget *parent = nullptr, const hyprcapture::CaptureDefaults &defaults = {});
     ~ResultThumbnail() override;
     void setSaveCapture(std::shared_ptr<hyprcapture::ui::CaptureSave> capture);
     void refreshSaveActions();
@@ -84,6 +79,7 @@ class ResultThumbnail final : public QWidget {
 
     void updateHdrGeometry();
     std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrBackdrop;
+    hyprcapture::CaptureDefaults m_defaults;
     QPixmap m_dragPreview;
     QString m_path;
     QString m_dragPath;

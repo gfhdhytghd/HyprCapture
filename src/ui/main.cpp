@@ -6,6 +6,7 @@
 #include "ui/capture_overlay.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/result_thumbnail.hpp"
+#include "ui/thumbnail_style.hpp"
 #include "ui/capture_output.hpp"
 #include "ui/hdr_thumbnail.hpp"
 #include "ui/i18n.hpp"
@@ -111,7 +112,7 @@ int boundedInt(QString value, int fallback, int minimum, int maximum) {
     return std::clamp(parsed, minimum, maximum);
 }
 
-QPixmap loadThumbnailPixmap(const QString& path) {
+QPixmap loadThumbnailPixmap(const QString &path, const hyprcapture::CaptureDefaults &defaults) {
     const QFileInfo info(path);
     if (path.isEmpty() || !info.exists() || !info.isFile() || !info.isReadable() || info.size() < 0 || info.size() > MAX_THUMBNAIL_SOURCE_BYTES)
         return {};
@@ -123,7 +124,9 @@ QPixmap loadThumbnailPixmap(const QString& path) {
         sourceSize.height() > MAX_THUMBNAIL_DIMENSION)
         return {};
 
-    reader.setScaledSize(sourceSize.scaled(THUMBNAIL_DECODE_MAX_WIDTH, THUMBNAIL_DECODE_MAX_HEIGHT, Qt::KeepAspectRatio));
+    const auto maximum = hyprcapture::ui::thumbnail::maximumSize(defaults) * 4;
+    reader.setScaledSize(
+        sourceSize.scaled(std::max(THUMBNAIL_DECODE_MAX_WIDTH, maximum.width()), std::max(THUMBNAIL_DECODE_MAX_HEIGHT, maximum.height()), Qt::KeepAspectRatio));
     const QImage image = reader.read();
     if (image.isNull())
         return {};
@@ -410,8 +413,8 @@ void setOwnerOnlyPermissions(const QString& path) {
         chmod(native.constData(), 0600);
 }
 
-QPixmap recordingThumbnailPixmap(bool showPlayButton) {
-    constexpr QSize logicalSize(180, 120);
+QPixmap recordingThumbnailPixmap(bool showPlayButton, const hyprcapture::CaptureDefaults &defaults) {
+    const QSize logicalSize = hyprcapture::ui::thumbnail::maximumSize(defaults);
     qreal dpr = 1.0;
     for (const QScreen* screen : QGuiApplication::screens()) {
         if (screen)
@@ -444,20 +447,15 @@ QPixmap recordingThumbnailPixmap(bool showPlayButton) {
 
 class ResultThumbnailCollection {
   public:
-    ResultThumbnailCollection(const QPixmap& pixmap,
-                              const QString& path,
-                              const QString& restoreClipboardPath,
-                              const QString& deleteRoot,
-                              int timeoutMs,
-                              bool copyFile,
-                              const std::vector<QScreen*>& screens) {
+    ResultThumbnailCollection(const QPixmap &pixmap, const QString &path, const QString &restoreClipboardPath, const QString &deleteRoot, int timeoutMs,
+                              bool copyFile, const std::vector<QScreen *> &screens, const hyprcapture::CaptureDefaults &defaults) {
         for (QScreen* screen : screens) {
-            m_thumbnails.push_back(std::make_unique<ResultThumbnail>(
-                pixmap, path, restoreClipboardPath, deleteRoot, timeoutMs, copyFile, screen));
+            m_thumbnails.push_back(
+                std::make_unique<ResultThumbnail>(pixmap, path, restoreClipboardPath, deleteRoot, timeoutMs, copyFile, screen, nullptr, defaults));
         }
         if (m_thumbnails.empty())
-            m_thumbnails.push_back(std::make_unique<ResultThumbnail>(
-                pixmap, path, restoreClipboardPath, deleteRoot, timeoutMs, copyFile, nullptr));
+            m_thumbnails.push_back(
+                std::make_unique<ResultThumbnail>(pixmap, path, restoreClipboardPath, deleteRoot, timeoutMs, copyFile, nullptr, nullptr, defaults));
         connectSwipeSynchronization();
     }
 
@@ -530,7 +528,7 @@ class ResultThumbnailCollection {
 };
 
 // Decode exactly the first video frame without blocking the UI event loop.
-void loadRecordingFirstFrame(const QString& path, QObject* context, std::function<void(const QPixmap&)> ready) {
+void loadRecordingFirstFrame(const QString &path, QObject *context, const hyprcapture::CaptureDefaults &defaults, std::function<void(const QPixmap &)> ready) {
     const QString ffmpeg = hyprcapture::ui::trustedSystemProgram(QStringLiteral("ffmpeg"));
     if (ffmpeg.isEmpty()) {
         ready({});
@@ -542,15 +540,17 @@ void loadRecordingFirstFrame(const QString& path, QObject* context, std::functio
     QObject::connect(timeout, &QTimer::timeout, process, [process] { process->kill(); });
     process->setProcessEnvironment(hyprcapture::ui::trustedProcessEnvironment());
     process->setProgram(ffmpeg);
-    process->setArguments({"-hide_banner", "-loglevel", "error", "-nostdin", "-i", path,
-                           "-map", "0:v:0", "-frames:v", "1", "-vf",
-                           "scale=720:480:force_original_aspect_ratio=decrease", "-f", "image2pipe", "-c:v", "png", "pipe:1"});
-    auto complete = [process, ready](bool success) {
+    const auto decodeBox = hyprcapture::ui::thumbnail::maximumSize(defaults) * 4;
+    process->setArguments(
+        {"-hide_banner", "-loglevel", "error", "-nostdin", "-i", path, "-map", "0:v:0", "-frames:v", "1", "-vf",
+         QStringLiteral("scale=%1:%2:force_original_aspect_ratio=decrease").arg(std::max(720, decodeBox.width())).arg(std::max(480, decodeBox.height())), "-f",
+         "image2pipe", "-c:v", "png", "pipe:1"});
+    auto complete = [process, ready, defaults](bool success) {
         QPixmap frame;
         if (success)
             frame.loadFromData(process->readAllStandardOutput(), "PNG");
         if (!frame.isNull()) {
-            QPixmap canvas = recordingThumbnailPixmap(false);
+            QPixmap canvas = recordingThumbnailPixmap(false, defaults);
             QPainter painter(&canvas);
             painter.setRenderHint(QPainter::SmoothPixmapTransform);
             const QSizeF bounds = canvas.deviceIndependentSize();
@@ -580,8 +580,8 @@ int showRecordingPending(const hyprcapture::CaptureDefaults& defaults, const QSt
         !trustedDirectory(QFileInfo(socketPath).absolutePath()) ||
         lstat(nativeSocket.constData(), &socketStat) != 0 || !S_ISSOCK(socketStat.st_mode) || socketStat.st_uid != geteuid())
         return 1;
-    ResultThumbnailCollection thumbnails(recordingThumbnailPixmap(false), path, {}, {}, 0, true,
-                                         thumbnailScreens(QString::fromStdString(defaults.thumbnailMonitor)));
+    ResultThumbnailCollection thumbnails(recordingThumbnailPixmap(false, defaults), path, {}, {}, 0, true,
+                                         thumbnailScreens(QString::fromStdString(defaults.thumbnailMonitor)), defaults);
     thumbnails.setTranscodeProgress(-1.0);
     QLocalSocket socket;
     QTimer poll;
@@ -635,17 +635,13 @@ int showRecordingResult(const hyprcapture::CaptureDefaults& defaults, const QStr
     }
 
     const QString deleteRoot = QString::fromStdString(hyprcapture::expandUserPath(defaults.recordSaveDir).string());
-    ResultThumbnailCollection thumbnails(recordingThumbnailPixmap(true),
-                                         canonicalPath,
-                                         restoreClipboardPath,
-                                         deleteRoot,
-                                         static_cast<int>(defaults.thumbnailTimeoutMs),
-                                         true,
-                                         thumbnailScreens(QString::fromStdString(defaults.thumbnailMonitor)));
+    ResultThumbnailCollection thumbnails(recordingThumbnailPixmap(true, defaults), canonicalPath, restoreClipboardPath, deleteRoot,
+                                         static_cast<int>(defaults.thumbnailTimeoutMs), true,
+                                         thumbnailScreens(QString::fromStdString(defaults.thumbnailMonitor)), defaults);
     thumbnails.setTranscodeProgress(-1.0);
     thumbnails.show();
     QObject decoderContext;
-    loadRecordingFirstFrame(canonicalPath, &decoderContext, [&](const QPixmap& frame) {
+    loadRecordingFirstFrame(canonicalPath, &decoderContext, defaults, [&](const QPixmap &frame) {
         if (!frame.isNull())
             thumbnails.setImagePixmap(frame);
         thumbnails.finishTranscodeProgress(true, static_cast<int>(defaults.thumbnailTimeoutMs));
@@ -728,14 +724,9 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
         state->restoreClipboardPath = hyprcapture::ui::saveClipboardSnapshot();
 
     if (defaults.showThumbnail) {
-        state->thumbnails = std::make_unique<ResultThumbnailCollection>(
-            recordingThumbnailPixmap(false),
-            cleanOutput,
-            state->restoreClipboardPath,
-            deleteRoot,
-            0,
-            true,
-            thumbnailScreens(QString::fromStdString(defaults.thumbnailMonitor)));
+        state->thumbnails =
+            std::make_unique<ResultThumbnailCollection>(recordingThumbnailPixmap(false, defaults), cleanOutput, state->restoreClipboardPath, deleteRoot, 0,
+                                                        true, thumbnailScreens(QString::fromStdString(defaults.thumbnailMonitor)), defaults);
         state->thumbnails->setTranscodeProgress(0.0);
         state->thumbnails->show();
     }
@@ -787,8 +778,8 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
                 hyprcapture::ui::copyFileUrlToClipboard(state->outputPath);
             if (state->thumbnails) {
                 state->thumbnails->setTranscodeProgress(1.0);
-                loadRecordingFirstFrame(state->outputPath, qApp, [state](const QPixmap& frame) {
-                    state->thumbnails->setImagePixmap(frame.isNull() ? recordingThumbnailPixmap(true) : frame);
+                loadRecordingFirstFrame(state->outputPath, qApp, state->defaults, [state](const QPixmap &frame) {
+                    state->thumbnails->setImagePixmap(frame.isNull() ? recordingThumbnailPixmap(true, state->defaults) : frame);
                     state->thumbnails->finishTranscodeProgress(true, static_cast<int>(state->defaults.thumbnailTimeoutMs));
                 });
             } else {
@@ -905,6 +896,18 @@ int main(int argc, char** argv) {
         {"record-countdown-seconds", "Recording start countdown seconds.", "seconds", "0"},
         {"thumbnail-timeout-ms", "Thumbnail timeout.", "ms", "5000"},
         {"thumbnail-monitor", "Thumbnail monitor: active, primary, all, or output name.", "monitor", "active"},
+        {"thumbnail-max-width", "Result thumbnail max width.", "value", "180"},
+        {"thumbnail-max-height", "Result thumbnail max height.", "value", "120"},
+        {"thumbnail-margin", "Result thumbnail margin.", "value", "24"},
+        {"thumbnail-rounding", "Result thumbnail rounding.", "value", "7"},
+        {"thumbnail-opacity", "Result thumbnail opacity.", "value", "100"},
+        {"thumbnail-border-size", "Result thumbnail border size.", "value", "1"},
+        {"thumbnail-position", "Result thumbnail position.", "value", "bottom_right"},
+        {"thumbnail-border-color", "Result thumbnail border color.", "value", ""},
+        {"thumbnail-background", "Result thumbnail background.", "value", ""},
+        {"thumbnail-foreground", "Result thumbnail foreground.", "value", ""},
+        {"thumbnail-accent", "Result thumbnail accent.", "value", ""},
+        {"thumbnail-animation", "Animate result thumbnail swipes.", "0|1", "1"},
         {"watermark", "Watermark image path or built-in id.", "path|id", ""},
         {"watermark-position", "Watermark position.", "position", "central"},
         {"watermark-width", "Watermark width in pixels or screenshot-width percent.", "width", "20%"},
@@ -1003,16 +1006,14 @@ int main(int argc, char** argv) {
     if (hasArgument(argc, argv, "--thumbnail-window")) {
         const QString thumbnailPath = parser.value("thumbnail-window");
         const QString thumbnailTarget = parser.value("thumbnail-target").isEmpty() ? thumbnailPath : parser.value("thumbnail-target");
-        const QPixmap pixmap = loadThumbnailPixmap(thumbnailPath);
+        hyprcapture::CaptureDefaults thumbnailDefaults;
+        hyprcapture::ui::thumbnail::readStyleOptions(parser, thumbnailDefaults);
+        const QPixmap pixmap = loadThumbnailPixmap(thumbnailPath, thumbnailDefaults);
         if (pixmap.isNull())
             return 1;
-        ResultThumbnailCollection thumbnails(pixmap,
-                                             thumbnailTarget,
-                                             parser.value("restore-clipboard"),
-                                             parser.value("thumbnail-delete-root"),
-                                             boundedInt(parser.value("thumbnail-timeout-ms"), 5000, 0, MAX_THUMBNAIL_TIMEOUT_MS),
-                                             false,
-                                             thumbnailScreens(parser.value("thumbnail-monitor")));
+        ResultThumbnailCollection thumbnails(pixmap, thumbnailTarget, parser.value("restore-clipboard"), parser.value("thumbnail-delete-root"),
+                                             boundedInt(parser.value("thumbnail-timeout-ms"), 5000, 0, MAX_THUMBNAIL_TIMEOUT_MS), false,
+                                             thumbnailScreens(parser.value("thumbnail-monitor")), thumbnailDefaults);
         thumbnails.setHdrImage(hyprcapture::ui::takeHdrThumbnail(parser.value("thumbnail-hdr-preview")));
         thumbnails.setDragPath(parser.value("thumbnail-drag-target"));
         const auto saveRequest = parser.value("thumbnail-save-session");
@@ -1111,6 +1112,7 @@ int main(int argc, char** argv) {
     defaults.recordCountdownSeconds = boundedInt(parser.value("record-countdown-seconds"), defaults.recordCountdownSeconds, 0, MAX_RECORD_COUNTDOWN_SECONDS);
     defaults.thumbnailTimeoutMs = boundedInt(parser.value("thumbnail-timeout-ms"), defaults.thumbnailTimeoutMs, 0, MAX_THUMBNAIL_TIMEOUT_MS);
     defaults.thumbnailMonitor = parser.value("thumbnail-monitor").toStdString();
+    hyprcapture::ui::thumbnail::readStyleOptions(parser, defaults);
     defaults.watermark = parser.value("watermark").toStdString();
     defaults.watermarkPosition = hyprcapture::parseWatermarkPosition(parser.value("watermark-position").toStdString(), defaults.watermarkPosition);
     defaults.watermarkWidth = parser.value("watermark-width").toStdString();

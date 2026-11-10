@@ -1,4 +1,5 @@
 #include "shared/config.hpp"
+#include "shared/thumbnail_config.hpp"
 #include "plugin/hymission_capture.hpp"
 #include "shared/audio_source.hpp"
 #include "shared/protocol.hpp"
@@ -344,6 +345,108 @@ int main() {
     require(decoded->defaults.notificationBodyTemplate == "Saved {filename}", "decoded notification body template");
     require(decoded->defaults.fullscreenPreviewRounding == "27", "decoded fullscreen preview rounding");
     require(decoded->defaults.thumbnailMonitor == "DP-2", "decoded thumbnail monitor");
+
+    {
+        auto styled = session;
+        styled.defaults.thumbnailMaxWidth = 384;
+        styled.defaults.thumbnailMaxHeight = 256;
+        styled.defaults.thumbnailPosition = "top_left";
+        styled.defaults.thumbnailMargin = 12;
+        styled.defaults.thumbnailRounding = 19;
+        styled.defaults.thumbnailOpacity = 64;
+        styled.defaults.thumbnailBorderSize = 3;
+        styled.defaults.thumbnailBorderColor = "#12345678";
+        styled.defaults.thumbnailBackground = "rgba(abcdef80)";
+        styled.defaults.thumbnailForeground = "0xff123456";
+        styled.defaults.thumbnailAccent = "#abcdef";
+        styled.defaults.thumbnailAnimation = false;
+        const auto roundTrip = decodeSessionJson(encodeSessionJson(styled));
+        require(roundTrip.has_value(), "styled thumbnail round trip");
+        const auto &options = roundTrip->defaults;
+        require(options.thumbnailMaxWidth == 384 && options.thumbnailMaxHeight == 256 && options.thumbnailMargin == 12 && options.thumbnailRounding == 19 &&
+                    options.thumbnailOpacity == 64 && options.thumbnailBorderSize == 3 && options.thumbnailPosition == "top_left" &&
+                    options.thumbnailBorderColor == "#12345678" && options.thumbnailBackground == "rgba(abcdef80)" &&
+                    options.thumbnailForeground == "0xff123456" && options.thumbnailAccent == "#abcdef" && !options.thumbnailAnimation,
+                "all thumbnail fields survive JSON");
+        const auto valid = nlohmann::ordered_json::parse(encodeSessionJson(styled));
+        const auto checkInteger = [&](const char *key, std::int64_t low, std::int64_t high) {
+            for (const auto value : {low - 1, high + 1}) {
+                auto invalid = valid;
+                invalid["defaults"][key] = value;
+                require(!decodeSessionJson(invalid.dump()), "thumbnail integer bounds rejected");
+            }
+            for (const auto value : {low, high}) {
+                auto boundary = valid;
+                boundary["defaults"][key] = value;
+                require(decodeSessionJson(boundary.dump()).has_value(), "thumbnail integer boundary accepted");
+            }
+            for (const auto &value :
+                 {nlohmann::ordered_json("12"), nlohmann::ordered_json(1.5), nlohmann::ordered_json(true), nlohmann::ordered_json(nullptr)}) {
+                auto invalid = valid;
+                invalid["defaults"][key] = value;
+                require(!decodeSessionJson(invalid.dump()), "thumbnail integer type rejected");
+            }
+        };
+        checkInteger("thumbnailMaxWidth", 48, 1024);
+        checkInteger("thumbnailMaxHeight", 48, 1024);
+        checkInteger("thumbnailMargin", 0, 512);
+        checkInteger("thumbnailRounding", 0, 128);
+        checkInteger("thumbnailOpacity", 0, 100);
+        checkInteger("thumbnailBorderSize", 0, 16);
+        for (const char *key : {"thumbnailPosition", "thumbnailBorderColor", "thumbnailBackground", "thumbnailForeground", "thumbnailAccent"}) {
+            auto invalid = valid;
+            invalid["defaults"][key] = 42;
+            require(!decodeSessionJson(invalid.dump()), "thumbnail string type rejected");
+            invalid["defaults"][key] = std::string(4097, 'x');
+            require(!decodeSessionJson(invalid.dump()), "thumbnail string length rejected");
+        }
+        for (auto member : {&CaptureDefaults::thumbnailBorderColor, &CaptureDefaults::thumbnailBackground, &CaptureDefaults::thumbnailForeground,
+                            &CaptureDefaults::thumbnailAccent}) {
+            auto oversized = styled;
+            oversized.defaults.*member = std::string(140000, 'x');
+            const auto arguments = thumbnailStyleArguments(oversized.defaults);
+            for (const auto &argument : arguments)
+                require(argument.size() <= 64, "oversized thumbnail color never reaches helper argv");
+            const auto sanitized = decodeSessionJson(encodeSessionJson(oversized));
+            require(sanitized.has_value() && (sanitized->defaults.*member).empty(), "oversized thumbnail color cleared before JSON");
+            oversized.defaults.*member = "not-a-color";
+            require((normalizedThumbnailDefaults(oversized.defaults).*member).empty(), "invalid short thumbnail color cleared");
+        }
+        for (const char *key : {"thumbnailBorderColor", "thumbnailBackground", "thumbnailForeground", "thumbnailAccent"}) {
+            for (const auto length : {65, 140000}) {
+                auto oversized = valid;
+                oversized["defaults"][key] = std::string(length, 'x');
+                require(!decodeSessionJson(oversized.dump()), "protocol rejects oversized thumbnail colors");
+            }
+        }
+        auto invalid = valid;
+        invalid["defaults"]["thumbnailPosition"] = "center";
+        require(!decodeSessionJson(invalid.dump()), "unknown thumbnail corner rejected");
+        invalid = valid;
+        invalid["defaults"]["thumbnailAnimation"] = "false";
+        require(!decodeSessionJson(invalid.dump()), "thumbnail animation must be boolean");
+        auto legacy = valid;
+        for (const char *key :
+             {"thumbnailMaxWidth", "thumbnailMaxHeight", "thumbnailPosition", "thumbnailMargin", "thumbnailRounding", "thumbnailOpacity", "thumbnailBorderSize",
+              "thumbnailBorderColor", "thumbnailBackground", "thumbnailForeground", "thumbnailAccent", "thumbnailAnimation"})
+            legacy["defaults"].erase(key);
+        const auto old = decodeSessionJson(legacy.dump());
+        require(old.has_value() && thumbnailStyleArguments(old->defaults) == thumbnailStyleArguments(CaptureDefaults{}),
+                "missing thumbnail customization keeps original defaults");
+        styled.defaults.thumbnailMaxWidth = std::numeric_limits<std::int64_t>::max();
+        styled.defaults.thumbnailMaxHeight = std::numeric_limits<std::int64_t>::min();
+        styled.defaults.thumbnailMargin = -1;
+        styled.defaults.thumbnailRounding = 500;
+        styled.defaults.thumbnailOpacity = 101;
+        styled.defaults.thumbnailBorderSize = -4;
+        styled.defaults.thumbnailPosition = "invalid";
+        const auto clamped = decodeSessionJson(encodeSessionJson(styled));
+        require(clamped.has_value() && clamped->defaults.thumbnailMaxWidth == 1024 && clamped->defaults.thumbnailMaxHeight == 48 &&
+                    clamped->defaults.thumbnailMargin == 0 && clamped->defaults.thumbnailRounding == 128 && clamped->defaults.thumbnailOpacity == 100 &&
+                    clamped->defaults.thumbnailBorderSize == 0 && clamped->defaults.thumbnailPosition == "bottom_right",
+                "thumbnail encoder clamps untrusted numeric values");
+    }
+
     require(decoded->defaults.fushionMode, "decoded fushion mode");
     require(decoded->defaults.recordTransparentFormat == "webm", "decoded transparent record format");
     require(decoded->defaults.recordCodec == "auto", "decoded record codec default");

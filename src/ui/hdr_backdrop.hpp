@@ -9,6 +9,11 @@
 #include <memory>
 class QWindow;
 namespace hyprcapture::ui {
+// Use the same parent clip as before unless a consumer supplies a smaller one.
+inline QRect hdrBackdropVisibleRect(const QRect &destination, const QRect &parent, const std::optional<QRect> &clip = std::nullopt) {
+  const auto visible = destination.intersected(parent);
+  return clip ? visible.intersected(*clip) : visible;
+}
 struct HdrPresentationLuminances {
   uint32_t encodingMaximum = 0, reference = 0, masteringMaximum = 0;
 };
@@ -35,6 +40,8 @@ public:
   bool setPqImage(const QImage &image, const QRect &destination, float peakNits,
                   float referenceNits, std::optional<QRegion> damage = std::nullopt);
   void setGeometry(const QRect &destination);
+  // Parent-window logical coordinates; persists across asynchronous uploads.
+  void setClipRect(std::optional<QRect> clip);
   // Sibling ordering is applied with the next parent commit.
   void stackAbove(const HdrBackdrop& lower);
   void setVisible(bool visible);

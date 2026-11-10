@@ -81,6 +81,18 @@ public:
 };
 int main(int argc, char **argv) {
   QApplication app(argc, argv);
+  // A thumbnail's window also contains menus/actions. Its HDR child must be
+  // clipped to the card during downward deletion and rightward dismissal.
+  const QRect window(0, 0, 500, 500), card(0, 0, 204, 144);
+  assert(ui::hdrBackdropVisibleRect(QRect(0, 100, 180, 120), window, card) == QRect(0, 100, 180, 44));
+  assert(ui::hdrBackdropVisibleRect(QRect(150, 0, 180, 120), window, card) == QRect(150, 0, 54, 120));
+  assert(ui::hdrBackdropVisibleRect(QRect(0, 145, 180, 120), window, card).isEmpty());
+  assert(ui::hdrBackdropVisibleRect(QRect(205, 0, 180, 120), window, card).isEmpty());
+  const QRect shiftedCard(30, 40, 204, 144);
+  assert(ui::hdrBackdropVisibleRect(QRect(180, 140, 180, 120), window, shiftedCard) == QRect(180, 140, 54, 44));
+  for (const QRect destination : {QRect(0, 0, 180, 120), QRect(-40, -30, 180, 120), QRect(450, 450, 180, 120)})
+    assert(ui::hdrBackdropVisibleRect(destination, window) == destination.intersected(window));
+
   // EXT_LINEAR is a normalised linear TF, not the Windows-scRGB protocol
   // shortcut. Its encoding span must describe the actual uploaded units.
   // Mastering peak must remain independent (PQ ignores encoding max).
