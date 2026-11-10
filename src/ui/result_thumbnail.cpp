@@ -318,8 +318,6 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     setStyleSheet(hyprcapture::ui::thumbnail::resultStyleSheet(QApplication::palette(), m_defaults));
 
     auto* layout = new QVBoxLayout(this);
-    if (alignment.testFlag(Qt::AlignTop))
-        layout->setDirection(QBoxLayout::BottomToTop);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
 
@@ -328,6 +326,9 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     auto* shellLayout = new QHBoxLayout(m_menuShell);
     shellLayout->setContentsMargins(0, 0, 0, 0);
     shellLayout->setSpacing(6);
+    shellLayout->setAlignment(horizontal);
+    if (alignment.testFlag(Qt::AlignLeft))
+        shellLayout->setDirection(QBoxLayout::RightToLeft);
 
     m_menuPanel = new QWidget(m_menuShell);
     m_menuPanel->setObjectName("thumbnailMenu");
@@ -416,7 +417,6 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     shellLayout->addWidget(m_menuPanel, 0, Qt::AlignBottom);
 
     m_menuShell->hide();
-    layout->addWidget(m_menuShell, 0, horizontal);
 
     QPixmap scaledPixmap = thumbnail::scaledPixmap(pixmap, targetScreen, thumbnail::maximumSize(m_defaults));
     m_dragPreview = scaledPixmap;
@@ -440,7 +440,6 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     m_transcodeOverlay->hide();
     m_imageOrigin = m_imageLabel->pos();
     m_imageLabel->raise();
-    layout->addWidget(m_card, 0, horizontal);
 
     // Use the same action buttons and styling as the existing menu.
     m_actionRow = new QWidget(this);
@@ -456,8 +455,19 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     connect(m_quickSaveButton, &QPushButton::clicked, m_saveButton, &QPushButton::click);
     actions->addWidget(quickCopy);
     actions->addWidget(m_quickSaveButton);
-    layout->addWidget(m_actionRow, 0, horizontal);
     m_actionRow->hide();
+
+    // Keep the image nearest the anchored edge. Controls grow inward, so the
+    // quick row and menus cannot displace it when they appear or disappear.
+    if (alignment.testFlag(Qt::AlignTop)) {
+        layout->addWidget(m_card, 0, horizontal);
+        layout->addWidget(m_actionRow, 0, horizontal);
+        layout->addWidget(m_menuShell, 0, horizontal);
+    } else {
+        layout->addWidget(m_menuShell, 0, horizontal);
+        layout->addWidget(m_actionRow, 0, horizontal);
+        layout->addWidget(m_card, 0, horizontal);
+    }
 
     adjustSize();
     winId();

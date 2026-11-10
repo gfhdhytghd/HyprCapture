@@ -400,6 +400,25 @@ int main() {
             invalid["defaults"][key] = std::string(4097, 'x');
             require(!decodeSessionJson(invalid.dump()), "thumbnail string length rejected");
         }
+        for (auto member : {&CaptureDefaults::thumbnailBorderColor, &CaptureDefaults::thumbnailBackground, &CaptureDefaults::thumbnailForeground,
+                            &CaptureDefaults::thumbnailAccent}) {
+            auto oversized = styled;
+            oversized.defaults.*member = std::string(140000, 'x');
+            const auto arguments = thumbnailStyleArguments(oversized.defaults);
+            for (const auto &argument : arguments)
+                require(argument.size() <= 64, "oversized thumbnail color never reaches helper argv");
+            const auto sanitized = decodeSessionJson(encodeSessionJson(oversized));
+            require(sanitized.has_value() && (sanitized->defaults.*member).empty(), "oversized thumbnail color cleared before JSON");
+            oversized.defaults.*member = "not-a-color";
+            require((normalizedThumbnailDefaults(oversized.defaults).*member).empty(), "invalid short thumbnail color cleared");
+        }
+        for (const char *key : {"thumbnailBorderColor", "thumbnailBackground", "thumbnailForeground", "thumbnailAccent"}) {
+            for (const auto length : {65, 140000}) {
+                auto oversized = valid;
+                oversized["defaults"][key] = std::string(length, 'x');
+                require(!decodeSessionJson(oversized.dump()), "protocol rejects oversized thumbnail colors");
+            }
+        }
         auto invalid = valid;
         invalid["defaults"]["thumbnailPosition"] = "center";
         require(!decodeSessionJson(invalid.dump()), "unknown thumbnail corner rejected");

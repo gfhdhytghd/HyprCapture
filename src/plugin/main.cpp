@@ -32,6 +32,7 @@ extern "C" {
 #include "plugin/session_launcher.hpp"
 #include "plugin/session_lock.hpp"
 #include "plugin/timing.hpp"
+#include "shared/thumbnail_config.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 
@@ -321,7 +322,7 @@ hyprcapture::CaptureDefaults readDefaults() {
         hyprcapture::parseWatermarkPosition(configString("watermark_position", hyprcapture::toString(defaults.watermarkPosition)), defaults.watermarkPosition);
     defaults.watermarkWidth = configString("watermark_width", defaults.watermarkWidth);
     defaults.watermarkOffset = configString("watermark_offset", defaults.watermarkOffset);
-    return defaults;
+    return hyprcapture::normalizedThumbnailDefaults(std::move(defaults));
 }
 
 void installOverlayLayerRule() {

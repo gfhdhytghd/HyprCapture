@@ -6,6 +6,34 @@
 #include <utility>
 
 namespace hyprcapture {
+inline constexpr std::size_t kThumbnailColorMaxBytes = 64;
+
+// Validate before argv/JSON construction without allocating an unbounded string.
+// Keep supported spellings intact; all accepted results are at most 14 bytes.
+inline std::string normalizedThumbnailColor(std::string_view value) {
+    if (value.size() > kThumbnailColorMaxBytes)
+        return {};
+    const auto first = value.find_first_not_of(" \t\r\n\f\v");
+    if (first == std::string_view::npos)
+        return {};
+    value = value.substr(first, value.find_last_not_of(" \t\r\n\f\v") - first + 1);
+    const auto lower = [](char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; };
+    std::string_view digits;
+    if ((value.size() == 7 || value.size() == 9) && value.front() == '#')
+        digits = value.substr(1);
+    else if (value.size() == 14 && lower(value[0]) == 'r' && lower(value[1]) == 'g' && lower(value[2]) == 'b' && lower(value[3]) == 'a' && value[4] == '(' &&
+             value.back() == ')')
+        digits = value.substr(5, 8);
+    else if (value.size() == 10 && value[0] == '0' && lower(value[1]) == 'x')
+        digits = value.substr(2);
+    else
+        return {};
+    for (const char c : digits)
+        if (!((c >= '0' && c <= '9') || (lower(c) >= 'a' && lower(c) <= 'f')))
+            return {};
+    return std::string(value);
+}
+
 inline bool validThumbnailPosition(std::string_view position) {
     return position == "top_left" || position == "top_right" || position == "bottom_left" || position == "bottom_right";
 }
@@ -20,6 +48,10 @@ inline CaptureDefaults normalizedThumbnailDefaults(CaptureDefaults defaults) {
     defaults.thumbnailBorderSize = std::clamp<std::int64_t>(defaults.thumbnailBorderSize, 0, 16);
     if (!validThumbnailPosition(defaults.thumbnailPosition))
         defaults.thumbnailPosition = "bottom_right";
+    defaults.thumbnailBorderColor = normalizedThumbnailColor(defaults.thumbnailBorderColor);
+    defaults.thumbnailBackground = normalizedThumbnailColor(defaults.thumbnailBackground);
+    defaults.thumbnailForeground = normalizedThumbnailColor(defaults.thumbnailForeground);
+    defaults.thumbnailAccent = normalizedThumbnailColor(defaults.thumbnailAccent);
     return defaults;
 }
 

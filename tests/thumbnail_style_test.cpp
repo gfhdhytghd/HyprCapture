@@ -158,5 +158,22 @@ int main(int argc, char **argv) {
                 parsed.thumbnailOpacity == 100 && parsed.thumbnailRounding == 0 && parsed.thumbnailMargin == 512 && parsed.thumbnailBorderSize == 16 &&
                 parsed.thumbnailAnimation,
             "UI clamps or defaults invalid helper input");
+    for (const char *key : {"thumbnail-border-color", "thumbnail-background", "thumbnail-foreground", "thumbnail-accent"}) {
+        require(parser.parse({"thumbnail-test", "--" + QString::fromLatin1(key), QString(140000, 'x')}), "oversized helper color parses");
+        readStyleOptions(parser, parsed);
+        require(parsed.thumbnailBorderColor.empty() && parsed.thumbnailBackground.empty() && parsed.thumbnailForeground.empty() &&
+                    parsed.thumbnailAccent.empty(),
+                "UI independently clears oversized helper colors");
+    }
+    const auto paddedColor = std::string(57, ' ') + "#123456";
+    require(normalizedThumbnailColor(paddedColor) == "#123456", "64-byte color input normalizes before transport");
+    require(normalizedThumbnailColor(" " + paddedColor).empty(), "65-byte color input rejected before trimming");
+    for (const auto text : {"#123456", "#12345678", "rgba(12345678)", "0x78123456", " RGBA(12345678) "}) {
+        const auto normalized = normalizedThumbnailColor(text);
+        require(!normalized.empty() && normalized.size() <= 14 && parseColor(QString::fromStdString(normalized)) == parseColor(text),
+                "shared validation preserves supported color values");
+    }
+    for (const auto text : {"red", "#fff", "#12345g", "rgba(1234567g)", "0x123456", "#123456789", "#１２３４５６"})
+        require(normalizedThumbnailColor(text).empty(), "shared validation clears malformed colors");
     return 0;
 }

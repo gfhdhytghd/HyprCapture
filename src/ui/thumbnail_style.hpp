@@ -44,10 +44,17 @@ inline void readStyleOptions(const QCommandLineParser &parser, CaptureDefaults &
     defaults.thumbnailOpacity = integer("thumbnail-opacity", 100);
     defaults.thumbnailBorderSize = integer("thumbnail-border-size", 1);
     defaults.thumbnailPosition = parser.value("thumbnail-position").size() <= 4096 ? parser.value("thumbnail-position").toStdString() : "";
-    defaults.thumbnailBorderColor = parser.value("thumbnail-border-color").size() <= 4096 ? parser.value("thumbnail-border-color").toStdString() : "";
-    defaults.thumbnailBackground = parser.value("thumbnail-background").size() <= 4096 ? parser.value("thumbnail-background").toStdString() : "";
-    defaults.thumbnailForeground = parser.value("thumbnail-foreground").size() <= 4096 ? parser.value("thumbnail-foreground").toStdString() : "";
-    defaults.thumbnailAccent = parser.value("thumbnail-accent").size() <= 4096 ? parser.value("thumbnail-accent").toStdString() : "";
+    defaults.thumbnailBorderColor = parser.value("thumbnail-border-color").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes)
+                                        ? parser.value("thumbnail-border-color").toStdString()
+                                        : "";
+    defaults.thumbnailBackground = parser.value("thumbnail-background").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes)
+                                       ? parser.value("thumbnail-background").toStdString()
+                                       : "";
+    defaults.thumbnailForeground = parser.value("thumbnail-foreground").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes)
+                                       ? parser.value("thumbnail-foreground").toStdString()
+                                       : "";
+    defaults.thumbnailAccent =
+        parser.value("thumbnail-accent").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes) ? parser.value("thumbnail-accent").toStdString() : "";
     defaults.thumbnailAnimation = parser.value("thumbnail-animation") != "0";
     defaults = normalizedThumbnailDefaults(std::move(defaults));
 }
@@ -55,6 +62,8 @@ inline void readStyleOptions(const QCommandLineParser &parser, CaptureDefaults &
 // QColor's eight-digit # syntax is ARGB, whereas these options use RGBA.
 // Accept only these four formats; never pass config strings to a stylesheet.
 inline QColor parseColor(const QString &input) {
+    if (input.size() > static_cast<qsizetype>(kThumbnailColorMaxBytes))
+        return {};
     const auto value = input.trimmed();
     QString digits;
     bool argb = false;
@@ -85,7 +94,7 @@ inline QColor parseColor(const QString &input) {
 
 inline QColor colorOr(const std::string &input, const QColor &fallback) {
     // Bound before allocating a QString, including callers outside the CLI path.
-    if (input.size() > 4096)
+    if (input.size() > kThumbnailColorMaxBytes)
         return fallback;
     const auto color = parseColor(QString::fromStdString(input));
     return color.isValid() ? color : fallback;

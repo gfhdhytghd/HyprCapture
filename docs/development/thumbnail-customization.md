@@ -51,6 +51,13 @@ output path. Pin helpers display a separate desktop image, have no result
 thumbnail options, and are intentionally unaffected.
 
 Protocol encoders clamp numeric values; decoders reject out-of-bounds values and
-wrong types. Old sessions with absent fields retain defaults. UI argument parsing
+wrong types. Color inputs are limited to 64 bytes at the plugin, protocol and UI
+boundaries; supported spellings are validated and trimmed to at most 14 bytes
+before argv/JSON construction. Old sessions with absent fields retain defaults. UI argument parsing
 clamps numeric values again, defaults malformed values/corners, bounds strings,
 and converts supported colors to numeric CSS values without CSS interpolation.
+
+Controls grow inward from the selected anchor: the image stays at the configured
+margin when quick actions or menus appear and disappear. For left anchors the
+open-with submenu grows to the right of the main menu; right anchors retain the
+original submenu placement on the left.

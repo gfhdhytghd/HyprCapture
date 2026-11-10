@@ -702,7 +702,7 @@ remain subject to `window_background`; no margin is added around its content.
 
 Thumbnail color strings accept `#RRGGBB`, `#RRGGBBAA`, `rgba(RRGGBBAA)`, or
 `0xAARRGGBB` (quote them in config). Explicit alpha is preserved. Invalid colors
-fall back to the palette. These keys affect only result thumbnails, including
+and values longer than 64 bytes fall back to the palette before helper launch. These keys affect only result thumbnails, including
 final scrolling captures and recordings; capture/editor toolbars, pins and active
 scroll-capture controls keep their existing appearance. There is no thumbnail
 shadow. The [constant inventory](docs/development/thumbnail-customization.md)

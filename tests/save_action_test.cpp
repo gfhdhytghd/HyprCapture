@@ -61,6 +61,61 @@ int main(int argc, char** argv) {
         const QImage rendered = custom.grab().toImage();
         const auto center = preview->mapTo(&custom, preview->rect().center());
         assert(rendered.pixelColor(center).alpha() >= 126 && rendered.pixelColor(center).alpha() <= 128);
+
+        auto pending = std::make_shared<CaptureSave>();
+        pending->defaults = capture->defaults;
+        pending->image = image;
+        custom.setSaveCapture(pending);
+        custom.show();
+        app.processEvents();
+        const auto anchoredImage = [&] {
+            const QRect rect(preview->mapTo(&custom, QPoint{}), preview->size());
+            assert((left ? rect.left() : custom.width() - rect.right() - 1) == style.thumbnailMargin);
+            assert((top ? rect.top() : custom.height() - rect.bottom() - 1) == style.thumbnailMargin);
+            // Simulate the layer-shell anchor on a fixed screen. The offscreen
+            // platform cannot position a layer surface, but lays out all widgets.
+            return rect.translated(left ? 0 : 1920 - custom.width(), top ? 0 : 1080 - custom.height());
+        };
+        const auto unsavedImage = anchoredImage();
+        pending->savedPath = dir.filePath("layout-saved.png");
+        custom.refreshSaveActions();
+        app.processEvents();
+        assert(anchoredImage() == unsavedImage);
+        // Also cover the quick row appearing again, not only disappearing.
+        pending->savedPath.clear();
+        custom.refreshSaveActions();
+        app.processEvents();
+        assert(anchoredImage() == unsavedImage);
+        pending->savedPath = dir.filePath("layout-saved.png");
+        custom.refreshSaveActions();
+        QContextMenuEvent context(QContextMenuEvent::Mouse, QPoint(20, 20), QPoint(20, 20));
+        QApplication::sendEvent(&custom, &context);
+        app.processEvents();
+        auto *shell = custom.findChild<QWidget *>("thumbnailMenuShell");
+        assert(shell);
+        auto *mainMenu = shell->findChild<QWidget *>("thumbnailMenu");
+        auto *submenu = shell->findChild<QWidget *>("thumbnailOpenWithMenu");
+        assert(shell && mainMenu && submenu && shell->isVisible());
+        const auto menuEdge = [&] {
+            const int x = mainMenu->mapTo(&custom, QPoint{}).x();
+            return left ? x : custom.width() - x - mainMenu->width();
+        };
+        const auto mainEdge = menuEdge();
+        const auto menuImage = anchoredImage();
+        QPushButton *openWith = nullptr;
+        for (auto *button : mainMenu->findChildren<QPushButton *>())
+            if (button->text() == "Open with")
+                openWith = button;
+        assert(openWith && openWith->isEnabled());
+        openWith->click();
+        app.processEvents();
+        assert(submenu->isVisible() && menuEdge() == mainEdge);
+        assert(left ? mainMenu->geometry().right() + 6 < submenu->x() : submenu->geometry().right() + 6 < mainMenu->x());
+        assert(anchoredImage() == menuImage);
+        openWith->click();
+        app.processEvents();
+        assert(!submenu->isVisible() && menuEdge() == mainEdge);
+        assert(anchoredImage() == menuImage);
     }
 
     thumbnail.setSaveCapture(capture);
