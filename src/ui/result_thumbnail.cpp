@@ -448,7 +448,9 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     QPixmap scaledPixmap = thumbnail::scaledPixmap(pixmap, targetScreen, thumbnail::maximumSize(m_defaults));
     scaledPixmap = thumbnail::roundedPixmap(scaledPixmap, static_cast<qreal>(m_defaults.thumbnailRounding));
     m_dragPreview = scaledPixmap;
-    const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize();
+    // The border grows outward from the rounded image at a constant distance, so the label is the image plus the border on every side.
+    const int borderWidth = static_cast<int>(m_defaults.thumbnailBorderSize);
+    const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize() + QSize(2 * borderWidth, 2 * borderWidth);
     m_card = new QWidget(this);
     m_card->setObjectName("thumbnailImageCard");
     m_card->setFixedSize((scaledLogicalSize + QSize(m_defaults.thumbnailMargin, m_defaults.thumbnailMargin)).expandedTo(QSize(1, 1)));
@@ -461,14 +463,15 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     m_imageLabel->setObjectName("thumbnailImage");
     m_imageLabel->setAttribute(Qt::WA_StyledBackground);
     m_imageLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_imageLabel->setContentsMargins(borderWidth, borderWidth, borderWidth, borderWidth);
     m_imageLabel->setPixmap(scaledPixmap);
     m_imageLabel->setGeometry(thumbnail::cardImageRect(scaledLogicalSize, m_defaults));
     if (m_defaults.thumbnailBorderSize > 0) {
-        auto* border = new ImageBorderOverlay(static_cast<int>(m_defaults.thumbnailBorderSize), static_cast<qreal>(m_defaults.thumbnailRounding), thumbnail::imageBorderColor(QApplication::palette(), m_defaults), m_imageLabel);
+        auto* border = new ImageBorderOverlay(static_cast<int>(m_defaults.thumbnailBorderSize), static_cast<qreal>(m_defaults.thumbnailRounding + m_defaults.thumbnailBorderSize), thumbnail::imageBorderColor(QApplication::palette(), m_defaults), m_imageLabel);
         border->setGeometry(m_imageLabel->rect());
     }
     m_transcodeOverlay = new TranscodeProgressOverlay(m_imageLabel);
-    m_transcodeOverlay->setGeometry(m_imageLabel->rect());
+    m_transcodeOverlay->setGeometry(m_imageLabel->rect().adjusted(borderWidth, borderWidth, -borderWidth, -borderWidth));
     m_transcodeOverlay->hide();
     m_imageOrigin = m_imageLabel->pos();
     m_imageLabel->raise();
@@ -565,8 +568,7 @@ ResultThumbnail::~ResultThumbnail() = default;
 
 void ResultThumbnail::setHdrImage(const QImage& image) {
     // The independent native HDR surface cannot participate in Qt opacity effects.
-    // Native HDR surfaces cannot be clipped to rounded corners, so rounding uses the SDR preview.
-    if (image.isNull() || m_defaults.thumbnailOpacity != 100 || m_defaults.thumbnailRounding > 0)
+    if (image.isNull() || m_defaults.thumbnailOpacity != 100)
         return;
     m_hdrBackdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), true);
     m_hdrBackdrop->setClipRect(QRect(m_card->mapTo(this, QPoint{}), m_card->size()));
@@ -574,8 +576,8 @@ void ResultThumbnail::setHdrImage(const QImage& image) {
         if (ready) m_imageLabel->clear();
         updateHdrGeometry();
     });
-    const int hdrInset = static_cast<int>(m_defaults.thumbnailBorderSize); // native HDR surface sits above Qt, so leave room for the border
-    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()).adjusted(hdrInset, hdrInset, -hdrInset, -hdrInset), 203)) {
+    const int hdrInset = static_cast<int>(m_defaults.thumbnailBorderSize); // the native HDR surface sits above Qt, so it covers only the image inside the border
+    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()).adjusted(hdrInset, hdrInset, -hdrInset, -hdrInset), 203, static_cast<qreal>(m_defaults.thumbnailRounding))) {
         m_hdrBackdrop.reset(); return;
     }
     if (m_hdrBackdrop->ready()) m_imageLabel->clear();

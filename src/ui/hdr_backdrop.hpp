@@ -35,8 +35,9 @@ public:
                         const QRect &);
   ~HdrBackdrop();
   // True accepts the request; FP16 and PQ complete asynchronously.
+  // Corner radius is in destination logical pixels; rounded PQ requires ARGB2101010.
   bool setImage(const QImage &image, const QRect &destination,
-                float referenceNits);
+                float referenceNits, qreal cornerRadius = 0);
   bool setPqImage(const QImage &image, const QRect &destination, float peakNits,
                   float referenceNits, std::optional<QRegion> damage = std::nullopt);
   void setGeometry(const QRect &destination);
@@ -58,6 +59,8 @@ private:
   struct Impl;
   std::unique_ptr<Impl> m;
 };
+// Radius and destination size are in logical pixels; output retains source resolution.
+QImage hdrRoundedPq10(const QImage &pq, const QSize &destination, qreal radius);
 QImage hdrToPq10(const QImage &image, float *peakNits = nullptr,
                  float referenceNits = 203, const QPoint &origin = {});
 } // namespace hyprcapture::ui

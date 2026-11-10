@@ -114,6 +114,46 @@ int main(int argc, char **argv) {
       std::numeric_limits<float>::infinity(), std::numeric_limits<float>::quiet_NaN());
   assert(invalid.encodingMaximum == 80 && invalid.reference == 203 && invalid.masteringMaximum == 203);
   assert(ui::hdrPresentationLuminances(false, 630.01F, 173).masteringMaximum == 631);
+  // Rounded PQ keeps source resolution while measuring the radius in logical px.
+  QImage solid(64, 48, QImage::Format_RGB30);
+  solid.fill(0xc0000000U | (900U << 20) | (600U << 10) | 300U);
+  const auto square = ui::hdrRoundedPq10(solid, QSize(32, 24), 0);
+  assert(square.format() == QImage::Format_RGB30 && square == solid);
+  const auto rounded = ui::hdrRoundedPq10(solid, QSize(32, 24), 8);
+  assert(rounded.format() == QImage::Format_A2RGB30_Premultiplied);
+  const auto pixelAt = [](const QImage &im, int x, int y) {
+    return reinterpret_cast<const uint32_t *>(im.constScanLine(y))[x];
+  };
+  assert(pixelAt(rounded, 0, 0) == 0);
+  assert(pixelAt(rounded, 63, 0) == 0);
+  assert(pixelAt(rounded, 0, 47) == 0);
+  assert(pixelAt(rounded, 63, 47) == 0);
+  assert(pixelAt(rounded, 32, 24) == pixelAt(solid, 32, 24));
+  bool partial = false;
+  for (int y = 0; y < rounded.height(); ++y)
+    for (int x = 0; x < rounded.width(); ++x) {
+      const auto p = pixelAt(rounded, x, y);
+      const unsigned a = p >> 30;
+      partial |= a == 1 || a == 2;
+      assert(((p >> 20) & 1023) == 300 * a);
+      assert(((p >> 10) & 1023) == 200 * a);
+      assert((p & 1023) == 100 * a);
+      assert(p == pixelAt(rounded, 63 - x, 47 - y));
+    }
+  assert(partial);
+  // The label includes an OUTSIDE border b, but HDR covers the full inner
+  // image with radius R. Changing b must not change its mask or source size.
+  for (int border : {0, 4, 16}) {
+    const QRect label(10, 20, 32 + 2 * border, 24 + 2 * border);
+    const QRect inner = label.adjusted(border, border, -border, -border);
+    assert(inner.size() == QSize(32, 24));
+    const auto masked = ui::hdrRoundedPq10(solid, inner.size(), 8);
+    assert(masked.size() == solid.size() && masked == rounded);
+  }
+  assert(ui::hdrRoundedPq10(solid, QSize(32, 24), 12) != rounded);
+  // Doubling logical dimensions and radius leaves the mask unchanged.
+  assert(ui::hdrRoundedPq10(solid, QSize(64, 48), 16) == rounded);
+  assert(ui::hdrRoundedPq10(solid, QSize(), 8).isNull());
   auto image = fixture();
   float peak = 0;
   auto pq = ui::hdrToPq10(image, &peak);
