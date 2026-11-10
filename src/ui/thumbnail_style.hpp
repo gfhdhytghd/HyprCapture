@@ -40,9 +40,9 @@ inline void readStyleOptions(const QCommandLineParser &parser, CaptureDefaults &
     defaults.thumbnailMaxWidth = integer("thumbnail-max-width", 180);
     defaults.thumbnailMaxHeight = integer("thumbnail-max-height", 120);
     defaults.thumbnailMargin = integer("thumbnail-margin", 24);
-    defaults.thumbnailRounding = integer("thumbnail-rounding", 7);
+    defaults.thumbnailRounding = integer("thumbnail-rounding", 0);
     defaults.thumbnailOpacity = integer("thumbnail-opacity", 100);
-    defaults.thumbnailBorderSize = integer("thumbnail-border-size", 1);
+    defaults.thumbnailBorderSize = integer("thumbnail-border-size", 0);
     defaults.thumbnailPosition = parser.value("thumbnail-position").size() <= 4096 ? parser.value("thumbnail-position").toStdString() : "";
     defaults.thumbnailBorderColor = parser.value("thumbnail-border-color").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes)
                                         ? parser.value("thumbnail-border-color").toStdString()
@@ -127,18 +127,17 @@ inline QString resultStyleSheet(const QPalette &palette, const CaptureDefaults &
     const QColor bg = colorOr(defaults.thumbnailBackground, alpha(palette.color(QPalette::Window), 242));
     const QColor fg = colorOr(defaults.thumbnailForeground, alpha(palette.color(QPalette::WindowText), 255));
     const QColor highlight = colorOr(defaults.thumbnailAccent, alpha(palette.color(QPalette::Highlight), 75));
-    const QColor border = colorOr(defaults.thumbnailBorderColor, alpha(fg, 90));
     return imageStyleSheet() +
            QStringLiteral("#thumbnail { background: transparent; border: none; }"
-                          "#thumbnailMenu { background: rgba(%1,%2,%3,%10); border: %18px solid rgba(%15,%16,%17,%11); border-radius: %19px; }"
-                          "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,%10); border: %18px solid rgba(%15,%16,%17,%11); border-radius: %19px; }"
-                          "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,%12); background: transparent; padding: 7px 10px; border: none; border-radius: "
-                          "%20px; text-align: left; }"
-                          "#thumbnailOpenWithMenu QPushButton { color: rgba(%4,%5,%6,%12); background: transparent; padding: 7px 10px; border: none; "
-                          "border-radius: %20px; text-align: left; }"
-                          "#thumbnailMenu QPushButton:disabled { color: rgba(%4,%5,%6,%13); }"
-                          "#thumbnailMenu QPushButton:hover { background: rgba(%7,%8,%9,%14); }"
-                          "#thumbnailOpenWithMenu QPushButton:hover { background: rgba(%7,%8,%9,%14); }")
+                          "#thumbnailMenu { background: rgba(%1,%2,%3,%10); border: none; border-radius: %14px; }"
+                          "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,%10); border: none; border-radius: %14px; }"
+                          "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,%11); background: transparent; padding: 7px 10px; border: none; border-radius: "
+                          "%15px; text-align: left; }"
+                          "#thumbnailOpenWithMenu QPushButton { color: rgba(%4,%5,%6,%11); background: transparent; padding: 7px 10px; border: none; "
+                          "border-radius: %15px; text-align: left; }"
+                          "#thumbnailMenu QPushButton:disabled { color: rgba(%4,%5,%6,%12); }"
+                          "#thumbnailMenu QPushButton:hover { background: rgba(%7,%8,%9,%13); }"
+                          "#thumbnailOpenWithMenu QPushButton:hover { background: rgba(%7,%8,%9,%13); }")
                .arg(bg.red())
                .arg(bg.green())
                .arg(bg.blue())
@@ -149,16 +148,19 @@ inline QString resultStyleSheet(const QPalette &palette, const CaptureDefaults &
                .arg(highlight.green())
                .arg(highlight.blue())
                .arg(bg.alpha())
-               .arg(border.alpha())
                .arg(fg.alpha())
                .arg(qRound(fg.alpha() * 100.0 / 255))
                .arg(highlight.alpha())
-               .arg(border.red())
-               .arg(border.green())
-               .arg(border.blue())
-               .arg(defaults.thumbnailBorderSize)
                .arg(defaults.thumbnailRounding)
                .arg(std::max<std::int64_t>(0, defaults.thumbnailRounding - 2));
+}
+
+// Border drawn around the thumbnail image only; menus have no border.
+inline QColor imageBorderColor(const QPalette &palette, const CaptureDefaults &raw = {}) {
+    const auto defaults = normalizedThumbnailDefaults(raw);
+    QColor fallback = colorOr(defaults.thumbnailForeground, palette.color(QPalette::WindowText));
+    fallback.setAlpha(90);
+    return colorOr(defaults.thumbnailBorderColor, fallback);
 }
 
 inline qreal targetDevicePixelRatio(const QPixmap& pixmap, const QScreen* targetScreen) {

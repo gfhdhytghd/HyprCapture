@@ -119,6 +119,30 @@ class SwipeBackdrop final : public QWidget {
     double m_deleteProgress = 0.0;
 };
 
+class ImageBorderOverlay final : public QWidget {
+  public:
+    ImageBorderOverlay(int size, QColor color, QWidget* parent) : QWidget(parent), m_size(size), m_color(color) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        if (m_size <= 0)
+            return;
+        QPainter painter(this);
+        painter.setCompositionMode(QPainter::CompositionMode_Source);
+        const int b = std::min({m_size, width() / 2, height() / 2});
+        painter.fillRect(QRect(0, 0, width(), b), m_color);
+        painter.fillRect(QRect(0, height() - b, width(), b), m_color);
+        painter.fillRect(QRect(0, b, b, height() - 2 * b), m_color);
+        painter.fillRect(QRect(width() - b, b, b, height() - 2 * b), m_color);
+    }
+
+  private:
+    int m_size;
+    QColor m_color;
+};
+
 class TranscodeProgressOverlay final : public QWidget {
   public:
     explicit TranscodeProgressOverlay(QWidget* parent = nullptr) : QWidget(parent) {
@@ -435,6 +459,10 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     m_imageLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_imageLabel->setPixmap(scaledPixmap);
     m_imageLabel->setGeometry(thumbnail::cardImageRect(scaledLogicalSize, m_defaults));
+    if (m_defaults.thumbnailBorderSize > 0) {
+        auto* border = new ImageBorderOverlay(static_cast<int>(m_defaults.thumbnailBorderSize), thumbnail::imageBorderColor(QApplication::palette(), m_defaults), m_imageLabel);
+        border->setGeometry(m_imageLabel->rect());
+    }
     m_transcodeOverlay = new TranscodeProgressOverlay(m_imageLabel);
     m_transcodeOverlay->setGeometry(m_imageLabel->rect());
     m_transcodeOverlay->hide();
@@ -541,7 +569,8 @@ void ResultThumbnail::setHdrImage(const QImage& image) {
         if (ready) m_imageLabel->clear();
         updateHdrGeometry();
     });
-    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()), 203)) {
+    const int hdrInset = static_cast<int>(m_defaults.thumbnailBorderSize); // native HDR surface sits above Qt, so leave room for the border
+    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()).adjusted(hdrInset, hdrInset, -hdrInset, -hdrInset), 203)) {
         m_hdrBackdrop.reset(); return;
     }
     if (m_hdrBackdrop->ready()) m_imageLabel->clear();
@@ -552,7 +581,8 @@ void ResultThumbnail::setHdrImage(const QImage& image) {
 void ResultThumbnail::updateHdrGeometry() {
     if (m_hdrBackdrop) {
         m_hdrBackdrop->setClipRect(QRect(m_card->mapTo(this, QPoint{}), m_card->size()));
-        m_hdrBackdrop->setGeometry(QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()));
+        const int hdrInset = static_cast<int>(m_defaults.thumbnailBorderSize);
+        m_hdrBackdrop->setGeometry(QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()).adjusted(hdrInset, hdrInset, -hdrInset, -hdrInset));
         m_hdrBackdrop->setVisible(isVisible());
     }
 }

@@ -690,10 +690,10 @@ remain subject to `window_background`; no margin is added around its content.
 | `thumbnail_max_height` | int | `120` | Result image maximum height in logical px; clamped to 48..1024. |
 | `thumbnail_position` | string | `bottom_right` | `top_left`, `top_right`, `bottom_left`, or `bottom_right`; invalid values use `bottom_right`. |
 | `thumbnail_margin` | int | `24` | Logical px of card padding at the chosen screen edges; clamped to 0..512. |
-| `thumbnail_rounding` | int | `7` | Menu panel radius in logical px, clamped to 0..128; button radius is max(0, value - 2). Images stay square. |
+| `thumbnail_rounding` | int | `0` | Menu panel radius in logical px, clamped to 0..128; button radius is max(0, value - 2). Images stay square. |
 | `thumbnail_opacity` | int | `100` | Overall thumbnail opacity in percent, clamped to 0..100. Below 100 uses the SDR preview instead of the native HDR surface. |
-| `thumbnail_border_size` | int | `1` | Menu border width in logical px; clamped to 0..16. Images have no border. |
-| `thumbnail_border_color` | string | `""` | Menu border color; empty/invalid uses foreground RGB with alpha 90/255. |
+| `thumbnail_border_size` | int | `0` | Thumbnail image border width in logical px, drawn inside the image bounds; clamped to 0..16. Menus never draw a border. |
+| `thumbnail_border_color` | string | `""` | Thumbnail image border color; empty/invalid uses foreground RGB with alpha 90/255. |
 | `thumbnail_background` | string | `""` | Menu background color; empty/invalid uses Qt Window RGB with alpha 242/255. |
 | `thumbnail_foreground` | string | `""` | Menu text color; empty/invalid uses Qt WindowText RGB at full opacity. Disabled text multiplies alpha by 100/255. |
 | `thumbnail_accent` | string | `""` | Menu hover color; empty/invalid uses Qt Highlight RGB with alpha 75/255. |

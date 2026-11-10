@@ -13,9 +13,9 @@ the in-progress scroll-capture controls are separate UI and are not customized.
 | Placement | Bottom-right overlay, zero layer margins; card adds 24 logical pixels on right and bottom | Configurable corner and card edge margin; retain exact default layout |
 | Surface | Frameless, no focus/activation, overlay layer, no exclusive zone, transparent root/image | Retain shell/input behaviour |
 | Opacity | Fully opaque image; palette-derived menu alpha below | Configurable overall opacity, percent |
-| Image corners/border/shadow | Square image; no border; no shadow; native HDR child surface | No invented image radius, image border or shadow key |
-| Menu panels | Qt Window RGB at alpha 242; WindowText RGB border at alpha 90, width 1; radius 7 | Configurable colors, border width/color, menu radius |
-| Menu buttons | WindowText RGB at alpha 255; disabled alpha 100; hover Highlight RGB at alpha 75; radius 5; padding 7 vertical / 10 horizontal; left text | Configurable foreground/accent; button radius follows menu radius minus 2 (floor 0); retain padding/text alignment |
+| Image corners/border/shadow | Square image; no border; no shadow; native HDR child surface | `thumbnail_border_size` (default 0) and `thumbnail_border_color` draw a frame inside the image bounds; HDR surface is inset by the border width; no image radius or shadow key |
+| Menu panels | Qt Window RGB at alpha 242; no border; radius 0 | Configurable colors and menu radius (default 0); menus never draw a border |
+| Menu buttons | WindowText RGB at alpha 255; disabled alpha 100; hover Highlight RGB at alpha 75; radius 0; padding 7 vertical / 10 horizontal; left text | Configurable foreground/accent; button radius follows menu radius minus 2 (floor 0); retain padding/text alignment |
 | Layout | Main/menu-shell spacing 6; menu/action-row margins 6 each; menu/action-row spacing 2; right alignment; open-with panels bottom-aligned | Retain spacing; align to configured corner |
 | Drag | SDR preview icon capped at 180 x 120 physical pixels; centered hotspot; platform drag threshold | Preview cap follows maximum box; retain gesture policy |
 | Swipe | Positive x closes, positive y deletes; thresholds min(120 / 90, image dimension x 0.55); overshoot 80; wheel angle divisor 8 | Retain gesture policy regardless of corner |

@@ -210,9 +210,9 @@ void registerConfigValues() {
     addIntConfig("thumbnail_max_width", "Result thumbnail max width", 180);
     addIntConfig("thumbnail_max_height", "Result thumbnail max height", 120);
     addIntConfig("thumbnail_margin", "Result thumbnail margin", 24);
-    addIntConfig("thumbnail_rounding", "Result thumbnail rounding", 7);
+    addIntConfig("thumbnail_rounding", "Result thumbnail rounding", 0);
     addIntConfig("thumbnail_opacity", "Result thumbnail opacity", 100);
-    addIntConfig("thumbnail_border_size", "Result thumbnail border size", 1);
+    addIntConfig("thumbnail_border_size", "Result thumbnail image border size", 0);
     addStringConfig("thumbnail_position", "Result thumbnail position", "bottom_right");
     addStringConfig("thumbnail_border_color", "Result thumbnail border color", "");
     addStringConfig("thumbnail_background", "Result thumbnail background", "");

@@ -14,19 +14,19 @@ void require(bool condition, const char *message) {
     }
 }
 
-// Frozen pre-customization implementations: default output must remain exact.
+// Default menu style: no border, square corners (deliberately changed from the pre-customization look). Other legacy helpers stay frozen.
 QString legacyStyle(const QPalette &palette) {
     const QColor bg = palette.color(QPalette::Window);
     const QColor fg = palette.color(QPalette::WindowText);
     const QColor highlight = palette.color(QPalette::Highlight);
     return hyprcapture::ui::thumbnail::imageStyleSheet() +
            QStringLiteral("#thumbnail { background: transparent; border: none; }"
-                          "#thumbnailMenu { background: rgba(%1,%2,%3,242); border: 1px solid rgba(%4,%5,%6,90); border-radius: 7px; }"
-                          "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,242); border: 1px solid rgba(%4,%5,%6,90); border-radius: 7px; }"
+                          "#thumbnailMenu { background: rgba(%1,%2,%3,242); border: none; border-radius: 0px; }"
+                          "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,242); border: none; border-radius: 0px; }"
                           "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; border-radius: "
-                          "5px; text-align: left; }"
+                          "0px; text-align: left; }"
                           "#thumbnailOpenWithMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; "
-                          "border-radius: 5px; text-align: left; }"
+                          "border-radius: 0px; text-align: left; }"
                           "#thumbnailMenu QPushButton:disabled { color: rgba(%4,%5,%6,100); }"
                           "#thumbnailMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }"
                           "#thumbnailOpenWithMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }")
@@ -120,9 +120,10 @@ int main(int argc, char **argv) {
     custom.thumbnailRounding = 5;
     auto style = resultStyleSheet(app.palette(), custom);
     require(style.contains("background: rgba(16,32,48,64)") && style.contains("color: rgba(80,96,112,128)") &&
-                style.contains("background: rgba(144,160,176,192)") && style.contains("border: 4px solid rgba(32,48,64,16)") &&
+                style.contains("background: rgba(144,160,176,192)") && !style.contains("solid") &&
+                imageBorderColor(app.palette(), custom) == QColor(32, 48, 64, 16) &&
                 style.contains("border-radius: 5px") && style.contains("border-radius: 3px"),
-            "explicit colors/alpha/border/radius");
+            "explicit colors/alpha/radius; menu border fixed; image border color");
     for (const auto position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
         custom.thumbnailPosition = position;
         custom.thumbnailMargin = 31;
