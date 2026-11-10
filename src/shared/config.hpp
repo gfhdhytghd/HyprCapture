@@ -82,9 +82,9 @@ struct CaptureDefaults {
     std::int64_t thumbnailMaxWidth = 180;
     std::int64_t thumbnailMaxHeight = 120;
     std::int64_t thumbnailMargin = 24;
-    std::int64_t thumbnailRounding = 7;
+    std::int64_t thumbnailRounding = 0;
     std::int64_t thumbnailOpacity = 100;
-    std::int64_t thumbnailBorderSize = 1;
+    std::int64_t thumbnailBorderSize = 0;
     std::string thumbnailPosition = "bottom_right";
     std::string thumbnailBorderColor = "";
     std::string thumbnailBackground = "";
