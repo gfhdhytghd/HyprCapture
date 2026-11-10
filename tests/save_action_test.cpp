@@ -41,17 +41,18 @@ int main(int argc, char** argv) {
     assert(defaultImage && defaultCard && defaultImage->geometry() == QRect(0, 0, 179, 112));
     assert(defaultCard->size() == QSize(203, 136) && thumbnail.size() == defaultCard->size());
     assert(!thumbnail.graphicsEffect());
-    // Frozen HEAD~2 default geometry with save=false: 24px card padding,
-    // 6px spacing and a 41px action row below the image make a 71px gap.
+    // Original default geometry with save=false: the action row sits below
+    // the image after the 24px card padding and 6px spacing. The row height
+    // depends on the environment's font metrics, so derive it.
     thumbnail.setSaveCapture(capture);
     thumbnail.show();
     app.processEvents();
     const QRect defaultRect(defaultImage->mapTo(&thumbnail, QPoint{}), defaultImage->size());
     assert(defaultRect.top() == 0 && defaultRect.size() == QSize(179, 112));
-    assert(thumbnail.height() - defaultRect.bottom() - 1 == 71);
     auto *defaultQuick = thumbnail.findChild<QPushButton *>("thumbnailQuickSave")->parentWidget();
+    assert(defaultQuick->height() > 0);
     assert(defaultQuick->mapTo(&thumbnail, QPoint{}).y() == defaultRect.bottom() + 1 + 24 + 6);
-    assert(defaultQuick->height() == 41);
+    assert(thumbnail.height() - defaultRect.bottom() - 1 == 24 + 6 + defaultQuick->height());
 
     for (const char *position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
         CaptureDefaults style;
