@@ -923,10 +923,29 @@ QImage rotateMonitorArtifactToLogicalOrientation(const QImage& image, int transf
     return image.transformed(imageTransform, Qt::FastTransformation).convertToFormat(QImage::Format_RGBA8888);
 }
 
+bool monitorTransformSwapsAxes(int transform) {
+    return transform == 1 || transform == 3 || transform == 5 || transform == 7;
+}
+
+double aspectError(const QSize& size, const QSize& expected) {
+    if (size.isEmpty() || expected.isEmpty())
+        return std::numeric_limits<double>::infinity();
+    const double actualRatio = static_cast<double>(size.width()) / std::max(1, size.height());
+    const double expectedRatio = static_cast<double>(expected.width()) / std::max(1, expected.height());
+    return std::abs(std::log(actualRatio / expectedRatio));
+}
+
 QImage normalizeMonitorArtifactImage(const QImage& image, int transform, const QRect& logicalGeometry) {
-    Q_UNUSED(logicalGeometry)
     if (image.isNull() || transform == 0)
         return image;
+
+    // On 90/270 degree outputs the artifact may already be upright; only rotate
+    // when it is closer to the monitor's logical aspect ratio once rotated.
+    if (logicalGeometry.isValid() && monitorTransformSwapsAxes(transform)) {
+        const QSize rotatedSize(image.height(), image.width());
+        if (aspectError(image.size(), logicalGeometry.size()) <= aspectError(rotatedSize, logicalGeometry.size()))
+            return image;
+    }
 
     return rotateMonitorArtifactToLogicalOrientation(image, transform);
 }

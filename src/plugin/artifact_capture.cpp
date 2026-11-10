@@ -305,7 +305,6 @@ struct ShadowRenderGeometry {
 ShadowColorBytes shadowColorBytes(const PHLWINDOW& window);
 void             repairTransparentShadow(RgbaReadback& readback, const CBox& artifactBox, const CBox& visibleBox, const PHLWINDOW& window);
 void             expandReadbackToShadowBounds(RgbaReadback& readback, CBox& artifactBox, const CBox& visibleBox, const PHLWINDOW& window);
-RgbaReadback     normalizeMonitorReadbackToLogicalOrientation(RgbaReadback readback, int transform);
 
 struct ArtifactBudget {
     std::size_t remaining = MAX_SESSION_ARTIFACT_BYTES;
@@ -2281,6 +2280,13 @@ void renderRecordingCursor(const CBox& target, double scale, bool requirePointer
         .tex = cursor->texture, .box = CBox{box.x, box.y, box.width, box.height}}));
 }
 
+// The capture framebuffer is rendered upright, so size it by the logical
+// (post-transform) extent: m_pixelSize is the unrotated hardware mode.
+Vector2D monitorCaptureSize(const PHLMONITOR& monitor) {
+    const auto t = static_cast<int>(monitor->m_transform);
+    return (t == 1 || t == 3 || t == 5 || t == 7) ? Vector2D{monitor->m_pixelSize.y, monitor->m_pixelSize.x} : monitor->m_pixelSize;
+}
+
 RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
                                    const Time::steady_tp& frozenTime,
                                    int cropX,
@@ -2293,8 +2299,8 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     if (!monitor || !monitor->m_activeWorkspace || !g_pHyprRenderer || !g_pHyprOpenGL)
         return {};
 
-    const int width = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
-    const int height = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+    const int width = positiveRoundedIntFromDouble(monitorCaptureSize(monitor).x);
+    const int height = positiveRoundedIntFromDouble(monitorCaptureSize(monitor).y);
     std::size_t framebufferBytes = 0;
     if (!checkedRgbaByteSize(width, height, framebufferBytes))
         return {};
@@ -2374,8 +2380,8 @@ std::optional<ExportPipePayload> captureExportPipePayload(const std::string& res
         if (!monitor)
             continue;
 
-        const int width = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
-        const int height = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+        const int width = positiveRoundedIntFromDouble(monitorCaptureSize(monitor).x);
+        const int height = positiveRoundedIntFromDouble(monitorCaptureSize(monitor).y);
         auto readback = renderMonitorReadback(monitor, frozenTime, 0, 0, width, height, &artifactBudget);
         if (readback.pixels.empty()) {
             error = "monitor export readback failed";
@@ -2405,8 +2411,8 @@ std::optional<ExportPipePayload> captureExportPipePayload(const std::string& res
 }
 
 bool renderMonitorArtifact(const PHLMONITOR& monitor, const Time::steady_tp& frozenTime, const std::filesystem::path& path, int& width, int& height, ArtifactBudget& budget) {
-    width = positiveRoundedIntFromDouble(monitor ? monitor->m_pixelSize.x : 0.0);
-    height = positiveRoundedIntFromDouble(monitor ? monitor->m_pixelSize.y : 0.0);
+    width = positiveRoundedIntFromDouble(monitor ? monitorCaptureSize(monitor).x : 0.0);
+    height = positiveRoundedIntFromDouble(monitor ? monitorCaptureSize(monitor).y : 0.0);
     auto readback = renderMonitorReadback(monitor, frozenTime, 0, 0, width, height, &budget);
     return !readback.pixels.empty() && writeArtifact(path, readback);
 }
@@ -3163,25 +3169,6 @@ bool readbackHasSize(const RgbaReadback& frame, int width, int height) {
     return frame.width == width && frame.height == height && checkedRgbaByteSize(width, height, bytes) && frame.pixels.size() == bytes;
 }
 
-RgbaReadback normalizeMonitorReadbackToLogicalOrientation(RgbaReadback readback, int transform) {
-    RgbaFrame hdr;
-    if (!readback.linear.empty()) {
-        const auto* bytes = reinterpret_cast<const unsigned char*>(readback.linear.data());
-        hdr = normalizeRgbaFrameToLogicalOrientation(
-            {.pixels = std::vector<unsigned char>(bytes, bytes + readback.linear.size() * 2),
-             .width = readback.width, .height = readback.height, .bytesPerPixel = 8}, transform);
-    }
-    auto frame = normalizeRgbaFrameToLogicalOrientation(
-        {.pixels = std::move(readback.pixels), .width = readback.width, .height = readback.height}, transform);
-    RgbaReadback result{.pixels = std::move(frame.pixels), .referenceNits = readback.referenceNits,
-                       .width = frame.width, .height = frame.height};
-    if (!hdr.pixels.empty()) {
-        result.linear.resize(hdr.pixels.size() / 2);
-        std::memcpy(result.linear.data(), hdr.pixels.data(), hdr.pixels.size());
-    }
-    return result;
-}
-
 RgbaReadback solidBackgroundReadback(int width, int height, unsigned char r, unsigned char g, unsigned char b) {
     std::size_t bytes = 0;
     if (!checkedRgbaByteSize(width, height, bytes))
@@ -3794,15 +3781,8 @@ std::optional<RecordingFrame> captureDesktopRegionRecordingFrame(const Rect& tar
         const int cropHeight = positiveRoundedIntFromDouble(logicalPart.height * monitorScale);
         RgbaReadback readback;
         const int    transform = std::clamp(static_cast<int>(monitor->m_transform), 0, 7);
-        if (transform == 0) {
-            readback = renderMonitorReadback(monitor, now, cropX, cropY, cropWidth, cropHeight, nullptr, nullptr, false, includeCursor);
-        } else {
-            const int monitorPixelWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
-            const int monitorPixelHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
-            readback = renderMonitorReadback(monitor, now, 0, 0, monitorPixelWidth, monitorPixelHeight, nullptr, nullptr, false, includeCursor);
-            readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), transform);
-            readback = cropReadbackToBounds(readback, PixelBounds{.x = cropX, .y = cropY, .width = cropWidth, .height = cropHeight});
-        }
+        (void)transform;
+        readback = renderMonitorReadback(monitor, now, cropX, cropY, cropWidth, cropHeight, nullptr, nullptr, false, includeCursor);
         if (readback.pixels.empty())
             continue;
 
@@ -4166,14 +4146,8 @@ LaunchResult captureRegionArtifactFromRequestFile(const std::string& path) {
     const int height = positiveRoundedIntFromDouble(rect.height * scale);
     const int transform = std::clamp(static_cast<int>(target->m_transform), 0, 7);
     RgbaReadback readback;
-    if (transform == 0) {
-        readback = renderMonitorReadback(target, Time::steadyNow(), x, y, width, height);
-    } else {
-        readback = renderMonitorReadback(target, Time::steadyNow(), 0, 0,
-            positiveRoundedIntFromDouble(target->m_pixelSize.x), positiveRoundedIntFromDouble(target->m_pixelSize.y));
-        readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), transform);
-        readback = cropReadbackToBounds(readback, PixelBounds{.x = x, .y = y, .width = width, .height = height});
-    }
+    (void)transform;
+    readback = renderMonitorReadback(target, Time::steadyNow(), x, y, width, height);
     if (readback.pixels.empty() || readback.width != width || readback.height != height)
         return {.success = false, .error = "region capture render failed"};
     const auto artifact = path + ".rgba";
