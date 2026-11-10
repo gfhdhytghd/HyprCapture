@@ -1263,6 +1263,12 @@ class AnnotationCanvas final : public QWidget {
             if (m_selected >= 0) {
                 m_dragBefore = m_annotations[m_selected];
                 m_pointerOrigin = point;
+            } else {
+                // Select tool: dragging empty space moves the image.
+                m_panning = true;
+                m_pointerOrigin = event->position();
+                m_panBefore = m_pan;
+                setCursor(Qt::ClosedHandCursor);
             }
             update();
             event->accept();
@@ -1446,6 +1452,7 @@ class AnnotationCanvas final : public QWidget {
         m_zoom = std::clamp(m_zoom * std::pow(1.0015, event->angleDelta().y()), 0.2, 12.0);
         const QPointF mapped = imageTransform().map(anchor);
         m_pan += event->position() - mapped;
+        if (event->angleDelta().y() > 0) m_pan += overflowPush();
         update();
         if (viewChanged) viewChanged();
         event->accept();
@@ -1558,6 +1565,19 @@ class AnnotationCanvas final : public QWidget {
         transform.translate(offset.x(), offset.y());
         transform.scale(scale, scale);
         return transform;
+    }
+    // Pan offset that pulls an overflowing image back inside the canvas, per axis.
+    // An axis already larger than the canvas is left alone.
+    QPointF overflowPush() const {
+        const QRectF r = imageTransform().mapRect(QRectF(base.rect()));
+        const QRectF v = rect();
+        const auto axis = [](qreal lo, qreal size, qreal vLo, qreal vSize) -> qreal {
+            if (size > vSize) return 0;
+            if (lo < vLo) return vLo - lo;
+            if (lo + size > vLo + vSize) return vLo + vSize - (lo + size);
+            return 0;
+        };
+        return {axis(r.left(), r.width(), v.left(), v.width()), axis(r.top(), r.height(), v.top(), v.height())};
     }
     QPointF imagePoint(const QPointF& point) const {
         const QPointF mapped = imageTransform().inverted().map(point);
