@@ -215,9 +215,6 @@ void registerConfigValues() {
     addIntConfig("thumbnail_border_size", "Result thumbnail image border size", 0);
     addStringConfig("thumbnail_position", "Result thumbnail position", "bottom_right");
     addStringConfig("thumbnail_border_color", "Result thumbnail border color", "");
-    addStringConfig("thumbnail_background", "Result thumbnail background", "");
-    addStringConfig("thumbnail_foreground", "Result thumbnail foreground", "");
-    addStringConfig("thumbnail_accent", "Result thumbnail accent", "");
     addBoolConfig("thumbnail_animation", "Animate result thumbnail swipe reset and dismissal", true);
     addStringConfig("helper", "Optional helper executable override", "");
     addStringConfig("watermark", "Watermark path or built-in name", "");
@@ -313,9 +310,6 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.thumbnailBorderSize = configInt("thumbnail_border_size", defaults.thumbnailBorderSize);
     defaults.thumbnailPosition = configString("thumbnail_position", defaults.thumbnailPosition);
     defaults.thumbnailBorderColor = configString("thumbnail_border_color", defaults.thumbnailBorderColor);
-    defaults.thumbnailBackground = configString("thumbnail_background", defaults.thumbnailBackground);
-    defaults.thumbnailForeground = configString("thumbnail_foreground", defaults.thumbnailForeground);
-    defaults.thumbnailAccent = configString("thumbnail_accent", defaults.thumbnailAccent);
     defaults.thumbnailAnimation = configBool("thumbnail_animation", defaults.thumbnailAnimation);
     defaults.watermark = configString("watermark", defaults.watermark);
     defaults.watermarkPosition =

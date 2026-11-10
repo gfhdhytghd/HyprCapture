@@ -6,6 +6,8 @@
 #include <QCursor>
 #include <QGuiApplication>
 #include <QPalette>
+#include <QPainter>
+#include <QPainterPath>
 #include <QPixmap>
 #include <QScreen>
 #include <QString>
@@ -47,14 +49,6 @@ inline void readStyleOptions(const QCommandLineParser &parser, CaptureDefaults &
     defaults.thumbnailBorderColor = parser.value("thumbnail-border-color").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes)
                                         ? parser.value("thumbnail-border-color").toStdString()
                                         : "";
-    defaults.thumbnailBackground = parser.value("thumbnail-background").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes)
-                                       ? parser.value("thumbnail-background").toStdString()
-                                       : "";
-    defaults.thumbnailForeground = parser.value("thumbnail-foreground").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes)
-                                       ? parser.value("thumbnail-foreground").toStdString()
-                                       : "";
-    defaults.thumbnailAccent =
-        parser.value("thumbnail-accent").size() <= static_cast<qsizetype>(kThumbnailColorMaxBytes) ? parser.value("thumbnail-accent").toStdString() : "";
     defaults.thumbnailAnimation = parser.value("thumbnail-animation") != "0";
     defaults = normalizedThumbnailDefaults(std::move(defaults));
 }
@@ -118,49 +112,59 @@ inline QSize maximumSize(const CaptureDefaults &raw) {
     return QSize(defaults.thumbnailMaxWidth, defaults.thumbnailMaxHeight);
 }
 
-inline QString resultStyleSheet(const QPalette &palette, const CaptureDefaults &raw = {}) {
-    const auto defaults = normalizedThumbnailDefaults(raw);
+// Menus are fixed: palette colors, no border, square corners. Only the image is configurable.
+inline QString resultStyleSheet(const QPalette &palette) {
     const auto alpha = [](QColor color, int value) {
         color.setAlpha(value);
         return color;
     };
-    const QColor bg = colorOr(defaults.thumbnailBackground, alpha(palette.color(QPalette::Window), 242));
-    const QColor fg = colorOr(defaults.thumbnailForeground, alpha(palette.color(QPalette::WindowText), 255));
-    const QColor highlight = colorOr(defaults.thumbnailAccent, alpha(palette.color(QPalette::Highlight), 75));
+    const QColor bg = alpha(palette.color(QPalette::Window), 242);
+    const QColor fg = alpha(palette.color(QPalette::WindowText), 255);
+    const QColor highlight = alpha(palette.color(QPalette::Highlight), 75);
     return imageStyleSheet() +
            QStringLiteral("#thumbnail { background: transparent; border: none; }"
-                          "#thumbnailMenu { background: rgba(%1,%2,%3,%10); border: none; border-radius: %14px; }"
-                          "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,%10); border: none; border-radius: %14px; }"
-                          "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,%11); background: transparent; padding: 7px 10px; border: none; border-radius: "
-                          "%15px; text-align: left; }"
-                          "#thumbnailOpenWithMenu QPushButton { color: rgba(%4,%5,%6,%11); background: transparent; padding: 7px 10px; border: none; "
-                          "border-radius: %15px; text-align: left; }"
-                          "#thumbnailMenu QPushButton:disabled { color: rgba(%4,%5,%6,%12); }"
-                          "#thumbnailMenu QPushButton:hover { background: rgba(%7,%8,%9,%13); }"
-                          "#thumbnailOpenWithMenu QPushButton:hover { background: rgba(%7,%8,%9,%13); }")
-               .arg(bg.red())
-               .arg(bg.green())
-               .arg(bg.blue())
-               .arg(fg.red())
-               .arg(fg.green())
-               .arg(fg.blue())
-               .arg(highlight.red())
-               .arg(highlight.green())
-               .arg(highlight.blue())
-               .arg(bg.alpha())
-               .arg(fg.alpha())
-               .arg(qRound(fg.alpha() * 100.0 / 255))
-               .arg(highlight.alpha())
-               .arg(defaults.thumbnailRounding)
-               .arg(std::max<std::int64_t>(0, defaults.thumbnailRounding - 2));
+                          "#thumbnailMenu { background: rgba(%1,%2,%3,242); border: none; }"
+                          "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,242); border: none; }"
+                          "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; "
+                          "text-align: left; }"
+                          "#thumbnailOpenWithMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; "
+                          "text-align: left; }"
+                          "#thumbnailMenu QPushButton:disabled { color: rgba(%4,%5,%6,100); }"
+                          "#thumbnailMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }"
+                          "#thumbnailOpenWithMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }")
+        .arg(bg.red())
+        .arg(bg.green())
+        .arg(bg.blue())
+        .arg(fg.red())
+        .arg(fg.green())
+        .arg(fg.blue())
+        .arg(highlight.red())
+        .arg(highlight.green())
+        .arg(highlight.blue());
 }
 
-// Border drawn around the thumbnail image only; menus have no border.
+// Image border color; empty/invalid falls back to the palette text color at alpha 90.
 inline QColor imageBorderColor(const QPalette &palette, const CaptureDefaults &raw = {}) {
     const auto defaults = normalizedThumbnailDefaults(raw);
-    QColor fallback = colorOr(defaults.thumbnailForeground, palette.color(QPalette::WindowText));
+    QColor fallback = palette.color(QPalette::WindowText);
     fallback.setAlpha(90);
     return colorOr(defaults.thumbnailBorderColor, fallback);
+}
+
+// Clip the image to a rounded rectangle; radius is in logical pixels.
+inline QPixmap roundedPixmap(const QPixmap &pixmap, qreal radius) {
+    if (pixmap.isNull() || radius <= 0)
+        return pixmap;
+    QPixmap out(pixmap.size());
+    out.setDevicePixelRatio(pixmap.devicePixelRatio());
+    out.fill(Qt::transparent);
+    QPainter painter(&out);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    QPainterPath path;
+    path.addRoundedRect(QRectF(QPointF(0, 0), pixmap.deviceIndependentSize()), radius, radius);
+    painter.setClipPath(path);
+    painter.drawPixmap(0, 0, pixmap);
+    return out;
 }
 
 inline qreal targetDevicePixelRatio(const QPixmap& pixmap, const QScreen* targetScreen) {

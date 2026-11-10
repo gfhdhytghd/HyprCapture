@@ -49,9 +49,6 @@ inline CaptureDefaults normalizedThumbnailDefaults(CaptureDefaults defaults) {
     if (!validThumbnailPosition(defaults.thumbnailPosition))
         defaults.thumbnailPosition = "bottom_right";
     defaults.thumbnailBorderColor = normalizedThumbnailColor(defaults.thumbnailBorderColor);
-    defaults.thumbnailBackground = normalizedThumbnailColor(defaults.thumbnailBackground);
-    defaults.thumbnailForeground = normalizedThumbnailColor(defaults.thumbnailForeground);
-    defaults.thumbnailAccent = normalizedThumbnailColor(defaults.thumbnailAccent);
     return defaults;
 }
 
@@ -67,9 +64,6 @@ inline std::vector<std::string> thumbnailStyleArguments(const CaptureDefaults &r
         "--thumbnail-border-size",  std::to_string(defaults.thumbnailBorderSize),
         "--thumbnail-position",     defaults.thumbnailPosition,
         "--thumbnail-border-color", defaults.thumbnailBorderColor,
-        "--thumbnail-background",   defaults.thumbnailBackground,
-        "--thumbnail-foreground",   defaults.thumbnailForeground,
-        "--thumbnail-accent",       defaults.thumbnailAccent,
         "--thumbnail-animation",    defaults.thumbnailAnimation ? "1" : "0",
     };
 }
