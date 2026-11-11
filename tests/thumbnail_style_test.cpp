@@ -124,6 +124,15 @@ int main(int argc, char **argv) {
         require(rounded.pixelColor(0, 0).alpha() == 0 && rounded.pixelColor(20, 20).alpha() == 255 && roundedPixmap(square, 0).toImage() == square.toImage(),
                 "rounded image clips corners only");
     }
+    for (const QSize size : {QSize(160, 40), QSize(40, 160)}) {
+        for (const qreal dpr : {1.0, 2.0}) {
+            QPixmap source(size * dpr);
+            source.setDevicePixelRatio(dpr);
+            source.fill(Qt::red);
+            require(roundedPixmap(source, 128).toImage() == roundedPixmap(source, 20).toImage(),
+                    "oversized radius clamps to half the shortest logical side");
+        }
+    }
     for (const auto position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
         custom.thumbnailPosition = position;
         custom.thumbnailMargin = 31;

@@ -154,6 +154,8 @@ int main(int argc, char **argv) {
   // Doubling logical dimensions and radius leaves the mask unchanged.
   assert(ui::hdrRoundedPq10(solid, QSize(64, 48), 16) == rounded);
   assert(ui::hdrRoundedPq10(solid, QSize(), 8).isNull());
+  for (const QSize size : {QSize(160, 40), QSize(40, 160)})
+    assert(ui::hdrRoundedPq10(solid, size, 128) == ui::hdrRoundedPq10(solid, size, 20));
   auto image = fixture();
   float peak = 0;
   auto pq = ui::hdrToPq10(image, &peak);

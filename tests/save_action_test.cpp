@@ -3,6 +3,7 @@
 #include "ui/hdr_image.hpp"
 #include "ui/hdr_thumbnail.hpp"
 #include <QApplication>
+#include <QClipboard>
 #include <QTemporaryDir>
 #include <QDir>
 #include <QFileInfo>
@@ -16,6 +17,8 @@
 using namespace hyprcapture;
 using namespace hyprcapture::ui;
 int main(int argc, char** argv) {
+    // Keep clipboard checks on Qt's offscreen clipboard, away from the session.
+    qputenv("WAYLAND_DISPLAY", "/hyprcapture-save-action-no-display");
     QApplication app(argc, argv);
     QTemporaryDir dir;
     assert(dir.isValid());
@@ -71,6 +74,64 @@ int main(int argc, char** argv) {
         const auto preview = label->pixmap().toImage();
         assert(preview.pixelColor(0, 0).alpha() == 0);
         assert(preview.pixelColor(89, 56).alpha() == 255);
+
+        const auto checkCopy = [&](const QImage &expected) {
+            // Exercise both the menu action and its quick-action connection.
+            int copies = 0;
+            for (auto *button : bordered.findChildren<QPushButton *>()) {
+                if (button->text() != "Copy image")
+                    continue;
+                QApplication::clipboard()->clear();
+                button->click();
+                const auto copied = QApplication::clipboard()->image();
+                assert(!copied.isNull());
+                assert(copied.size() == expected.size());
+                for (const QPoint corner : {QPoint(0, 0), QPoint(expected.width() - 1, 0),
+                                            QPoint(0, expected.height() - 1), QPoint(expected.width() - 1, expected.height() - 1)})
+                    assert(copied.pixelColor(corner).alpha() == 255);
+                assert(copied.convertToFormat(QImage::Format_RGBA8888) == expected.convertToFormat(QImage::Format_RGBA8888));
+                ++copies;
+            }
+            assert(copies == 2);
+        };
+        checkCopy(image);
+        // Pending recording results replace the placeholder through this path.
+        QImage replacement(960, 600, QImage::Format_RGBA8888);
+        replacement.fill(Qt::cyan);
+        replacement.setPixelColor(959, 599, Qt::yellow);
+        bordered.setImagePixmap(QPixmap::fromImage(replacement));
+        assert(label->pixmap().toImage().pixelColor(0, 0).alpha() == 0);
+        checkCopy(replacement);
+        // Native HDR can clear the QLabel; copying must retain the raster source.
+        label->clear();
+        checkCopy(replacement);
+    }
+
+    // Large radii use circular caps on both wide and tall images. The border
+    // must follow the same cap as the SDR image and the HDR mask.
+    for (const QSize size : {QSize(160, 40), QSize(40, 160)}) {
+        QPixmap source(size);
+        source.fill(Qt::red);
+        CaptureDefaults style;
+        style.thumbnailMaxWidth = 320;
+        style.thumbnailMaxHeight = 320;
+        style.thumbnailBorderSize = 6;
+        style.thumbnailBorderColor = "#00ff00";
+        style.thumbnailRounding = 20;
+        ResultThumbnail capped(source, {}, {}, {}, 0, false, nullptr, nullptr, style);
+        style.thumbnailRounding = 128;
+        ResultThumbnail oversized(source, {}, {}, {}, 0, false, nullptr, nullptr, style);
+        const auto renderLabel = [](ResultThumbnail &result) {
+            auto *label = result.findChild<QLabel *>("thumbnailImage");
+            QPixmap rendered(label->size());
+            rendered.fill(Qt::transparent);
+            label->render(&rendered);
+            const auto image = rendered.toImage();
+            const auto edge = image.pixelColor(0, image.height() / 2);
+            assert(edge.green() == 255 && edge.red() == 0 && edge.blue() == 0 && edge.alpha() > 200);
+            return image;
+        };
+        assert(renderLabel(capped) == renderLabel(oversized));
     }
 
     for (const char *position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
