@@ -474,6 +474,17 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     cropX = std::lround((s->target.x - mon.x) * s->scale);
     cropTop = std::lround(s->monitor->m_transformedSize.y) -
               std::lround((s->target.y - mon.y) * s->scale) - height;
+    // Fractional scales round each edge independently; trim the crop to the
+    // framebuffer instead of failing the session on a one-pixel overshoot.
+    const int framebufferWidth = std::lround(s->monitor->m_transformedSize.x);
+    const int framebufferHeight = std::lround(s->monitor->m_transformedSize.y);
+    if (cropX < 0) { width += cropX; cropX = 0; }
+    if (cropTop < 0) { height += cropTop; cropTop = 0; }
+    width = std::min(width, framebufferWidth - cropX);
+    height = std::min(height, framebufferHeight - cropTop);
+    if (width < 1 || height < 1) {
+      restore(); s->failed = true; return;
+    }
     if (uint64_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4) > 128ULL * 1024 * 1024) {
       restore(); s->failed = true; return;
     }
