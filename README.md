@@ -701,8 +701,9 @@ Thumbnail color strings accept `#RRGGBB`, `#RRGGBBAA`, `rgba(RRGGBBAA)`, or
 `0xAARRGGBB` (quote them in config). Explicit alpha is preserved. Invalid colors
 and values longer than 64 bytes fall back to the palette before helper launch. These keys affect only result thumbnails, including
 final scrolling captures and recordings; capture/editor toolbars, pins and active
-scroll-capture controls keep their existing appearance. There is no thumbnail
-shadow. The [constant inventory](docs/development/thumbnail-customization.md)
+scroll-capture controls keep their existing appearance. Result-thumbnail menus
+are square and borderless; earlier versions drew a 1 px border with 7 px corners.
+There is no thumbnail shadow. The [constant inventory](docs/development/thumbnail-customization.md)
 records the original visual and placement constants. New settings apply to newly
 launched thumbnails after config reload.
 
