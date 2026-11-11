@@ -9,6 +9,11 @@
 #include <memory>
 class QWindow;
 namespace hyprcapture::ui {
+// Use the same parent clip as before unless a consumer supplies a smaller one.
+inline QRect hdrBackdropVisibleRect(const QRect &destination, const QRect &parent, const std::optional<QRect> &clip = std::nullopt) {
+  const auto visible = destination.intersected(parent);
+  return clip ? visible.intersected(*clip) : visible;
+}
 struct HdrPresentationLuminances {
   uint32_t encodingMaximum = 0, reference = 0, masteringMaximum = 0;
 };
@@ -30,11 +35,14 @@ public:
                         const QRect &);
   ~HdrBackdrop();
   // True accepts the request; FP16 and PQ complete asynchronously.
+  // Corner radius is in destination logical pixels; rounded PQ requires ARGB2101010.
   bool setImage(const QImage &image, const QRect &destination,
-                float referenceNits);
+                float referenceNits, qreal cornerRadius = 0);
   bool setPqImage(const QImage &image, const QRect &destination, float peakNits,
                   float referenceNits, std::optional<QRegion> damage = std::nullopt);
   void setGeometry(const QRect &destination);
+  // Parent-window logical coordinates; persists across asynchronous uploads.
+  void setClipRect(std::optional<QRect> clip);
   // Sibling ordering is applied with the next parent commit.
   void stackAbove(const HdrBackdrop& lower);
   void setVisible(bool visible);
@@ -51,6 +59,8 @@ private:
   struct Impl;
   std::unique_ptr<Impl> m;
 };
+// Radius and destination size are in logical pixels; output retains source resolution.
+QImage hdrRoundedPq10(const QImage &pq, const QSize &destination, qreal radius);
 QImage hdrToPq10(const QImage &image, float *peakNits = nullptr,
                  float referenceNits = 203, const QPoint &origin = {});
 } // namespace hyprcapture::ui

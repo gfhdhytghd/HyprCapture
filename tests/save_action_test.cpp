@@ -7,6 +7,8 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QPushButton>
+#include <QLabel>
+#include <QGraphicsOpacityEffect>
 #include <cassert>
 #include <QColorSpace>
 #include <QContextMenuEvent>
@@ -31,6 +33,128 @@ int main(int argc, char** argv) {
     capture->image = image;
     ResultThumbnail thumbnail(QPixmap::fromImage(image), {}, {}, {}, 0);
     ResultThumbnail second(QPixmap::fromImage(image), {}, {}, {}, 0);
+
+    // The original two KeepAspectRatio resamples yield 179x112 for 1280x800.
+    // Preserve this rounding and the original 24px padding.
+    auto *defaultImage = thumbnail.findChild<QLabel *>("thumbnailImage");
+    auto *defaultCard = thumbnail.findChild<QWidget *>("thumbnailImageCard");
+    assert(defaultImage && defaultCard && defaultImage->geometry() == QRect(0, 0, 179, 112));
+    assert(defaultCard->size() == QSize(203, 136) && thumbnail.size() == defaultCard->size());
+    assert(!thumbnail.graphicsEffect());
+    // Original default geometry with save=false: the action row sits below
+    // the image after the 24px card padding and 6px spacing. The row height
+    // depends on the environment's font metrics, so derive it.
+    thumbnail.setSaveCapture(capture);
+    thumbnail.show();
+    app.processEvents();
+    const QRect defaultRect(defaultImage->mapTo(&thumbnail, QPoint{}), defaultImage->size());
+    assert(defaultRect.top() == 0 && defaultRect.size() == QSize(179, 112));
+    auto *defaultQuick = thumbnail.findChild<QPushButton *>("thumbnailQuickSave")->parentWidget();
+    assert(defaultQuick->height() > 0);
+    assert(defaultQuick->mapTo(&thumbnail, QPoint{}).y() == defaultRect.bottom() + 1 + 24 + 6);
+    assert(thumbnail.height() - defaultRect.bottom() - 1 == 24 + 6 + defaultQuick->height());
+
+    // The border grows outside the image; neither its pixels nor radius shrink.
+    {
+        CaptureDefaults borderedStyle;
+        borderedStyle.thumbnailBorderSize = 6;
+        borderedStyle.thumbnailRounding = 12;
+        ResultThumbnail bordered(QPixmap::fromImage(image), {}, {}, {}, 0, false, nullptr, nullptr, borderedStyle);
+        auto *label = bordered.findChild<QLabel *>("thumbnailImage");
+        auto *card = bordered.findChild<QWidget *>("thumbnailImageCard");
+        assert(label && card);
+        assert(label->size() == defaultImage->size() + QSize(12, 12));
+        assert(label->contentsMargins() == QMargins(6, 6, 6, 6));
+        assert(label->contentsRect() == QRect(6, 6, 179, 112));
+        assert(label->pixmap().deviceIndependentSize() == QSizeF(179, 112));
+        assert(card->size() == defaultCard->size() + QSize(12, 12));
+        const auto preview = label->pixmap().toImage();
+        assert(preview.pixelColor(0, 0).alpha() == 0);
+        assert(preview.pixelColor(89, 56).alpha() == 255);
+    }
+
+    for (const char *position : {"top_left", "top_right", "bottom_left", "bottom_right"}) {
+        CaptureDefaults style;
+        style.thumbnailMaxWidth = 320;
+        style.thumbnailMaxHeight = 200;
+        style.thumbnailPosition = position;
+        style.thumbnailMargin = 11;
+        style.thumbnailOpacity = 50;
+        style.thumbnailAnimation = false;
+        ResultThumbnail custom(QPixmap::fromImage(image), {}, {}, {}, 0, false, nullptr, nullptr, style);
+        auto *preview = custom.findChild<QLabel *>("thumbnailImage");
+        auto *card = custom.findChild<QWidget *>("thumbnailImageCard");
+        const bool left = std::string_view(position).ends_with("left");
+        const bool top = std::string_view(position).starts_with("top");
+        assert(preview && card && preview->geometry() == QRect(left ? 11 : 0, top ? 11 : 0, 320, 200));
+        assert(card->size() == QSize(331, 211));
+        auto *opacity = qobject_cast<QGraphicsOpacityEffect *>(custom.graphicsEffect());
+        assert(opacity && opacity->opacity() == 0.5);
+        const QImage rendered = custom.grab().toImage();
+        const auto center = preview->mapTo(&custom, preview->rect().center());
+        assert(rendered.pixelColor(center).alpha() >= 126 && rendered.pixelColor(center).alpha() <= 128);
+
+        auto pending = std::make_shared<CaptureSave>();
+        pending->defaults = capture->defaults;
+        pending->image = image;
+        custom.setSaveCapture(pending);
+        custom.show();
+        app.processEvents();
+        const auto anchoredImage = [&] {
+            const QRect rect(preview->mapTo(&custom, QPoint{}), preview->size());
+            assert((left ? rect.left() : custom.width() - rect.right() - 1) == style.thumbnailMargin);
+            auto *quick = custom.findChild<QPushButton *>("thumbnailQuickSave")->parentWidget();
+            const int actionsBelow = quick->isVisible() ? quick->height() + 6 : 0;
+            assert((top ? rect.top() : custom.height() - rect.bottom() - 1) == style.thumbnailMargin + (top ? 0 : actionsBelow));
+            if (quick->isVisible())
+                assert(quick->mapTo(&custom, QPoint{}).y() > rect.bottom());
+            // Simulate the layer-shell anchor on a fixed screen. The offscreen
+            // platform cannot position a layer surface, but lays out all widgets.
+            return rect.translated(left ? 0 : 1920 - custom.width(), top ? 0 : 1080 - custom.height());
+        };
+        const auto unsavedImage = anchoredImage();
+        pending->savedPath = dir.filePath("layout-saved.png");
+        custom.refreshSaveActions();
+        app.processEvents();
+        const auto savedImage = anchoredImage();
+        assert(top ? savedImage == unsavedImage : savedImage.top() > unsavedImage.top());
+        // Also cover the quick row appearing again, not only disappearing.
+        pending->savedPath.clear();
+        custom.refreshSaveActions();
+        app.processEvents();
+        assert(anchoredImage() == unsavedImage);
+        pending->savedPath = dir.filePath("layout-saved.png");
+        custom.refreshSaveActions();
+        QContextMenuEvent context(QContextMenuEvent::Mouse, QPoint(20, 20), QPoint(20, 20));
+        QApplication::sendEvent(&custom, &context);
+        app.processEvents();
+        auto *shell = custom.findChild<QWidget *>("thumbnailMenuShell");
+        assert(shell);
+        auto *mainMenu = shell->findChild<QWidget *>("thumbnailMenu");
+        auto *submenu = shell->findChild<QWidget *>("thumbnailOpenWithMenu");
+        assert(shell && mainMenu && submenu && shell->isVisible());
+        const auto menuEdge = [&] {
+            const int x = mainMenu->mapTo(&custom, QPoint{}).x();
+            return left ? x : custom.width() - x - mainMenu->width();
+        };
+        const auto mainEdge = menuEdge();
+        const auto menuImage = anchoredImage();
+        QPushButton *openWith = nullptr;
+        for (auto *button : mainMenu->findChildren<QPushButton *>())
+            if (button->text() == "Open with")
+                openWith = button;
+        assert(openWith && openWith->isEnabled());
+        openWith->click();
+        app.processEvents();
+        assert(submenu->isVisible() && menuEdge() == mainEdge);
+        assert(left ? mainMenu->geometry().right() + 6 < submenu->x() : submenu->geometry().right() + 6 < mainMenu->x());
+        assert(anchoredImage() == menuImage);
+        openWith->click();
+        app.processEvents();
+        assert(!submenu->isVisible() && menuEdge() == mainEdge);
+        assert(anchoredImage() == menuImage);
+    }
+
     thumbnail.setSaveCapture(capture);
     second.setSaveCapture(capture);
     QObject::connect(&thumbnail, &ResultThumbnail::captureSaved, &second, &ResultThumbnail::refreshSaveActions);

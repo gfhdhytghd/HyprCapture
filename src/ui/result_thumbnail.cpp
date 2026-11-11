@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QFont>
 #include <QGuiApplication>
+#include <QGraphicsOpacityEffect>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
@@ -50,7 +51,7 @@
 
 namespace {
 
-using hyprcapture::ui::thumbnail::kThumbnailScreenMargin;
+namespace thumbnail = hyprcapture::ui::thumbnail;
 
 constexpr int kTranscodeProgressRingSize = 64;
 constexpr double kSwipeCloseThreshold = 120.0;
@@ -116,6 +117,33 @@ class SwipeBackdrop final : public QWidget {
 
   private:
     double m_deleteProgress = 0.0;
+};
+
+class ImageBorderOverlay final : public QWidget {
+  public:
+    ImageBorderOverlay(int size, qreal radius, QColor color, QWidget* parent) : QWidget(parent), m_size(size), m_radius(radius), m_color(color) {
+        setAttribute(Qt::WA_TransparentForMouseEvents);
+    }
+
+  protected:
+    void paintEvent(QPaintEvent*) override {
+        if (m_size <= 0)
+            return;
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const QRectF outer(rect());
+        const qreal b = std::min<qreal>(m_size, std::min(outer.width(), outer.height()) / 2.0);
+        QPainterPath ring;
+        ring.addRoundedRect(outer, m_radius, m_radius);
+        QPainterPath inner;
+        inner.addRoundedRect(outer.adjusted(b, b, -b, -b), std::max<qreal>(0, m_radius - b), std::max<qreal>(0, m_radius - b));
+        painter.fillPath(ring.subtracted(inner), m_color);
+    }
+
+  private:
+    int m_size;
+    qreal m_radius;
+    QColor m_color;
 };
 
 class TranscodeProgressOverlay final : public QWidget {
@@ -296,41 +324,25 @@ std::vector<OpenWithApp> openWithAppsForPath(const QString& path) {
 
 } // namespace
 
-ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
-                                 QString path,
-                                 QString restoreClipboardPath,
-                                 QString deleteRoot,
-                                 int timeoutMs,
-                                 bool copyFile,
-                                 QScreen* targetScreen,
-                                 QWidget* parent)
-    : QWidget(parent),
-      m_path(std::move(path)),
-      m_restoreClipboardPath(std::move(restoreClipboardPath)),
-      m_deleteRoot(std::move(deleteRoot)),
-      m_copyFile(copyFile),
-      m_targetScreen(targetScreen) {
+ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString restoreClipboardPath, QString deleteRoot, int timeoutMs, bool copyFile,
+                                 QScreen *targetScreen, QWidget *parent, const hyprcapture::CaptureDefaults &defaults)
+    : QWidget(parent), m_defaults(hyprcapture::normalizedThumbnailDefaults(defaults)), m_path(std::move(path)),
+      m_restoreClipboardPath(std::move(restoreClipboardPath)), m_deleteRoot(std::move(deleteRoot)), m_copyFile(copyFile), m_targetScreen(targetScreen) {
     setWindowFlags(Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint | Qt::WindowDoesNotAcceptFocus);
     setFocusPolicy(Qt::NoFocus);
     setObjectName("thumbnail");
     setAttribute(Qt::WA_TranslucentBackground);
     setAttribute(Qt::WA_ShowWithoutActivating);
     setAttribute(Qt::WA_StyledBackground);
+    if (m_defaults.thumbnailOpacity != 100) {
+        auto *opacity = new QGraphicsOpacityEffect(this);
+        opacity->setOpacity(m_defaults.thumbnailOpacity / 100.0);
+        setGraphicsEffect(opacity);
+    }
+    const auto alignment = thumbnail::positionAlignment(m_defaults);
+    const auto horizontal = alignment & Qt::AlignHorizontal_Mask;
 
-    const auto palette = QApplication::palette();
-    const QColor bg = palette.color(QPalette::Window);
-    const QColor fg = palette.color(QPalette::WindowText);
-    const QColor highlight = palette.color(QPalette::Highlight);
-    setStyleSheet(hyprcapture::ui::thumbnail::imageStyleSheet() + QStringLiteral(
-                      "#thumbnail { background: transparent; border: none; }"
-                      "#thumbnailMenu { background: rgba(%1,%2,%3,242); border: 1px solid rgba(%4,%5,%6,90); border-radius: 7px; }"
-                      "#thumbnailOpenWithMenu { background: rgba(%1,%2,%3,242); border: 1px solid rgba(%4,%5,%6,90); border-radius: 7px; }"
-                      "#thumbnailMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; border-radius: 5px; text-align: left; }"
-                      "#thumbnailOpenWithMenu QPushButton { color: rgba(%4,%5,%6,255); background: transparent; padding: 7px 10px; border: none; border-radius: 5px; text-align: left; }"
-                      "#thumbnailMenu QPushButton:disabled { color: rgba(%4,%5,%6,100); }"
-                      "#thumbnailMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }"
-                      "#thumbnailOpenWithMenu QPushButton:hover { background: rgba(%7,%8,%9,75); }")
-                      .arg(bg.red()).arg(bg.green()).arg(bg.blue()).arg(fg.red()).arg(fg.green()).arg(fg.blue()).arg(highlight.red()).arg(highlight.green()).arg(highlight.blue()));
+    setStyleSheet(hyprcapture::ui::thumbnail::resultStyleSheet(QApplication::palette()));
 
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
@@ -341,6 +353,9 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     auto* shellLayout = new QHBoxLayout(m_menuShell);
     shellLayout->setContentsMargins(0, 0, 0, 0);
     shellLayout->setSpacing(6);
+    shellLayout->setAlignment(horizontal);
+    if (alignment.testFlag(Qt::AlignLeft))
+        shellLayout->setDirection(QBoxLayout::RightToLeft);
 
     m_menuPanel = new QWidget(m_menuShell);
     m_menuPanel->setObjectName("thumbnailMenu");
@@ -429,31 +444,37 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     shellLayout->addWidget(m_menuPanel, 0, Qt::AlignBottom);
 
     m_menuShell->hide();
-    layout->addWidget(m_menuShell, 0, Qt::AlignRight);
 
-    QPixmap scaledPixmap = hyprcapture::ui::thumbnail::scaledPixmap(pixmap, targetScreen);
+    QPixmap scaledPixmap = thumbnail::scaledPixmap(pixmap, targetScreen, thumbnail::maximumSize(m_defaults));
+    scaledPixmap = thumbnail::roundedPixmap(scaledPixmap, static_cast<qreal>(m_defaults.thumbnailRounding));
     m_dragPreview = scaledPixmap;
-    const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize();
+    // The border grows outward from the rounded image at a constant distance, so the label is the image plus the border on every side.
+    const int borderWidth = static_cast<int>(m_defaults.thumbnailBorderSize);
+    const QSize scaledLogicalSize = scaledPixmap.deviceIndependentSize().toSize() + QSize(2 * borderWidth, 2 * borderWidth);
     m_card = new QWidget(this);
     m_card->setObjectName("thumbnailImageCard");
-    m_card->setFixedSize((scaledLogicalSize + QSize(kThumbnailScreenMargin, kThumbnailScreenMargin)).expandedTo(QSize(1, 1)));
+    m_card->setFixedSize((scaledLogicalSize + QSize(m_defaults.thumbnailMargin, m_defaults.thumbnailMargin)).expandedTo(QSize(1, 1)));
 
     m_swipeBackdrop = new SwipeBackdrop(m_card);
-    m_swipeBackdrop->setGeometry(QRect(QPoint(0, 0), scaledLogicalSize));
+    m_swipeBackdrop->setGeometry(thumbnail::cardImageRect(scaledLogicalSize, m_defaults));
     m_swipeBackdrop->lower();
 
     m_imageLabel = new QLabel(m_card);
     m_imageLabel->setObjectName("thumbnailImage");
     m_imageLabel->setAttribute(Qt::WA_StyledBackground);
     m_imageLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_imageLabel->setContentsMargins(borderWidth, borderWidth, borderWidth, borderWidth);
     m_imageLabel->setPixmap(scaledPixmap);
-    m_imageLabel->setGeometry(QRect(QPoint(0, 0), scaledLogicalSize));
+    m_imageLabel->setGeometry(thumbnail::cardImageRect(scaledLogicalSize, m_defaults));
+    if (m_defaults.thumbnailBorderSize > 0) {
+        auto* border = new ImageBorderOverlay(static_cast<int>(m_defaults.thumbnailBorderSize), static_cast<qreal>(m_defaults.thumbnailRounding + m_defaults.thumbnailBorderSize), thumbnail::imageBorderColor(QApplication::palette(), m_defaults), m_imageLabel);
+        border->setGeometry(m_imageLabel->rect());
+    }
     m_transcodeOverlay = new TranscodeProgressOverlay(m_imageLabel);
-    m_transcodeOverlay->setGeometry(m_imageLabel->rect());
+    m_transcodeOverlay->setGeometry(m_imageLabel->rect().adjusted(borderWidth, borderWidth, -borderWidth, -borderWidth));
     m_transcodeOverlay->hide();
     m_imageOrigin = m_imageLabel->pos();
     m_imageLabel->raise();
-    layout->addWidget(m_card, 0, Qt::AlignRight);
 
     // Use the same action buttons and styling as the existing menu.
     m_actionRow = new QWidget(this);
@@ -469,8 +490,19 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
     connect(m_quickSaveButton, &QPushButton::clicked, m_saveButton, &QPushButton::click);
     actions->addWidget(quickCopy);
     actions->addWidget(m_quickSaveButton);
-    layout->addWidget(m_actionRow, 0, Qt::AlignRight);
     m_actionRow->hide();
+
+    // Quick actions always follow the image. Preserve the original bottom
+    // layout; top anchors put the image first so actions grow inward.
+    if (alignment.testFlag(Qt::AlignTop)) {
+        layout->addWidget(m_card, 0, horizontal);
+        layout->addWidget(m_actionRow, 0, horizontal);
+        layout->addWidget(m_menuShell, 0, horizontal);
+    } else {
+        layout->addWidget(m_menuShell, 0, horizontal);
+        layout->addWidget(m_card, 0, horizontal);
+        layout->addWidget(m_actionRow, 0, horizontal);
+    }
 
     adjustSize();
     winId();
@@ -481,7 +513,9 @@ ResultThumbnail::ResultThumbnail(const QPixmap& pixmap,
             layerWindow->setScreen(targetScreen);
         layerWindow->setScope("hyprcapture-thumbnail");
         layerWindow->setLayer(LayerShellQt::Window::LayerOverlay);
-        layerWindow->setAnchors(LayerShellQt::Window::Anchors{LayerShellQt::Window::AnchorRight} | LayerShellQt::Window::AnchorBottom);
+        layerWindow->setAnchors(
+            LayerShellQt::Window::Anchors{alignment.testFlag(Qt::AlignLeft) ? LayerShellQt::Window::AnchorLeft : LayerShellQt::Window::AnchorRight} |
+            (alignment.testFlag(Qt::AlignTop) ? LayerShellQt::Window::AnchorTop : LayerShellQt::Window::AnchorBottom));
         layerWindow->setMargins(QMargins(0, 0, 0, 0));
         layerWindow->setExclusiveZone(0);
         layerWindow->setKeyboardInteractivity(LayerShellQt::Window::KeyboardInteractivityNone);
@@ -533,13 +567,17 @@ void ResultThumbnail::refreshSaveActions() {
 ResultThumbnail::~ResultThumbnail() = default;
 
 void ResultThumbnail::setHdrImage(const QImage& image) {
-    if (image.isNull()) return;
+    // The independent native HDR surface cannot participate in Qt opacity effects.
+    if (image.isNull() || m_defaults.thumbnailOpacity != 100)
+        return;
     m_hdrBackdrop = std::make_unique<hyprcapture::ui::HdrBackdrop>(windowHandle(), true);
+    m_hdrBackdrop->setClipRect(QRect(m_card->mapTo(this, QPoint{}), m_card->size()));
     m_hdrBackdrop->setReadyCallback([this](bool ready) {
         if (ready) m_imageLabel->clear();
         updateHdrGeometry();
     });
-    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()), 203)) {
+    const int hdrInset = static_cast<int>(m_defaults.thumbnailBorderSize); // the native HDR surface sits above Qt, so it covers only the image inside the border
+    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()).adjusted(hdrInset, hdrInset, -hdrInset, -hdrInset), 203, static_cast<qreal>(m_defaults.thumbnailRounding))) {
         m_hdrBackdrop.reset(); return;
     }
     if (m_hdrBackdrop->ready()) m_imageLabel->clear();
@@ -549,7 +587,9 @@ void ResultThumbnail::setHdrImage(const QImage& image) {
 }
 void ResultThumbnail::updateHdrGeometry() {
     if (m_hdrBackdrop) {
-        m_hdrBackdrop->setGeometry(QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()));
+        m_hdrBackdrop->setClipRect(QRect(m_card->mapTo(this, QPoint{}), m_card->size()));
+        const int hdrInset = static_cast<int>(m_defaults.thumbnailBorderSize);
+        m_hdrBackdrop->setGeometry(QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()).adjusted(hdrInset, hdrInset, -hdrInset, -hdrInset));
         m_hdrBackdrop->setVisible(isVisible());
     }
 }
@@ -743,7 +783,7 @@ void ResultThumbnail::resetSwipe() {
         return;
 
     auto* animation = new QPropertyAnimation(m_imageLabel, "pos", this);
-    animation->setDuration(160);
+    animation->setDuration(m_defaults.thumbnailAnimation ? 160 : 0);
     animation->setStartValue(m_imageLabel->pos());
     animation->setEndValue(m_imageOrigin);
     animation->setEasingCurve(QEasingCurve::OutCubic);
@@ -767,7 +807,7 @@ void ResultThumbnail::animateSwipeOut(SwipeAction action, bool finalizeAction) {
 
     const QPoint target = action == SwipeAction::Close ? QPoint(m_card->width() + 24, m_imageOrigin.y()) : QPoint(m_imageOrigin.x(), m_card->height() + 24);
     auto* animation = new QPropertyAnimation(m_imageLabel, "pos", this);
-    animation->setDuration(190);
+    animation->setDuration(m_defaults.thumbnailAnimation ? 190 : 0);
     animation->setStartValue(m_imageLabel->pos());
     animation->setEndValue(target);
     animation->setEasingCurve(QEasingCurve::InCubic);
@@ -831,7 +871,7 @@ void ResultThumbnail::startFileDrag() {
     // still needs its independent SDR preview. The URI keeps the chosen format.
     const auto currentPixmap = m_dragPreview;
     if (!currentPixmap.isNull()) {
-        drag->setPixmap(currentPixmap.scaled(180, 120, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        drag->setPixmap(currentPixmap.scaled(thumbnail::maximumSize(m_defaults), Qt::KeepAspectRatio, Qt::SmoothTransformation));
         drag->setHotSpot(QPoint(drag->pixmap().width() / 2, drag->pixmap().height() / 2));
     }
 
@@ -855,7 +895,8 @@ void ResultThumbnail::setImagePixmap(const QPixmap& pixmap) {
     if (!m_imageLabel || pixmap.isNull())
         return;
     m_hdrBackdrop.reset();
-    m_dragPreview = hyprcapture::ui::thumbnail::scaledPixmap(pixmap, m_targetScreen);
+    m_dragPreview = thumbnail::roundedPixmap(thumbnail::scaledPixmap(pixmap, m_targetScreen, thumbnail::maximumSize(m_defaults)),
+                                           static_cast<qreal>(m_defaults.thumbnailRounding));
     m_imageLabel->setPixmap(m_dragPreview);
 }
 

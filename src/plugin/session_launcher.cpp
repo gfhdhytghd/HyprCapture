@@ -1,4 +1,5 @@
 #include "plugin/session_launcher.hpp"
+#include "shared/thumbnail_config.hpp"
 
 #include "plugin/artifact_capture.hpp"
 #include "plugin/session_lock.hpp"
@@ -427,6 +428,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     args.push_back(std::to_string(request.defaults.thumbnailTimeoutMs));
     args.push_back("--thumbnail-monitor");
     args.push_back(captureDefaults.thumbnailMonitor);
+    const auto thumbnailArgs = hyprcapture::thumbnailStyleArguments(captureDefaults);
+    args.insert(args.end(), thumbnailArgs.begin(), thumbnailArgs.end());
     args.push_back("--watermark");
     args.push_back(request.defaults.watermark);
     args.push_back("--watermark-position");
@@ -537,6 +540,8 @@ LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const 
     args.push_back(std::to_string(defaults.thumbnailTimeoutMs));
     args.push_back("--thumbnail-monitor");
     args.push_back(resolvedThumbnailMonitor(defaults.thumbnailMonitor));
+    const auto thumbnailArgs = hyprcapture::thumbnailStyleArguments(defaults);
+    args.insert(args.end(), thumbnailArgs.begin(), thumbnailArgs.end());
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
@@ -626,6 +631,8 @@ LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
     args.push_back(std::to_string(defaults.thumbnailTimeoutMs));
     args.push_back("--thumbnail-monitor");
     args.push_back(resolvedThumbnailMonitor(defaults.thumbnailMonitor));
+    const auto thumbnailArgs = hyprcapture::thumbnailStyleArguments(defaults);
+    args.insert(args.end(), thumbnailArgs.begin(), thumbnailArgs.end());
 
     std::vector<char*> argv;
     argv.reserve(args.size() + 1);
