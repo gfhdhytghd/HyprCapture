@@ -422,33 +422,6 @@ void scrollTick(SP<CEventLoopTimer> timer) {
   auto &pbo = s->pbo;
   if (auto ready = takeReadyWindowStreamPboFrames(pbo, true)) {
     auto &f = ready->frame;
-    if (!s->window && s->transform != 0) {
-      const size_t planeBytes = size_t(f.metadata.pixelWidth) * f.metadata.pixelHeight * 4;
-      RgbaReadback raw{.pixels = std::vector<unsigned char>(f.rgba.begin(), f.rgba.begin() + planeBytes),
-                       .width = int(f.metadata.pixelWidth),
-                       .height = int(f.metadata.pixelHeight)};
-      if (f.metadata.format == WINDOW_STREAM_FORMAT_SCROLL_SDR_HDR) {
-        raw.linear.resize(planeBytes);
-        std::memcpy(raw.linear.data(), f.rgba.data() + planeBytes, planeBytes * 2);
-      }
-      raw = normalizeMonitorReadbackToLogicalOrientation(std::move(raw),
-                                                         s->transform);
-      const auto mon = monitorRect(s->monitor);
-      raw = cropReadbackToBounds(
-          raw, {.x = std::lround((s->target.x - mon.x) * s->scale),
-                .y = std::lround((s->target.y - mon.y) * s->scale),
-                .width = std::lround(s->target.width * s->scale),
-                .height = std::lround(s->target.height * s->scale)});
-      f.rgba = std::move(raw.pixels);
-      if (!raw.linear.empty()) {
-        const auto* data = reinterpret_cast<const unsigned char*>(raw.linear.data());
-        f.rgba.insert(f.rgba.end(), data, data + raw.linear.size() * 2);
-      }
-      f.metadata.pixelWidth = raw.width;
-      f.metadata.pixelHeight = raw.height;
-      f.metadata.stride = raw.width * 4;
-      f.metadata.payloadBytes = f.rgba.size();
-    }
     traceTiming(std::format("scroll.submit seq={} hdr={} bytes={}", f.metadata.sequence, s->hdr, f.metadata.payloadBytes));
     if (s->sender->submit(f.metadata, std::move(f.rgba)))
       s->baseline = true;
@@ -499,12 +472,18 @@ void scrollTick(SP<CEventLoopTimer> timer) {
     width = std::lround(s->target.width * s->scale);
     height = std::lround(s->target.height * s->scale);
     cropX = std::lround((s->target.x - mon.x) * s->scale);
-    cropTop = std::lround(s->monitor->m_pixelSize.y) -
+    cropTop = std::lround(s->monitor->m_transformedSize.y) -
               std::lround((s->target.y - mon.y) * s->scale) - height;
-    if (s->transform != 0) {
-      width = std::lround(s->monitor->m_pixelSize.x);
-      height = std::lround(s->monitor->m_pixelSize.y);
-      cropX = cropTop = 0;
+    // Fractional scales round each edge independently; trim the crop to the
+    // framebuffer instead of failing the session on a one-pixel overshoot.
+    const int framebufferWidth = std::lround(s->monitor->m_transformedSize.x);
+    const int framebufferHeight = std::lround(s->monitor->m_transformedSize.y);
+    if (cropX < 0) { width += cropX; cropX = 0; }
+    if (cropTop < 0) { height += cropTop; cropTop = 0; }
+    width = std::min(width, framebufferWidth - cropX);
+    height = std::min(height, framebufferHeight - cropTop);
+    if (width < 1 || height < 1) {
+      restore(); s->failed = true; return;
     }
     if (uint64_t(width) * height * (s->hdr && linearCaptureFor(s->monitor) ? 12 : 4) > 128ULL * 1024 * 1024) {
       restore(); s->failed = true; return;

@@ -920,7 +920,10 @@ QImage rotateMonitorArtifactToLogicalOrientation(const QImage& image, int transf
 
     QTransform imageTransform;
     imageTransform.rotate(inverseRotationDegreesForMonitorTransform(transform));
-    return image.transformed(imageTransform, Qt::FastTransformation).convertToFormat(QImage::Format_RGBA8888);
+    auto logical = image.transformed(imageTransform, Qt::FastTransformation);
+    if (transform >= 4 && transform <= 7)
+        logical = logical.flipped(Qt::Horizontal);
+    return logical.convertToFormat(QImage::Format_RGBA8888);
 }
 
 QImage normalizeMonitorArtifactImage(const QImage& image, int transform, const QRect& logicalGeometry) {

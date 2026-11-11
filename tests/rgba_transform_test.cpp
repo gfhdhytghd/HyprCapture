@@ -68,6 +68,48 @@ void unpremultiplyLutMatchesLegacyFormulaForEveryBytePair() {
     }
 }
 
+void logicalOffscreenReadbackPreservesPhysicalArtifacts() {
+    const std::vector<int> inverses{0, 3, 2, 1, 4, 5, 6, 7};
+    for (int pixelBytes : {4, 8}) {
+        hyprcapture::RgbaFrame physical{.width = 7, .height = 5, .bytesPerPixel = pixelBytes};
+        physical.pixels.resize(7 * 5 * pixelBytes);
+        for (std::size_t i = 0; i < physical.pixels.size(); ++i)
+            physical.pixels[i] = static_cast<unsigned char>(i);
+        for (int transform = 0; transform < 8; ++transform) {
+            const int inverse = hyprcapture::inverseRgbaTransform(transform);
+            require(inverse == inverses[transform], "inverse output transform");
+            // Model 0.57's correctly sized logical-axis FULL_FAKE framebuffer.
+            const auto logical = hyprcapture::normalizeRgbaFrameToLogicalOrientation(physical, transform);
+            for (const auto crop : {hyprcapture::RgbaCrop{0, 0, 7, 5}, {1, 1, 3, 2}, {-1, 3, 4, 3}}) {
+                const auto source = hyprcapture::logicalRgbaCropToFramebuffer(crop, logical.width, logical.height, inverse);
+                hyprcapture::RgbaFrame readback{.width = source.width, .height = source.height, .bytesPerPixel = pixelBytes};
+                readback.pixels.resize(source.width * source.height * pixelBytes);
+                for (int y = 0; y < source.height; ++y) {
+                    for (int x = 0; x < source.width; ++x) {
+                        const int sx = source.x + x, sy = source.y + y;
+                        if (sx >= 0 && sy >= 0 && sx < logical.width && sy < logical.height)
+                            std::copy_n(logical.pixels.data() + (sy * logical.width + sx) * pixelBytes, pixelBytes,
+                                        readback.pixels.data() + (y * source.width + x) * pixelBytes);
+                    }
+                }
+                const auto artifact = hyprcapture::normalizeRgbaFrameToLogicalOrientation(std::move(readback), inverse);
+                require(artifact.width == crop.width && artifact.height == crop.height, "physical artifact crop dimensions");
+                for (int y = 0; y < crop.height; ++y) {
+                    for (int x = 0; x < crop.width; ++x) {
+                        const int sx = crop.x + x, sy = crop.y + y;
+                        for (int c = 0; c < pixelBytes; ++c) {
+                            const auto expected = sx >= 0 && sy >= 0 && sx < physical.width && sy < physical.height
+                                ? physical.pixels[(sy * physical.width + sx) * pixelBytes + c] : 0;
+                            require(artifact.pixels[(y * crop.width + x) * pixelBytes + c] == expected,
+                                    "physical artifact pixels and out-of-bounds padding");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 
 int main() {
@@ -125,6 +167,7 @@ int main() {
                 require(a.pixels[i+c]==b.pixels[i*2+c] && a.pixels[i+c]==b.pixels[i*2+c+4], "both half-float channel pairs preserve orientation");
     }
     unpremultiplyLutMatchesLegacyFormulaForEveryBytePair();
+    logicalOffscreenReadbackPreservesPhysicalArtifacts();
 
     std::cout << "rgba transform tests passed\n";
     return 0;
