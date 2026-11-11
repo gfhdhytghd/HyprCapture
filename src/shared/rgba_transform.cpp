@@ -104,6 +104,14 @@ bool rgbaFrameHasExpectedSize(const RgbaFrame& frame) {
     return checkedRgbaByteSize(frame.width, frame.height, bytes, frame.bytesPerPixel) && frame.pixels.size() == bytes;
 }
 
+int inverseRgbaTransform(int transform) {
+    switch (std::clamp(transform, 0, 7)) {
+        case 1: return 3;
+        case 3: return 1;
+        default: return std::clamp(transform, 0, 7);
+    }
+}
+
 RgbaCrop logicalRgbaCropToFramebuffer(RgbaCrop crop, int framebufferWidth, int framebufferHeight, int transform) {
     const auto [x, y, w, h] = crop;
     switch (std::clamp(transform, 0, 7)) {
