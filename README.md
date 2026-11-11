@@ -1,7 +1,7 @@
 # HyprCapture
 
 > [!IMPORTANT]
-> `master` targets the latest official Hyprland release, currently v0.57.0 (`hyprwm/Hyprland` `0aa6745f`); `flake.lock` pins that release.
+> `master` targets the latest official Hyprland release, currently v0.57.2 (`hyprwm/Hyprland` `11cbc6c5`); `flake.lock` pins that release.
 > For Hyprland's development `main`, use the `hyprland-master` branch.
 > The compositor and plugin must come from the same Hyprland revision; the plugin refuses to load when its headers do not match the running compositor.
 
@@ -118,7 +118,7 @@ Do not also manually `hyprctl plugin load` the same `.so` if you manage it throu
 
 ### Install on Arch Linux
 
-These steps target Hyprland v0.57.0. Build against the headers of the Hyprland you actually run; `hyprpm` does this for you.
+These steps target Hyprland v0.57.2. Build against the headers of the Hyprland you actually run; `hyprpm` does this for you.
 
 #### 1. Install dependencies
 
@@ -195,7 +195,7 @@ The example below pins the supported Hyprland release. Add HyprCapture to the sa
 ```nix
 {
   inputs = {
-    hyprland.url = "github:hyprwm/Hyprland/v0.57.0";
+    hyprland.url = "github:hyprwm/Hyprland/v0.57.2";
     hyprcapture = {
       url = "github:gfhdhytghd/HyprCapture";
       inputs.hyprland.follows = "hyprland";

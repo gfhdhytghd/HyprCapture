@@ -2,7 +2,7 @@
   description = "HyprCapture, a Hyprland screenshot and recording plugin";
 
   inputs = {
-    hyprland.url = "github:hyprwm/Hyprland/v0.57.0";
+    hyprland.url = "github:hyprwm/Hyprland/v0.57.2";
     nixpkgs.follows = "hyprland/nixpkgs";
     systems.follows = "hyprland/systems";
   };
