@@ -2281,6 +2281,25 @@ void renderRecordingCursor(const CBox& target, double scale, bool requirePointer
         .tex = cursor->texture, .box = CBox{box.x, box.y, box.width, box.height}}));
 }
 
+// Hyprland 0.57 FULL_FAKE exports in transformed (logical-axis) pixels.
+// Preserve the physical-axis artifact/crop contract used by the UI, export
+// pipe and recording consumers. Read only the corresponding source crop,
+// then permute pixels, including the bit-preserved half-float plane.
+RgbaReadback readPhysicalMonitorFramebufferRegion(CFramebuffer& framebuffer, int transform, int x, int y, int width, int height) {
+    const int inverse = inverseRgbaTransform(transform);
+    const auto crop = logicalRgbaCropToFramebuffer({x, y, width, height},
+        positiveRoundedIntFromDouble(framebuffer.m_size.x), positiveRoundedIntFromDouble(framebuffer.m_size.y), inverse);
+    auto readback = readRgbaFramebufferRegion(framebuffer, crop.x, crop.y, crop.width, crop.height, true);
+    if (inverse == 0)
+        return readback;
+    const auto captureUs = readback.captureMonotonicUs;
+    auto physical = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), inverse);
+    physical.cropX = x;
+    physical.cropTopY = y;
+    physical.captureMonotonicUs = captureUs;
+    return physical;
+}
+
 RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
                                    const Time::steady_tp& frozenTime,
                                    int cropX,
@@ -2293,8 +2312,8 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     if (!monitor || !monitor->m_activeWorkspace || !g_pHyprRenderer || !g_pHyprOpenGL)
         return {};
 
-    const int width = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
-    const int height = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
+    const int width = positiveRoundedIntFromDouble(monitor->m_transformedSize.x);
+    const int height = positiveRoundedIntFromDouble(monitor->m_transformedSize.y);
     std::size_t framebufferBytes = 0;
     if (!checkedRgbaByteSize(width, height, framebufferBytes))
         return {};
@@ -2350,9 +2369,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     restoreRendererState();
 
     if(skipReadback) return {};
-    // Fake monitor rendering stores the top of the monitor at GL row zero.
-    // Keep crop coordinates in that same space for every monitor capture caller.
-    auto readback = readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight, true);
+    auto readback = readPhysicalMonitorFramebufferRegion(*framebuffer, static_cast<int>(monitor->m_transform), cropX, cropTopY, cropWidth, cropHeight);
     if (budget && !readback.pixels.empty() && !budget->consume(readback.linear.empty() ? readback.pixels.size() : readback.linear.size() * 2))
         return {};
     return readback;
@@ -2428,7 +2445,8 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
     if (!checkedRgbaByteSize(width, height, framebufferBytes) || !budget.canFit(framebufferBytes))
         return false;
 
-    auto framebuffer = createFramebuffer("hyprcapture-cursor", width, height, monitor->m_output->state->state().drmFormat);
+    auto framebuffer = createFramebuffer("hyprcapture-cursor", positiveRoundedIntFromDouble(monitor->m_transformedSize.x),
+        positiveRoundedIntFromDouble(monitor->m_transformedSize.y), monitor->m_output->state->state().drmFormat);
     if (!framebuffer)
         return false;
 
@@ -2463,7 +2481,7 @@ bool renderCursorArtifact(const PHLMONITOR& monitor,
     g_pHyprRenderer->endRender();
     restoreRendererState();
 
-    auto readback = readRgbaFramebufferRegion(*framebuffer, 0, 0, width, height);
+    auto readback = readPhysicalMonitorFramebufferRegion(*framebuffer, static_cast<int>(monitor->m_transform), 0, 0, width, height);
     PixelBounds alphaBounds;
     if (readback.pixels.empty() || !findAlphaBounds(readback, alphaBounds) || !budget.consume(readback.linear.empty() ? readback.pixels.size() : readback.linear.size() * 2))
         return false;

@@ -17,6 +17,8 @@ struct RgbaCrop {
 
 // Map a logical, top-down crop into the physical framebuffer before readback.
 RgbaCrop logicalRgbaCropToFramebuffer(RgbaCrop crop, int framebufferWidth, int framebufferHeight, int transform);
+// Invert a Wayland output transform, including self-inverse reflections.
+int inverseRgbaTransform(int transform);
 
 bool      rgbaFrameHasExpectedSize(const RgbaFrame& frame);
 RgbaFrame normalizeRgbaFrameToLogicalOrientation(RgbaFrame frame, int transform);
