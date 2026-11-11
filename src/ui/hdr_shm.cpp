@@ -19,7 +19,8 @@ void HdrShmPool::reset() {
   m_pendingDamage = {};
 }
 HdrShmUpdate HdrShmPool::prepare(const QImage &image, const QRegion &damage) {
-  if (image.isNull() || image.format() != QImage::Format_RGB30 ||
+  if (image.isNull() || (image.format() != QImage::Format_RGB30 &&
+       image.format() != QImage::Format_A2RGB30_Premultiplied) ||
       image.sizeInBytes() > INT32_MAX)
     return {};
   if (m_size != image.size()) {

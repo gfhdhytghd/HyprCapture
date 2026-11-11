@@ -26,6 +26,9 @@ QImage texture(int width, int height, unsigned seed = 42) {
 }
 int main(int argc, char** argv) {
     QGuiApplication app(argc, argv);
+    // These fixtures verify native pixels, not parallel scheduling. Match
+    // the other tracker tests and avoid thread-pool overhead on small tiles.
+    cv::setNumThreads(1);
     // A changing image and an interior fixed panel must not become the page's
     // motion model. Exercise forward, reverse, idle and recovery transitions.
     const auto dynamicDocument = texture(640, 2400, 730);
@@ -480,5 +483,52 @@ int main(int argc, char** argv) {
                     "repeated text around a widget preserves exact document position");
         }
     }
+    // Keep all unique labels in one outer edge, with the other edge entirely
+    // blank regardless of the host's font metrics. A blank margin has no
+    // glyph votes, but must not invalidate the opposite edge's native proof.
+    QImage edgeText(800, 2500, QImage::Format_ARGB32); edgeText.fill(Qt::white);
+    {
+        QPainter painter(&edgeText);
+        QFont font("sans-serif"); font.setPixelSize(16); painter.setFont(font);
+        painter.setPen(Qt::black);
+        for (int y = 40, line = 0; y < edgeText.height(); y += 37, ++line)
+            painter.drawText(24, y, QString("ID %1").arg(line));
+    }
+    for (bool mirrored : {false, true}) {
+        const auto page = mirrored ? edgeText.mirrored(true, false) : edgeText;
+        for (bool fixed : {false, true}) {
+            ScrollStitcher sparse;
+            unsigned tick = 800;
+            for (int offset : {300, 420, 510, 380, 210, 450, 600}) {
+                auto image = page.copy(0, offset, 800, 700);
+                { QPainter p(&image); p.drawImage(220, fixed ? 190 : 660-offset,
+                                                texture(400, 300, fixed ? 17 : tick++)); }
+                const auto result = sparse.append(image);
+                require(result.status == Status::Started || result.status == Status::Appended ||
+                            result.status == Status::Relocated,
+                        "unique edge labels register beside a blank margin and changing widget");
+                require(sparse.layout().viewportY == offset-300, "unique edge labels prove the exact offset");
+            }
+            const int edgeX = mirrored ? 640 : 0;
+            require(sparse.image().copy(edgeX, 0, 160, 1090) == page.copy(edgeX, 210, 160, 1090),
+                    "unobscured edge labels retain native pixels");
+        }
+    }
+    // A repeated edge prefix still cannot locate a page. The blank opposite
+    // margin and a changing interior widget must not resolve the pixel tie.
+    auto periodicEdge = edgeText.copy(0, 0, 800, 37);
+    QImage periodicPage(800, 2500, QImage::Format_ARGB32);
+    for (int y = 0; y < periodicPage.height(); ++y)
+        memcpy(periodicPage.scanLine(y), periodicEdge.constScanLine(y % 37), periodicPage.bytesPerLine());
+    ScrollStitcher periodicWithWidget;
+    auto periodicFirst = periodicPage.copy(0, 300, 800, 700);
+    { QPainter p(&periodicFirst); p.drawImage(220, 190, texture(400, 300, 900)); }
+    periodicWithWidget.append(periodicFirst);
+    auto periodicNext = periodicPage.copy(0, 420, 800, 700);
+    { QPainter p(&periodicNext); p.drawImage(220, 190, texture(400, 300, 901)); }
+    const auto periodicResult = periodicWithWidget.append(periodicNext);
+    require(periodicResult.status == Status::Ambiguous || periodicResult.status == Status::NoOverlap,
+            "blank margin cannot disambiguate repeated edge labels");
+    require(periodicWithWidget.image() == periodicFirst, "rejected periodic edge preserves the canvas");
     return 0;
 }

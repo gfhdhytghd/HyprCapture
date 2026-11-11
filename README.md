@@ -686,7 +686,26 @@ remain subject to `window_background`; no margin is added around its content.
 | `record_countdown_seconds` | int | `0` | Optional countdown before recording starts. `0` disables it; values are clamped to 60 seconds. When enabled, HyprCapture closes the capture overlay, shows an input-transparent countdown window centered on the active screen, then starts recording. |
 | `thumbnail_timeout_ms` | int | `5000` | Thumbnail auto-close timeout in milliseconds. Use `0` to keep it open until user action. |
 | `thumbnail_monitor` | string | `active` | Monitor used for result thumbnails. Supports `active`, `primary`, `all`, or a case-insensitive output name such as `DP-2`. `active` is resolved from Hyprland's pointer position before the helper starts. `all` shows one synchronized thumbnail per monitor; swipe progress and swipe-to-close/delete animations are shared, while right-click menus remain independent. Unknown names fall back to the active monitor. |
+| `thumbnail_max_width` | int | `180` | Result image maximum width in logical px; clamped to 48..1024. Preserves aspect ratio without enlargement. |
+| `thumbnail_max_height` | int | `120` | Result image maximum height in logical px; clamped to 48..1024. |
+| `thumbnail_position` | string | `bottom_right` | `top_left`, `top_right`, `bottom_left`, or `bottom_right`; invalid values use `bottom_right`. |
+| `thumbnail_margin` | int | `24` | Logical px of card padding at the chosen screen edges; clamped to 0..512. |
+| `thumbnail_rounding` | int | `0` | Thumbnail image corner radius in logical px, clamped to 0..128. The image keeps its full size; a border of width b grows outward with outer radius R+b around image radius R. Above 0, HDR thumbnails use a premultiplied ARGB2101010 corner mask when supported (four alpha levels); unsupported formats or upload failures use the SDR preview. Menus are always square and borderless. |
+| `thumbnail_opacity` | int | `100` | Overall thumbnail opacity in percent, clamped to 0..100. Below 100 uses the SDR preview instead of the native HDR surface. |
+| `thumbnail_border_size` | int | `0` | Thumbnail image border width in logical px, added outside the image bounds without shrinking the image; clamped to 0..16. Menus never draw a border. |
+| `thumbnail_border_color` | string | `""` | Thumbnail image border color; empty/invalid uses foreground RGB with alpha 90/255. |
+| `thumbnail_animation` | bool | `true` | Enable swipe reset/dismissal animations. Does not disable recording progress animation. |
 | `helper` | string | empty | Optional absolute helper override. By default the plugin tries `HYPRCAPTURE_HELPER`, then `$HOME/.local/bin/hyprcapture-ui`, then trusted system install paths. |
+
+Thumbnail color strings accept `#RRGGBB`, `#RRGGBBAA`, `rgba(RRGGBBAA)`, or
+`0xAARRGGBB` (quote them in config). Explicit alpha is preserved. Invalid colors
+and values longer than 64 bytes fall back to the palette before helper launch. These keys affect only result thumbnails, including
+final scrolling captures and recordings; capture/editor toolbars, pins and active
+scroll-capture controls keep their existing appearance. Result-thumbnail menus
+are square and borderless; earlier versions drew a 1 px border with 7 px corners.
+There is no thumbnail shadow. The [constant inventory](docs/development/thumbnail-customization.md)
+records the original visual and placement constants. New settings apply to newly
+launched thumbnails after config reload.
 
 ### Recording sound
 

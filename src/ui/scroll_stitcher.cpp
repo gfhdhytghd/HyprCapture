@@ -497,6 +497,24 @@ bool exactOverlap(const QImage &first, const QImage &second, QRect content, int 
   }
   return true;
 }
+// A blank outer margin cannot supply glyph votes. When the opposite edge
+// proves a unique native translation, a uniformly identical margin may
+// accompany it. Never treat an unmatched textured edge as blank evidence.
+bool uniqueEdgeBesideBlankMargin(const QImage &first, const QImage &second,
+                                QRect edge, QRect margin, int d) {
+  const auto uniform = [](const QImage &image, QRect rect, QRgb pixel) {
+    for (int y = rect.top(); y <= rect.bottom(); ++y) {
+      const auto* row = reinterpret_cast<const QRgb*>(image.constScanLine(y));
+      for (int x = rect.left(); x <= rect.right(); ++x)
+        if (row[x] != pixel) return false;
+    }
+    return true;
+  };
+  const auto pixel = reinterpret_cast<const QRgb*>(first.constScanLine(margin.top()))[margin.left()];
+  if (!uniform(first, margin, pixel) || !uniform(second, margin, pixel)) return false;
+  const auto native = nativeRows(gray(first.copy(edge)), gray(second.copy(edge)), {});
+  return native.found && native.position == d && exactOverlap(first, second, edge, d);
+}
 // A dynamic/fixed edge may obscure part of the pairwise overlap. Pixel-prove
 // a contiguous native run containing the informative row votes, not merely a
 // sparse repeated prefix. Coordinates are relative to the current viewport.
@@ -1685,6 +1703,16 @@ ScrollStitcher::Result ScrollStitcher::appendPixels(const QImage &source, const 
         const QRect right(content.right()+1-content.width()/5,content.y(),content.width()/5,content.height());
         coherent=verifyOriginalPixels(registrationPrevious,registrationCurrent,left,consensus.position,true) &&
                  verifyOriginalPixels(registrationPrevious,registrationCurrent,right,consensus.position,true);
+        if (!coherent) {
+          // Content detection can trim the blank side to the last glyph,
+          // putting its inferred edge inside the panel. Inspect the actual
+          // viewport margins for the blank-side proof instead.
+          const int width = frame.width()/5;
+          const QRect outerLeft(0,content.y(),width,content.height());
+          const QRect outerRight(frame.width()-width,content.y(),width,content.height());
+          coherent = uniqueEdgeBesideBlankMargin(registrationPrevious,registrationCurrent,outerLeft,outerRight,consensus.position) ||
+                     uniqueEdgeBesideBlankMargin(registrationPrevious,registrationCurrent,outerRight,outerLeft,consensus.position);
+        }
       }
       if(!coherent) consensus.found=false;
     }

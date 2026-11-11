@@ -112,6 +112,47 @@ QImage hdrToPq10(const QImage &image, float *peakNits, float referenceNits,
     *peakNits = *std::max_element(peaks.begin(), peaks.end());
   return out;
 }
+QImage hdrRoundedPq10(const QImage &pq, const QSize &destination, qreal radius) {
+  if (pq.isNull() || pq.format() != QImage::Format_RGB30 ||
+      !destination.isValid() || !std::isfinite(radius) || radius < 0)
+    return {};
+  if (radius == 0) return pq;
+  radius = std::min({radius, destination.width() / 2.0, destination.height() / 2.0});
+  QImage out(pq.size(), QImage::Format_A2RGB30_Premultiplied);
+  if (out.isNull()) return {};
+  const double sx = double(destination.width()) / pq.width();
+  const double sy = double(destination.height()) / pq.height();
+  // Supersample coverage in logical coordinates, then quantize to 2-bit alpha.
+  // Premultiply the encoded PQ channels by the quantized (not raw) alpha.
+  constexpr int samples = 8;
+  for (int y = 0; y < pq.height(); ++y) {
+    const auto *src = reinterpret_cast<const uint32_t *>(pq.constScanLine(y));
+    auto *dst = reinterpret_cast<uint32_t *>(out.scanLine(y));
+    for (int x = 0; x < pq.width(); ++x) {
+      if ((x * sx >= radius && (x + 1) * sx <= destination.width() - radius) ||
+          (y * sy >= radius && (y + 1) * sy <= destination.height() - radius)) {
+        dst[x] = src[x];
+        continue;
+      }
+      int covered = 0;
+      for (int j = 0; j < samples; ++j) {
+        const double py = (y + (j + .5) / samples) * sy;
+        const double dy = std::max({radius - py, py - (destination.height() - radius), 0.0});
+        for (int i = 0; i < samples; ++i) {
+          const double px = (x + (i + .5) / samples) * sx;
+          const double dx = std::max({radius - px, px - (destination.width() - radius), 0.0});
+          covered += dx * dx + dy * dy <= radius * radius;
+        }
+      }
+      const unsigned alpha = (covered * 3 + samples * samples / 2) / (samples * samples);
+      uint32_t pixel = alpha << 30;
+      for (int shift : {0, 10, 20})
+        pixel |= ((((src[x] >> shift) & 1023) * alpha + 1) / 3) << shift;
+      dst[x] = pixel;
+    }
+  }
+  return out;
+}
 #ifdef HYPRCAPTURE_HDR_WAYLAND
 namespace {
 struct NativeGlobals;
@@ -135,7 +176,7 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
   uint32_t presentationClock = 0;
   bool pq = false, bt2020 = false, srgb = false, linear = false,
        parametric = false, luminances = false, mastering = false,
-       extendedVolume = false, rgb30 = false,
+       extendedVolume = false, rgb30 = false, argb30 = false,
        perceptual = false, closed = false;
   std::set<std::pair<uint32_t, uint64_t>> modifiers;
   struct Format {
@@ -237,6 +278,8 @@ struct NativeGlobals : std::enable_shared_from_this<NativeGlobals> {
       static const wl_shm_listener l{[](void *d, wl_shm *, uint32_t f) {
         if (f == WL_SHM_FORMAT_XRGB2101010)
           static_cast<NativeGlobals *>(d)->rgb30 = true;
+        if (f == WL_SHM_FORMAT_ARGB2101010)
+          static_cast<NativeGlobals *>(d)->argb30 = true;
       }};
       wl_shm_add_listener(s.shm, &l, p);
     } else if (!strcmp(name, "wp_viewporter")) {
@@ -513,6 +556,7 @@ struct HdrBackdrop::Impl {
   NativeBuffer *attachedBuffer = nullptr;
   bool attachedVisible = false, contentDirty = false;
   HdrShmPool pqPool;
+  QImage::Format pqFormat = QImage::Format_Invalid;
   std::vector<NativeBuffer*> pqBuffers;
   qint64 pqRequestKey = 0;
   QRegion pqDamage, bufferDamage;
@@ -520,6 +564,7 @@ struct HdrBackdrop::Impl {
   std::set<struct wp_presentation_feedback *> feedback;
   std::map<struct wp_presentation_feedback*, int64_t> feedbackStarts;
   QRect destination, clippedDestination;
+  std::optional<QRect> clipRect;
   QSize imageSize;
   QPointer<QWindow> parent;
   bool aboveParent = false, synchronized = false;
@@ -556,6 +601,7 @@ struct HdrBackdrop::Impl {
       return false;
     auto &g = *globals;
     surface = wl_compositor_create_surface(g.compositor);
+    // Keep the default empty opaque region: rounded PQ buffers have transparent corners.
     surfaceIdentity = ++g.surfaceSequence; stackedAboveIdentity = 0;
     auto *empty = wl_compositor_create_region(g.compositor);
     wl_surface_set_input_region(surface, empty);
@@ -578,6 +624,9 @@ struct HdrBackdrop::Impl {
   void attach() {
     if (!surface || !globals || globals->closed)
       return;
+    // Upload completion can attach directly without another setVisible call.
+    if (clipRect && clippedDestination.isEmpty())
+      visible = false;
     ScopedUiTiming timing("hdr.attach_commit_flush");
     if (visible && buffer && (contentDirty || attachedBuffer != buffer || !attachedVisible)) {
       // Never resubmit a busy buffer after hide/show: a queued release for its
@@ -910,7 +959,7 @@ bool HdrBackdrop::setPreparedImage(
 #endif
 }
 bool HdrBackdrop::setImage(const QImage &image, const QRect &destination,
-                           float reference) {
+                           float reference, qreal cornerRadius) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   if (!m->globals)
     return false;
@@ -919,7 +968,7 @@ bool HdrBackdrop::setImage(const QImage &image, const QRect &destination,
 #endif
   float peak = 0;
   auto pq = hdrToPq10(image, &peak, reference);
-  return setPqImage(pq, destination, peak, reference);
+  return setPqImage(hdrRoundedPq10(pq, destination.size(), cornerRadius), destination, peak, reference);
 }
 bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
                              float peak, float reference, std::optional<QRegion> damage) {
@@ -929,7 +978,7 @@ bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
   const auto fail = [&] {
     setVisible(false); m->descriptionReady = false; m->close(); return false;
   };
-  if (!m->globals || pq.isNull() || pq.format() != QImage::Format_RGB30 || !destination.isValid()) return fail();
+  if (!m->globals || pq.isNull() || (pq.format() != QImage::Format_RGB30 && pq.format() != QImage::Format_A2RGB30_Premultiplied) || !destination.isValid()) return fail();
   auto &g = *m->globals;
   if (g.closed) return fail();
   if (m->pqRequestKey != pq.cacheKey()) {
@@ -950,18 +999,19 @@ bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
     wl_display_flush(g.display); return true;
   };
   if (!g.globalsReady || (g.manager && !g.managerDone)) return defer();
-  if (!g.common() || !g.shm || !g.rgb30 || !g.pq || !g.bt2020 || !m->parent) return fail();
+  if (!g.common() || !g.shm || (pq.format() == QImage::Format_RGB30 ? !g.rgb30 : !g.argb30) || !g.pq || !g.bt2020 || !m->parent) return fail();
   if (!m->createSurface()) return defer();
   auto *desc = g.description(false, peak, reference);
   if (!desc) {
     const bool waiting = std::ranges::any_of(g.descriptions, [](const auto &d) { return !d.second->done; });
     return waiting ? defer() : fail();
   }
-  if (m->imageSize != pq.size() && !m->pqBuffers.empty()) {
+  if ((m->imageSize != pq.size() || m->pqFormat != pq.format()) && !m->pqBuffers.empty()) {
     m->buffer = nullptr; m->attachedBuffer = nullptr;
     for (auto* b : m->pqBuffers) g.retire(b);
     m->pqBuffers.clear(); m->pqPool.reset(); m->pqDamage = pq.rect();
   }
+  m->pqFormat = pq.format();
   auto update = m->pqPool.prepare(pq, m->pqDamage);
   if (!update.buffer) return update.blocked ? defer() : fail();
   NativeBuffer* buffer = nullptr;
@@ -969,9 +1019,12 @@ bool HdrBackdrop::setPqImage(const QImage &pq, const QRect &destination,
   if (!buffer) {
     ScopedUiTiming protocolTiming("hdr.shm_create_protocol_buffer");
     auto* pool = wl_shm_create_pool(g.shm, update.buffer->fd, int(update.buffer->bytes));
+    if (!pool) return fail();
     auto* native = wl_shm_pool_create_buffer(pool, 0, pq.width(), pq.height(),
-                                            int(update.buffer->stride), WL_SHM_FORMAT_XRGB2101010);
+                                            int(update.buffer->stride), pq.format() == QImage::Format_RGB30
+                                                ? WL_SHM_FORMAT_XRGB2101010 : WL_SHM_FORMAT_ARGB2101010);
     wl_shm_pool_destroy(pool);
+    if (!native) return fail();
     buffer = g.own(native, {}, update.buffer); m->pqBuffers.push_back(buffer);
   }
   if (m->buffer && m->buffer->frame) g.retire(m->buffer);
@@ -997,7 +1050,7 @@ void HdrBackdrop::setGeometry(const QRect &destination) {
     m->pendingDestination = destination;
   if (!m->surface || !m->parent || !destination.isValid() || m->globals->closed)
     return;
-  auto clipped = destination.intersected(QRect(QPoint{}, m->parent->size()));
+  const auto clipped = hdrBackdropVisibleRect(destination, QRect(QPoint{}, m->parent->size()), m->clipRect);
   if (destination == m->destination && clipped == m->clippedDestination)
     return;
   m->destination = destination;
@@ -1018,6 +1071,14 @@ void HdrBackdrop::setGeometry(const QRect &destination) {
   m->attach();
 #endif
 }
+void HdrBackdrop::setClipRect(std::optional<QRect> clip) {
+#ifdef HYPRCAPTURE_HDR_WAYLAND
+  if (clip == m->clipRect)
+    return;
+  m->clipRect = std::move(clip);
+  setGeometry(m->destination);
+#endif
+}
 void HdrBackdrop::stackAbove(const HdrBackdrop& lower) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   if (!m->surface || !m->subsurface || !lower.m->surface || m->parent != lower.m->parent ||
@@ -1029,9 +1090,11 @@ void HdrBackdrop::stackAbove(const HdrBackdrop& lower) {
 void HdrBackdrop::setVisible(bool visible) {
 #ifdef HYPRCAPTURE_HDR_WAYLAND
   m->requestedVisible = visible;
-  if (!ready() || m->visible == visible)
+  // A fully clipped child must stay detached even when its parent is visible.
+  const bool shown = visible && (!m->clipRect || !m->clippedDestination.isEmpty());
+  if (!ready() || m->visible == shown)
     return;
-  m->visible = visible;
+  m->visible = shown;
   m->attach();
 #endif
 }
