@@ -151,10 +151,16 @@ inline QColor imageBorderColor(const QPalette &palette, const CaptureDefaults &r
     return colorOr(defaults.thumbnailBorderColor, fallback);
 }
 
+// Use circular corners even when the configured radius exceeds the short side.
+inline qreal clampedRounding(const QSizeF &size, qreal radius) {
+    return std::max<qreal>(0, std::min({radius, size.width() / 2.0, size.height() / 2.0}));
+}
+
 // Clip the image to a rounded rectangle; radius is in logical pixels.
 inline QPixmap roundedPixmap(const QPixmap &pixmap, qreal radius) {
     if (pixmap.isNull() || radius <= 0)
         return pixmap;
+    radius = clampedRounding(pixmap.deviceIndependentSize(), radius);
     QPixmap out(pixmap.size());
     out.setDevicePixelRatio(pixmap.devicePixelRatio());
     out.fill(Qt::transparent);

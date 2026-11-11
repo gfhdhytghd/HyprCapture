@@ -1,4 +1,5 @@
 #include "shared/protocol.hpp"
+#include "shared/trusted_path.hpp"
 #include "ui/annotation_editor.hpp"
 #include "ui/capture_overlay.hpp"
 #include "ui/clipboard_utils.hpp"
@@ -38,6 +39,8 @@
 #include <QJsonObject>
 #include "shared/hdr_color.hpp"
 #include <cstdio>
+#include <pwd.h>
+#include <unistd.h>
 
 namespace {
 
@@ -2387,7 +2390,23 @@ int main(int argc, char** argv) {
     }
     // Use an isolated trusted HOME for the clipboard backend double. /tmp
     // is intentionally rejected by the production executable trust policy.
-    QTemporaryDir clipboardHome(qEnvironmentVariable("HYPRCAPTURE_TEST_HOME", QDir::homePath()) + QStringLiteral("/.hyprcapture-test-XXXXXX"));
+    QString fixtureHome = qEnvironmentVariable("HYPRCAPTURE_TEST_HOME", QDir::homePath());
+    const auto trustedHome = [](const QString& home) {
+        return hyprcapture::security::parentChainTrusted(
+            QFile::encodeName(QDir(home).filePath(QStringLiteral(".hyprcapture-test"))).toStdString());
+    };
+    // Build runners may replace HOME with a private directory below /tmp.
+    // Keep the executable trust policy intact and use the account's home for
+    // our temporary backend instead. An explicit override must be trusted.
+    if (!qEnvironmentVariableIsSet("HYPRCAPTURE_TEST_HOME") && !trustedHome(fixtureHome)) {
+        if (const auto* account = getpwuid(geteuid()))
+            fixtureHome = QFile::decodeName(account->pw_dir);
+    }
+    if (!trustedHome(fixtureHome)) {
+        fputs("Clipboard fixture requires a home with trusted ancestors. Set HYPRCAPTURE_TEST_HOME to a trusted writable directory.\n", stderr);
+        return 1;
+    }
+    QTemporaryDir clipboardHome(fixtureHome + QStringLiteral("/.hyprcapture-test-XXXXXX"));
     if (!clipboardHome.isValid()) {
         fputs("Cannot create clipboard fixture under the test home. Set HYPRCAPTURE_TEST_HOME to a writable directory; clipboard doubles require trusted ancestors.\n", stderr);
         return 1;
@@ -2411,6 +2430,10 @@ int main(int argc, char** argv) {
     copyStub.close();
     if (!copyStub.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner)) return 1;
     qputenv("HOME", clipboardHome.path().toUtf8());
+    if (hyprcapture::ui::trustedSystemProgram(QStringLiteral("wl-copy")) != copyStub.fileName()) {
+        fputs("Clipboard fixture did not resolve to the private wl-copy backend.\n", stderr);
+        return 1;
+    }
     qputenv("HYPRCAPTURE_TEST_CLIPBOARD", clipboardPath.toUtf8());
     QTemporaryDir environment;
     if (!environment.isValid())

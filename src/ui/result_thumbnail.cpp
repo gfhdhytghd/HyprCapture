@@ -133,10 +133,12 @@ class ImageBorderOverlay final : public QWidget {
         painter.setRenderHint(QPainter::Antialiasing, true);
         const QRectF outer(rect());
         const qreal b = std::min<qreal>(m_size, std::min(outer.width(), outer.height()) / 2.0);
+        const QRectF imageRect = outer.adjusted(b, b, -b, -b);
+        const qreal radius = thumbnail::clampedRounding(imageRect.size(), m_radius);
         QPainterPath ring;
-        ring.addRoundedRect(outer, m_radius, m_radius);
+        ring.addRoundedRect(outer, radius + b, radius + b);
         QPainterPath inner;
-        inner.addRoundedRect(outer.adjusted(b, b, -b, -b), std::max<qreal>(0, m_radius - b), std::max<qreal>(0, m_radius - b));
+        inner.addRoundedRect(imageRect, radius, radius);
         painter.fillPath(ring.subtracted(inner), m_color);
     }
 
@@ -385,12 +387,10 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
         applyLayerSize();
     }, false));
     auto* copyButton = addAction(hyprcapture::ui::uiText(m_copyFile ? "Copy file" : "Copy image"), [this] {
-        // Native HDR painting leaves the QLabel empty; retain its raster fallback.
-        const auto currentPixmap = m_dragPreview;
         if (m_copyFile && !m_path.isEmpty())
             hyprcapture::ui::copyFileUrlToClipboard(m_path);
-        else if (!currentPixmap.isNull())
-            hyprcapture::ui::copyPixmapToClipboard(currentPixmap);
+        else if (!m_copyPixmap.isNull())
+            hyprcapture::ui::copyPixmapToClipboard(m_copyPixmap);
     });
     m_saveButton = addAction(hyprcapture::ui::uiText("Save"), [this] {
         if (!m_saveCapture) return;
@@ -445,6 +445,8 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
 
     m_menuShell->hide();
 
+    // Keep source pixels independent of display scaling, rounding and native HDR.
+    m_copyPixmap = pixmap;
     QPixmap scaledPixmap = thumbnail::scaledPixmap(pixmap, targetScreen, thumbnail::maximumSize(m_defaults));
     scaledPixmap = thumbnail::roundedPixmap(scaledPixmap, static_cast<qreal>(m_defaults.thumbnailRounding));
     m_dragPreview = scaledPixmap;
@@ -467,7 +469,7 @@ ResultThumbnail::ResultThumbnail(const QPixmap &pixmap, QString path, QString re
     m_imageLabel->setPixmap(scaledPixmap);
     m_imageLabel->setGeometry(thumbnail::cardImageRect(scaledLogicalSize, m_defaults));
     if (m_defaults.thumbnailBorderSize > 0) {
-        auto* border = new ImageBorderOverlay(static_cast<int>(m_defaults.thumbnailBorderSize), static_cast<qreal>(m_defaults.thumbnailRounding + m_defaults.thumbnailBorderSize), thumbnail::imageBorderColor(QApplication::palette(), m_defaults), m_imageLabel);
+        auto* border = new ImageBorderOverlay(static_cast<int>(m_defaults.thumbnailBorderSize), static_cast<qreal>(m_defaults.thumbnailRounding), thumbnail::imageBorderColor(QApplication::palette(), m_defaults), m_imageLabel);
         border->setGeometry(m_imageLabel->rect());
     }
     m_transcodeOverlay = new TranscodeProgressOverlay(m_imageLabel);
@@ -577,7 +579,9 @@ void ResultThumbnail::setHdrImage(const QImage& image) {
         updateHdrGeometry();
     });
     const int hdrInset = static_cast<int>(m_defaults.thumbnailBorderSize); // the native HDR surface sits above Qt, so it covers only the image inside the border
-    if (!m_hdrBackdrop->setImage(image, QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()).adjusted(hdrInset, hdrInset, -hdrInset, -hdrInset), 203, static_cast<qreal>(m_defaults.thumbnailRounding))) {
+    const QRect destination = QRect(m_imageLabel->mapTo(this, QPoint{}), m_imageLabel->size()).adjusted(hdrInset, hdrInset, -hdrInset, -hdrInset);
+    const qreal radius = thumbnail::clampedRounding(destination.size(), static_cast<qreal>(m_defaults.thumbnailRounding));
+    if (!m_hdrBackdrop->setImage(image, destination, 203, radius)) {
         m_hdrBackdrop.reset(); return;
     }
     if (m_hdrBackdrop->ready()) m_imageLabel->clear();
@@ -895,6 +899,7 @@ void ResultThumbnail::setImagePixmap(const QPixmap& pixmap) {
     if (!m_imageLabel || pixmap.isNull())
         return;
     m_hdrBackdrop.reset();
+    m_copyPixmap = pixmap;
     m_dragPreview = thumbnail::roundedPixmap(thumbnail::scaledPixmap(pixmap, m_targetScreen, thumbnail::maximumSize(m_defaults)),
                                            static_cast<qreal>(m_defaults.thumbnailRounding));
     m_imageLabel->setPixmap(m_dragPreview);

@@ -118,7 +118,7 @@ Do not also manually `hyprctl plugin load` the same `.so` if you manage it throu
 
 ### Install on Arch Linux
 
-These steps target Hyprland v0.57.0. Build against the headers of the Hyprland you actually run; `hyprpm` does this for you.
+These steps target Hyprland's development `main`. Build against the headers of the Hyprland you actually run; `hyprpm` does this for you.
 
 #### 1. Install dependencies
 

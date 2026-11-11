@@ -80,6 +80,7 @@ class ResultThumbnail final : public QWidget {
     void updateHdrGeometry();
     std::unique_ptr<hyprcapture::ui::HdrBackdrop> m_hdrBackdrop;
     hyprcapture::CaptureDefaults m_defaults;
+    QPixmap m_copyPixmap;
     QPixmap m_dragPreview;
     QString m_path;
     QString m_dragPath;
