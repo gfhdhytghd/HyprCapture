@@ -216,6 +216,39 @@ class InPlaceEditorTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void monitorArtifactsMatchSharedTransforms() {
+        // Same asymmetric pixel fixture as rgba_transform_test.cpp. Transform 1
+        // also verifies that Qt's +90 rotation matches rotate90Clockwise.
+        const int expected[8][6] = {
+            {1, 2, 3, 4, 5, 6}, {4, 1, 5, 2, 6, 3},
+            {6, 5, 4, 3, 2, 1}, {3, 6, 2, 5, 1, 4},
+            {3, 2, 1, 6, 5, 4}, {1, 4, 2, 5, 3, 6},
+            {4, 5, 6, 1, 2, 3}, {6, 3, 5, 2, 4, 1},
+        };
+        QImage physical(3, 2, QImage::Format_RGBA8888);
+        for (int i = 0; i < 6; ++i)
+            physical.setPixelColor(i % 3, i / 3, QColor(i + 1, 0, 0));
+        for (int transform = 0; transform < 8; ++transform) {
+            const QString path = writeArtifact(physical);
+            QVERIFY(!path.isEmpty());
+            hyprcapture::CaptureSession session;
+            session.id = "monitor-transform-test";
+            hyprcapture::MonitorInfo monitor;
+            monitor.logicalGeometry = {0, 0, transform % 2 ? 2.0 : 3.0, transform % 2 ? 3.0 : 2.0};
+            monitor.transform = transform;
+            monitor.artifactPath = path.toStdString();
+            monitor.artifactWidth = 3;
+            monitor.artifactHeight = 2;
+            session.monitors.push_back(monitor);
+            CaptureOverlay overlay(session.defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(session)));
+            QCOMPARE(overlay.m_monitorArtifacts.size(), std::size_t(1));
+            const auto& logical = overlay.m_monitorArtifacts.front().image;
+            QCOMPARE(logical.size(), transform % 2 ? QSize(2, 3) : QSize(3, 2));
+            for (int i = 0; i < 6; ++i)
+                QCOMPARE(logical.pixelColor(i % logical.width(), i / logical.width()), QColor(expected[transform][i], 0, 0));
+        }
+    }
+
     void hdrBaseDoesNotBlockEditorAndDiscardsStaleWork() {
         hyprcapture::CaptureDefaults defaults;
         defaults.mode = hyprcapture::CaptureMode::Window;
