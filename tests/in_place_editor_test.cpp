@@ -2,9 +2,17 @@
 #include "shared/shot_channel.hpp"
 #include "ui/shot_result.hpp"
 #include <sys/socket.h>
+#include <signal.h>
 #include <fcntl.h>
 #include "shared/trusted_path.hpp"
 #include "ui/annotation_editor.hpp"
+#include "ui/live_text_layer.hpp"
+#include "ui/live_text_layout.hpp"
+#include <QSignalSpy>
+#include <QMenu>
+#include <QVariantAnimation>
+#include <QElapsedTimer>
+#include <QToolButton>
 #include "ui/capture_overlay.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/i18n.hpp"
@@ -47,6 +55,39 @@
 #include <unistd.h>
 
 namespace {
+
+const QByteArray kOcrJson = R"({"text":"Hello","poly":[[10,10],[60,10],[60,30],[10,30]],"level":"word"}
+{"text":"world","poly":[[70,10],[120,10],[120,30],[70,30]],"level":"word"}
+{"text":"中文","poly":[[10,50],[50,50],[50,70],[10,70]]}
+{"text":"Tilt","poly":[[100,100],[140,120],[130,140],[90,120]]}
+)";
+QString ocrFixture(const char* name) { return QDir::homePath()+"/"+QString::fromLatin1(name); }
+QByteArray readOcrFile(const QString& path) { QFile f(path); return f.open(QIODevice::ReadOnly) ? f.readAll() : QByteArray{}; }
+hyprcapture::OcrConfig fakeOcr(const QByteArray& output = kOcrJson, const QByteArray& extra = {}, const std::string& format = "json", const std::string& mode = "text_layer") {
+    const QString notification = QDir::homePath()+"/.nix-profile/bin/notify-send";
+    QFile notifier(notification);
+    if (!notifier.open(QIODevice::WriteOnly|QIODevice::Truncate)) return {};
+    notifier.write("#!/bin/sh\nprintf '%s\\n' \"$@\" > '"+ocrFixture("ocr-notification").toUtf8()+"'\n");
+    notifier.close(); notifier.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
+    const QString script = ocrFixture("fake-ocr");
+    QFile file(script);
+    if (!file.open(QIODevice::WriteOnly|QIODevice::Truncate)) return {};
+    file.write(("#!/bin/sh\nprintf '%s' \"$1\" > '"+ocrFixture("ocr-png").toUtf8()+"'\nstat -c %a \"$1\" > '"+ocrFixture("ocr-mode").toUtf8()+"'\ncp \"$1\" '"+ocrFixture("ocr-input.png").toUtf8()+"'\nprintf x >> '"+ocrFixture("ocr-count").toUtf8()+"'\n"));
+    file.write(extra);
+    if (!output.isEmpty()) file.write("cat <<'OCR_OUTPUT'\n"+output+(output.endsWith('\n')?QByteArray{}:QByteArray("\n"))+"OCR_OUTPUT\n");
+    file.close(); file.setPermissions(QFileDevice::ReadOwner|QFileDevice::WriteOwner|QFileDevice::ExeOwner);
+    hyprcapture::OcrConfig config;
+    config.mode=mode; config.engine="command"; config.output=format;
+    config.command="'"+script.toStdString()+"' {image}"; config.timeout=2;
+    return config;
+}
+void showOcrEditor(AnnotationEditor& editor, const hyprcapture::OcrConfig& config) {
+    editor.resize(900,650);
+    QImage base(300,200,QImage::Format_ARGB32); base.fill(QColor(24,61,97));
+    editor.setImage(base); editor.setImageDisplayRect(QRect(40,30,600,400));
+    editor.setOcrConfig(config,hyprcapture::NotificationBackend::System);
+    editor.show(); QApplication::processEvents();
+}
 
 constexpr int kLogicalWidth = 800;
 constexpr int kLogicalHeight = 600;
@@ -223,6 +264,223 @@ class InPlaceEditorTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void cleanup() { qunsetenv("HYPRCAPTURE_REDUCED_MOTION"); }
+    void ocrCharacterGeometry() {
+        hyprcapture::ui::LiveTextLayout layout;
+        auto response=hyprcapture::parseOcrJsonLines(R"({"text":"中a文","poly":[[0,0],[110,0],[110,20],[0,20]]})");
+        QVERIFY(response); layout.setResults(response.results);
+        QCOMPARE(layout.runs.size(),std::size_t(1)); QCOMPARE(layout.runs[0].glyphs.size(),std::size_t(3));
+        QCOMPARE(layout.hit(QPointF(42,10)),1); QCOMPARE(layout.hit(QPointF(60,10)),2);
+        response=hyprcapture::parseOcrJsonLines(R"({"text":"A😀é中","poly":[[0,0],[200,0],[200,20],[0,20]]})");
+        QVERIFY(response); layout.setResults(response.results);
+        QCOMPARE(layout.runs[0].glyphs.size(),std::size_t(4));
+        QCOMPARE(layout.runs[0].glyphs[1].end-layout.runs[0].glyphs[1].begin,2); // surrogate pair
+        QCOMPARE(layout.runs[0].glyphs[2].end-layout.runs[0].glyphs[2].begin,2); // combining mark
+        QCOMPARE(layout.text,QString::fromStdString(hyprcapture::joinOcrText(response.results)));
+    }
+    void ocrVisibilityAndShot() {
+        qputenv("HYPRCAPTURE_REDUCED_MOTION","1");
+        for (const auto* mode : {"off","capture","text_layer","both"}) {
+            AnnotationEditor editor; auto config=fakeOcr(); config.mode=mode;
+            showOcrEditor(editor,config);
+            auto* button=editor.findChild<QToolButton*>("annotationLiveText"); QVERIFY(button);
+            QCOMPARE(button->isVisible(),std::string(mode)!="off");
+            QCOMPARE(button->isCheckable(),std::string(mode)!="capture");
+        }
+        int sockets[2]; QCOMPARE(socketpair(AF_UNIX,SOCK_STREAM|SOCK_CLOEXEC,0,sockets),0);
+        hyprcapture::ui::enableShotResult(sockets[0]);
+        const auto cleanup=qScopeGuard([&] { hyprcapture::ui::enableShotResult(-1);close(sockets[0]);close(sockets[1]); });
+        hyprcapture::CaptureDefaults d; d.inPlaceEditToolbar=true; d.rememberSettings=false; d.ocr=fakeOcr();
+        CaptureOverlay overlay(d,false,false,false,sessionJson(d));
+        overlay.show(); overlay.beginInPlaceEdit();
+        QVERIFY(overlay.m_editor);
+        QVERIFY(overlay.m_editor->findChild<QToolButton*>("annotationLiveText")->isHidden());
+    }
+    void ocrLayerSelectionAndCache() {
+        qputenv("HYPRCAPTURE_REDUCED_MOTION","1");
+        QFile::remove(ocrFixture("ocr-count"));
+        AnnotationEditor editor; showOcrEditor(editor,fakeOcr());
+        auto* canvas=editor.findChild<QWidget*>("annotationCanvas");
+        auto* button=editor.findChild<QToolButton*>("annotationLiveText");
+        auto* layer=editor.findChild<hyprcapture::ui::LiveTextLayer*>(); QVERIFY(canvas&&button&&layer);
+        // Make a real annotation before OCR; its undo entry must remain the last.
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,QPoint(160,190));
+        QTest::mouseMove(canvas,QPoint(210,240));
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,QPoint(210,240));
+        const QImage before=editor.resultImage();
+        QSignalSpy changed(&editor,&AnnotationEditor::annotationsChanged);
+        QTest::mouseClick(button,Qt::LeftButton);
+        QSignalSpy errorFeedback(layer,&hyprcapture::ui::LiveTextLayer::feedback);
+        QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000);
+        QVERIFY2(layer->isOn(),errorFeedback.isEmpty()?"OCR turned off":qPrintable(errorFeedback.back()[0].toString())); QVERIFY(button->isChecked());
+        QVERIFY(!editor.findChild<QToolButton*>("annotationTool1")->isChecked());
+        // Even direct canvas input (for example, after a toolbar focus change)
+        // must not mutate annotations while the text layer owns input.
+        QTest::keyClick(canvas,Qt::Key_Delete);
+        QTest::mousePress(canvas,Qt::LeftButton,Qt::NoModifier,QPoint(300,200));
+        QTest::mouseMove(canvas,QPoint(340,240));
+        QTest::mouseRelease(canvas,Qt::LeftButton,Qt::NoModifier,QPoint(340,240));
+        QCOMPARE(changed.count(),0); QCOMPARE(editor.resultImage(),before);
+        QCOMPARE(readOcrFile(ocrFixture("ocr-mode")),QByteArray("600\n"));
+        QVERIFY(!QFile::exists(QString::fromUtf8(readOcrFile(ocrFixture("ocr-png")))));
+        QImage input(ocrFixture("ocr-input.png")); QCOMPARE(input.size(),QSize(300,200));
+        QCOMPARE(input.pixelColor(80,80),QColor(24,61,97));
+        // Select across rows using anchor/caret; no rectangle/crop is involved.
+        QTest::mousePress(layer,Qt::LeftButton,Qt::NoModifier,QPoint(60,70));
+        QTest::mouseMove(layer,QPoint(140,150));
+        QTest::mouseRelease(layer,Qt::LeftButton,Qt::NoModifier,QPoint(140,150));
+        QCOMPARE(layer->selectedText(),QString::fromUtf8("Hello world\n中文"));
+        QTest::keyClick(layer,Qt::Key_C,Qt::ControlModifier);
+        QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),QString::fromUtf8("Hello world\n中文").toUtf8());
+        QTest::mouseDClick(layer,Qt::LeftButton,Qt::NoModifier,QPoint(90,70));
+        QCOMPARE(layer->selectedText(),QString("Hello"));
+        QTest::mouseClick(layer,Qt::LeftButton,Qt::NoModifier,QPoint(90,70));
+        QCOMPARE(layer->selectedText(),QString("Hello world"));
+        QTest::mouseMove(layer,QPoint(280,270)); QCOMPARE(layer->cursor().shape(),Qt::IBeamCursor);
+        QTest::mouseMove(layer,QPoint(600,380)); QCOMPARE(layer->cursor().shape(),Qt::ArrowCursor);
+        QTest::mouseClick(layer,Qt::LeftButton,Qt::NoModifier,QPoint(600,380)); QVERIFY(layer->selectedText().isEmpty());
+        QTest::keyClick(layer,Qt::Key_A,Qt::ControlModifier);
+        QCOMPARE(layer->selectedText(),QString::fromUtf8("Hello world\n中文\nTilt"));
+        QTest::keyClick(layer,Qt::Key_C,Qt::ControlModifier);
+        QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),QString::fromUtf8("Hello world\n中文\nTilt").toUtf8());
+        // Zoom and pan the underlying canvas; selection uses the same transform.
+        const QPoint zoomAt(240,180);
+        QWheelEvent wheel(zoomAt,canvas->mapToGlobal(zoomAt),{},QPoint(0,120),Qt::NoButton,Qt::ControlModifier,Qt::NoScrollPhase,false);
+        QApplication::sendEvent(layer,&wheel);
+        QTest::mousePress(layer,Qt::MiddleButton,Qt::NoModifier,QPoint(200,160));
+        QTest::mouseMove(layer,QPoint(250,180));
+        QTest::mouseRelease(layer,Qt::MiddleButton,Qt::NoModifier,QPoint(250,180));
+        const auto view=editor.canvasGeometry();
+        const auto point=[&](double x,double y) { return QPoint(qRound(view.x()+x*view.width()/300.0),qRound(view.y()+y*view.height()/200.0)); };
+        QTest::mousePress(layer,Qt::LeftButton,Qt::NoModifier,point(100,110));
+        QTest::mouseMove(layer,point(140,130));
+        QTest::mouseRelease(layer,Qt::LeftButton,Qt::NoModifier,point(140,130));
+        QCOMPARE(layer->selectedText(),QString("Tilt"));
+        const auto calls=readOcrFile(ocrFixture("ocr-count"));
+        QTest::keyClick(layer,Qt::Key_Escape);
+        QVERIFY(!layer->isOn());
+        QVERIFY(editor.findChild<QToolButton*>("annotationTool1")->isChecked());
+        QTest::mouseClick(button,Qt::LeftButton); QVERIFY(layer->isOn()); QVERIFY(!layer->busy());
+        QCOMPARE(readOcrFile(ocrFixture("ocr-count")),calls);
+        QTest::keyClick(layer,Qt::Key_Escape);
+        QCOMPARE(editor.resultImage(),before);
+        editor.undo(); QVERIFY(editor.resultImage()!=before); editor.redo(); QCOMPARE(editor.resultImage(),before);
+        editor.setImage(input); QTest::mouseClick(button,Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000);
+        QCOMPARE(readOcrFile(ocrFixture("ocr-count")).size(),calls.size()+1);
+        for (const auto* animation : layer->findChildren<QVariantAnimation*>()) QCOMPARE(animation->state(),QAbstractAnimation::Stopped);
+    }
+    void ocrAnimationLifecycleAndContextMenu() {
+        qunsetenv("HYPRCAPTURE_REDUCED_MOTION"); qunsetenv("QT_ANIMATIONS_DISABLED");
+        AnnotationEditor editor; showOcrEditor(editor,fakeOcr());
+        auto* button=editor.findChild<QToolButton*>("annotationLiveText");
+        auto* layer=editor.findChild<hyprcapture::ui::LiveTextLayer*>();
+        auto* scan=layer->findChild<QVariantAnimation*>("ocrScan"); QVERIFY(scan);
+        QTest::mouseClick(button,Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000);
+        QCOMPARE(scan->state(),QAbstractAnimation::Running); // finish the current pass before revealing
+        QTRY_COMPARE_WITH_TIMEOUT(scan->state(),QAbstractAnimation::Stopped,2000);
+        auto* phase=layer->findChild<QVariantAnimation*>("ocrPhase"); QVERIFY(phase);
+        QTRY_COMPARE_WITH_TIMEOUT(phase->state(),QAbstractAnimation::Stopped,1000);
+        QTest::keyClick(layer,Qt::Key_A,Qt::ControlModifier);
+        const QString selected=layer->selectedText(); QVERIFY(!selected.isEmpty());
+        // A right-click exposes the three text operations without copying an image.
+        QContextMenuEvent context(QContextMenuEvent::Mouse,QPoint(90,70),layer->mapToGlobal(QPoint(90,70)));
+        QApplication::sendEvent(layer,&context);
+        auto* menu=layer->findChild<QMenu*>(); QVERIFY(menu); QCOMPARE(menu->actions().size(),3);
+        QCOMPARE(menu->actions()[0]->text(),QString("Copy"));
+        QCOMPARE(menu->actions()[1]->text(),QString("Copy all text"));
+        QCOMPARE(menu->actions()[2]->text(),QString("Select all"));
+        menu->actions()[1]->trigger(); menu->close();
+        QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),selected.toUtf8());
+        QTRY_COMPARE_WITH_TIMEOUT(layer->findChild<QVariantAnimation*>("ocrToast")->state(),QAbstractAnimation::Stopped,2000);
+        for(const auto* animation:layer->findChildren<QVariantAnimation*>()) QCOMPARE(animation->state(),QAbstractAnimation::Stopped);
+        // Exportable rendering excludes the display-only dim/highlights.
+        const QString preview=qEnvironmentVariable("HYPRCAPTURE_OCR_PREVIEW");
+        if (!preview.isEmpty()) QVERIFY(editor.grab().save(preview));
+        const QImage before=editor.resultImage();
+        QTest::mouseClick(button,Qt::LeftButton);
+        QVERIFY(layer->isOn()); // preserve drawing-tool state until the off fade finishes
+        QTRY_VERIFY_WITH_TIMEOUT(!layer->isOn(),500);
+        QCOMPARE(editor.resultImage(),before);
+        for(const auto* animation:layer->findChildren<QVariantAnimation*>()) QCOMPARE(animation->state(),QAbstractAnimation::Stopped);
+    }
+    void ocrOverlayKeepsSessionOpen() {
+        qputenv("HYPRCAPTURE_REDUCED_MOTION","1");
+        QTemporaryDir output; QVERIFY(output.isValid());
+        hyprcapture::CaptureDefaults defaults; defaults.mode=hyprcapture::CaptureMode::Fullscreen;
+        defaults.ocr=fakeOcr(kOcrJson,{},"json","capture"); defaults.saveDir=output.path().toStdString();
+        defaults.save=true; defaults.clipboard=true; defaults.showThumbnail=true;
+        defaults.rememberSettings=false;
+        CaptureOverlay overlay(defaults,false,false,false,sessionJson(defaults));
+        overlay.show(); overlay.beginInPlaceEdit();
+        auto* editor=overlay.m_editor; QVERIFY(editor);
+        auto* layer=editor->findChild<hyprcapture::ui::LiveTextLayer*>();
+        QTest::mouseClick(editor->findChild<QToolButton*>("annotationLiveText"),Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000);
+        QVERIFY(editor->isVisible()); QVERIFY(!overlay.m_finishing);
+        QVERIFY(QDir(output.path()).entryList(QDir::Files|QDir::NoDotAndDotDot).isEmpty());
+        QCOMPARE(overlay.findChildren<QWidget*>("resultThumbnail").size(),0);
+        QVERIFY(!QFile::exists(QString::fromUtf8(readOcrFile(ocrFixture("ocr-png")))));
+    }
+    void ocrCopyOnlyAndFallback_data() {
+        QTest::addColumn<QString>("mode"); QTest::addColumn<QString>("format");
+        QTest::newRow("capture-json")<<QString("capture")<<QString("json");
+        QTest::newRow("layer-text-fallback")<<QString("text_layer")<<QString("text");
+        QTest::newRow("both-text-fallback")<<QString("both")<<QString("text");
+    }
+    void ocrCopyOnlyAndFallback() {
+        QFETCH(QString,mode); QFETCH(QString,format);
+        qputenv("HYPRCAPTURE_REDUCED_MOTION","1");
+        AnnotationEditor editor; showOcrEditor(editor,fakeOcr(format=="json"?kOcrJson:QByteArray("Plain text"),{},format.toStdString(),mode.toStdString()));
+        auto* button=editor.findChild<QToolButton*>("annotationLiveText");
+        auto* layer=editor.findChild<hyprcapture::ui::LiveTextLayer*>();
+        QVERIFY(!button->isCheckable());
+        if (format=="text") QCOMPARE(button->toolTip(),QString("Copy all text (engine has no text positions)"));
+        QSignalSpy feedback(layer,&hyprcapture::ui::LiveTextLayer::feedback);
+        QFile::remove(ocrFixture("ocr-notification"));
+        const QImage before=editor.resultImage(); QTest::mouseClick(button,Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000); QVERIFY(!layer->isOn());
+        const QByteArray expected=format=="json"?QString::fromUtf8("Hello world\n中文\nTilt").toUtf8():QByteArray("Plain text\n");
+        QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),expected);
+        QVERIFY(!feedback.isEmpty());
+        if(format=="text") QCOMPARE(feedback.back()[0].toString(),QString::fromUtf8("Engine has no text positions — copied all text"));
+        else QVERIFY(feedback.back()[0].toString().startsWith("Copied "));
+        QTest::mouseClick(button,Qt::LeftButton); QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000);
+        QVERIFY(feedback.back()[0].toString().startsWith("Copied "));
+        QCOMPARE(editor.resultImage(),before);
+        QVERIFY(!QFile::exists(ocrFixture("ocr-notification")));
+        QVERIFY(!QFile::exists(QString::fromUtf8(readOcrFile(ocrFixture("ocr-png")))));
+    }
+    void ocrEmptyErrorAndCancellation() {
+        qputenv("HYPRCAPTURE_REDUCED_MOTION","1");
+        const QString clipboard=qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD");
+        QFile marker(clipboard); QVERIFY(marker.open(QIODevice::WriteOnly|QIODevice::Truncate)); marker.write("sentinel"); marker.close();
+        AnnotationEditor editor; showOcrEditor(editor,fakeOcr(QByteArray{}));
+        auto* button=editor.findChild<QToolButton*>("annotationLiveText");
+        auto* layer=editor.findChild<hyprcapture::ui::LiveTextLayer*>();
+        QSignalSpy feedback(layer,&hyprcapture::ui::LiveTextLayer::feedback);
+        QTest::mouseClick(button,Qt::LeftButton); QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000);
+        QVERIFY(!layer->isOn()); QCOMPARE(feedback.back()[0].toString(),QString("No text found"));
+        QCOMPARE(readOcrFile(clipboard),QByteArray("sentinel"));
+        editor.setOcrConfig(fakeOcr({},"echo 'engine fixture error' >&2\nexit 7\n"),hyprcapture::NotificationBackend::System);
+        QTest::mouseClick(button,Qt::LeftButton); QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000);
+        QVERIFY(!layer->isOn()); QVERIFY(feedback.back()[1].toBool());
+        QVERIFY(feedback.back()[0].toString().contains("engine fixture error"));
+        QTRY_VERIFY(readOcrFile(ocrFixture("ocr-notification")).contains("engine fixture error"));
+        QCOMPARE(readOcrFile(clipboard),QByteArray("sentinel"));
+        auto slow=fakeOcr({},"echo $$ > '"+ocrFixture("ocr-pid").toUtf8()+"'\nsleep 20\n"); slow.timeout=30;
+        QFile::remove(ocrFixture("ocr-pid"));
+        editor.setOcrConfig(slow,hyprcapture::NotificationBackend::System);
+        QTest::mouseClick(button,Qt::LeftButton);
+        QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(ocrFixture("ocr-pid")),5000);
+        const int pid=readOcrFile(ocrFixture("ocr-pid")).trimmed().toInt(); QVERIFY(pid>0);
+        QElapsedTimer elapsed; elapsed.start(); editor.hide();
+        QVERIFY(elapsed.elapsed()<1500); QVERIFY(!layer->busy());
+        QTRY_VERIFY_WITH_TIMEOUT(kill(pid,0)!=0,1500);
+        QVERIFY(!QFile::exists(QString::fromUtf8(readOcrFile(ocrFixture("ocr-png")))));
+        QCOMPARE(readOcrFile(clipboard),QByteArray("sentinel"));
+    }
     void shotOverridesAndFinalImage_data() {
         QTest::addColumn<bool>("editor");
         QTest::addColumn<bool>("hdr");

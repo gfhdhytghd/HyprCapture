@@ -136,8 +136,6 @@ std::string validateOcrConfig(const OcrConfig& config) {
         return "ocr_languages must be a non-empty string of at most 4096 bytes without NUL";
     if (config.command.size() > 65536 || config.command.find('\0') != std::string::npos)
         return "ocr_command must be at most 65536 bytes without NUL";
-    if ((config.mode == "text_layer" || config.mode == "both") && config.engine == "command" && config.output == "text")
-        return "ocr_output=json is required for text_layer with ocr_engine=command";
     return {};
 }
 

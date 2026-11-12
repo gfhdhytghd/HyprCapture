@@ -4,6 +4,7 @@
 #include "shared/ocr_result.hpp"
 
 #include <filesystem>
+#include <stop_token>
 
 namespace hyprcapture {
 
@@ -20,6 +21,6 @@ OcrCommand splitOcrCommand(std::string_view command, std::string_view image);
 
 // Blocking worker API. Caller owns the SDR PNG and must remove it afterwards.
 // mode=off is an error. Never call from the compositor/UI event thread.
-OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& config);
+OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& config, std::stop_token stop = {});
 
 } // namespace hyprcapture

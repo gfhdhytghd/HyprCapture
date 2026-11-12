@@ -31,6 +31,7 @@ ClipboardSnapshotData captureClipboardSnapshotData();
 QString saveClipboardSnapshotData(const ClipboardSnapshotData& snapshot);
 bool saveClipboardSnapshotDataToPath(const ClipboardSnapshotData& snapshot, const QString& path);
 QString saveClipboardSnapshot();
+bool copyTextToClipboardDetached(const QString& text);
 bool copyImageToClipboard(const QImage& image);
 bool copyImageToClipboardDetached(const QImage& image);
 bool copyImageFileToClipboardDetached(const QString& path, const QString& mimeType = QStringLiteral("image/png"), bool removeAfterCopy = false);
