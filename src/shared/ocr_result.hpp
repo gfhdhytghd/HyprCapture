@@ -32,6 +32,8 @@ OcrResponse parseOcrJsonLines(std::string_view input);
 OcrResponse parseTesseractTsv(std::string_view input);
 OcrResponse parsePaddleOcrJson(std::string_view input);
 bool ocrSupportsTextLayer(const std::vector<OcrResult>& results);
+std::vector<std::vector<std::size_t>> ocrReadingRows(const std::vector<OcrResult>& results);
+std::string ocrTextSeparator(std::string_view previous, std::string_view next);
 std::string joinOcrText(const std::vector<OcrResult>& results);
 
 } // namespace hyprcapture

@@ -33,6 +33,7 @@ extern "C" {
 #include "plugin/session_lock.hpp"
 #include "plugin/timing.hpp"
 #include "shared/thumbnail_config.hpp"
+#include "shared/ocr_warning.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 
@@ -85,10 +86,12 @@ std::string configString(const std::string& suffix, const std::string& fallback)
     if (type == typeid(Config::STRING))
         return **reinterpret_cast<Config::STRING* const*>(value.dataptr);
 
+#ifdef HYPRLANG_VERSION
     if (type == typeid(Hyprlang::STRING)) {
         const auto raw = *reinterpret_cast<Hyprlang::STRING const*>(value.dataptr);
         return raw ? std::string(raw) : fallback;
     }
+#endif
 
     return fallback;
 }
@@ -218,6 +221,12 @@ void registerConfigValues() {
     addStringConfig("thumbnail_position", "Result thumbnail position", "bottom_right");
     addStringConfig("thumbnail_border_color", "Result thumbnail border color", "");
     addBoolConfig("thumbnail_animation", "Animate result thumbnail swipe reset and dismissal", true);
+    addStringConfig("ocr_mode", "OCR editor tool: off, capture, text_layer, both", "off");
+    addStringConfig("ocr_engine", "External OCR engine: tesseract, paddleocr, command", "tesseract");
+    addStringConfig("ocr_languages", "Tesseract language expression", "eng+chi_sim");
+    addStringConfig("ocr_command", "OCR argv command with {image} substitution", "");
+    addStringConfig("ocr_output", "Custom OCR output: text or json", "text");
+    addIntConfig("ocr_timeout", "OCR deadline in seconds", 30);
     addStringConfig("helper", "Optional helper executable override", "");
     addStringConfig("watermark", "Watermark path or built-in name", "");
     addStringConfig("watermark_position", "Watermark position", "central");
@@ -233,6 +242,12 @@ SDispatchResult dispatchResult(const hyprcapture::LaunchResult& result) {
 
 hyprcapture::CaptureDefaults readDefaults() {
     hyprcapture::CaptureDefaults defaults;
+    defaults.ocr.mode = configString("ocr_mode", defaults.ocr.mode);
+    defaults.ocr.engine = configString("ocr_engine", defaults.ocr.engine);
+    defaults.ocr.languages = configString("ocr_languages", defaults.ocr.languages);
+    defaults.ocr.command = configString("ocr_command", defaults.ocr.command);
+    defaults.ocr.output = configString("ocr_output", defaults.ocr.output);
+    defaults.ocr.timeout = configInt("ocr_timeout", defaults.ocr.timeout);
     defaults.mode = hyprcapture::parseCaptureMode(configString("default_mode", hyprcapture::toString(defaults.mode)), defaults.mode);
     defaults.fullscreenScope =
         hyprcapture::parseFullscreenScope(configString("fullscreen_scope", hyprcapture::toString(defaults.fullscreenScope)), defaults.fullscreenScope);
@@ -671,6 +686,12 @@ void registerLuaFunctions() {
     }
 }
 
+hyprcapture::OcrFallbackWarning g_ocrFallbackWarning;
+void warnOcrFallback() {
+    if (g_ocrFallbackWarning.update(readDefaults().ocr))
+        hyprcapture::notifyUser(hyprcapture::OcrFallbackWarning::message, hyprcapture::NotificationLevel::Warning, 8000);
+}
+
 void restoreConfigRegistrations() {
     hyprcapture::registerForConfigManager(g_registrationManager, Config::mgr(), [] {
         // Recreate Values V2 after the old manager has gone. Holding their
@@ -695,7 +716,11 @@ void unregisterLuaFunctions() {
 void requireMatchingABI() {
     const auto abiPrefix = [](std::string version) { return version.substr(0, version.find_last_of('.')); };
     const std::string client = std::string(GIT_COMMIT_HASH) + "_aq_" + abiPrefix(AQUAMARINE_VERSION) + "_hu_" + abiPrefix(HYPRUTILS_VERSION) + "_hg_" +
-        abiPrefix(HYPRGRAPHICS_VERSION) + "_hc_" + abiPrefix(HYPRCURSOR_VERSION) + "_hlg_" + abiPrefix(HYPRLANG_VERSION);
+        abiPrefix(HYPRGRAPHICS_VERSION) + "_hc_" + abiPrefix(HYPRCURSOR_VERSION)
+#ifdef HYPRLANG_VERSION
+        + "_hlg_" + abiPrefix(HYPRLANG_VERSION)
+#endif
+        ;
     const std::string runtime = __hyprland_api_get_hash();
     if (runtime != client)
         throw std::runtime_error("[HyprCapture] Hyprland header/runtime ABI mismatch: runtime=" + runtime + "; client=" + client);
@@ -722,9 +747,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     installOverlayLayerRule();
 
     refreshTimingConfig();
+    warnOcrFallback();
     g_configReloadListeners.listen(Event::bus()->m_events.config, restoreConfigRegistrations, [] {
         installOverlayLayerRule();
         refreshTimingConfig();
+        warnOcrFallback();
     });
     g_timingTickListener = Event::bus()->m_events.tick.listen([] {
         if (std::chrono::steady_clock::now() >= g_nextTimingRefresh)

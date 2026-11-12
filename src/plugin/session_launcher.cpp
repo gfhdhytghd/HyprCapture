@@ -469,6 +469,12 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     if (request.recordActive)
         args.push_back("--record-active");
     if (resultConnection.fd >= 0) args.push_back("--shot-result-stdout");
+    args.insert(args.end(), {"--ocr-mode", request.defaults.ocr.mode,
+                             "--ocr-engine", request.defaults.ocr.engine,
+                             "--ocr-languages", request.defaults.ocr.languages,
+                             "--ocr-command", request.defaults.ocr.command,
+                             "--ocr-output", request.defaults.ocr.output,
+                             "--ocr-timeout", std::to_string(request.defaults.ocr.timeout)});
     args.push_back("--session-json-stdin");
 
     std::vector<char*> argv;

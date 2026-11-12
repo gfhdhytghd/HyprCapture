@@ -931,6 +931,12 @@ int main(int argc, char** argv) {
         {"recording-transcode-duration-ms", "Expected transcode duration.", "ms", "1"},
         {"thumbnail-delete-root", "Directory where thumbnail files may be deleted.", "path"},
         {"restore-clipboard", "Clipboard snapshot to restore when deleting the thumbnail image.", "path"},
+        {"ocr-mode", "OCR editor tool mode.", "mode", "off"},
+        {"ocr-engine", "External OCR engine.", "engine", "tesseract"},
+        {"ocr-languages", "Tesseract languages.", "languages", "eng+chi_sim"},
+        {"ocr-command", "OCR argv command with {image} substitution.", "command", ""},
+        {"ocr-output", "Custom OCR output: text or json.", "format", "text"},
+        {"ocr-timeout", "OCR deadline in seconds.", "seconds", "30"},
         {"quick", "Capture immediately."},
         {"record", "Use the overlay to start a compositor-side recording."},
         {"record-active", "Show recording controls as active."},
@@ -1045,6 +1051,14 @@ int main(int argc, char** argv) {
     }
 
     hyprcapture::CaptureDefaults defaults;
+    defaults.ocr.mode = parser.value("ocr-mode").toStdString();
+    defaults.ocr.engine = parser.value("ocr-engine").toStdString();
+    defaults.ocr.languages = parser.value("ocr-languages").toStdString();
+    defaults.ocr.command = parser.value("ocr-command").toStdString();
+    defaults.ocr.output = parser.value("ocr-output").toStdString();
+    bool ocrTimeoutValid = false;
+    defaults.ocr.timeout = parser.value("ocr-timeout").toLongLong(&ocrTimeoutValid);
+    if (!ocrTimeoutValid || !hyprcapture::validateOcrConfig(defaults.ocr).empty()) parser.showHelp(1);
     defaults.mode = hyprcapture::parseCaptureMode(parser.value("mode").toStdString(), defaults.mode);
     defaults.fullscreenScope = hyprcapture::parseFullscreenScope(parser.value("fullscreen-scope").toStdString(), defaults.fullscreenScope);
     defaults.overlayScope = hyprcapture::parseOverlayScope(parser.value("overlay-scope").toStdString(), defaults.overlayScope);
