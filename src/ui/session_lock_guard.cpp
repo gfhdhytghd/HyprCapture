@@ -73,7 +73,7 @@ bool SessionLockGuard::cancelled() {
         const auto bytes = recv(m_startupFd, command, sizeof(command), MSG_PEEK | MSG_DONTWAIT | MSG_TRUNC);
         // A helper still initializing can connect after a fast lock/unlock.
         // Its original capture channel must retain that cancellation too.
-        if (bytes == 6 && std::memcmp(command, "cancel", 6) == 0) cancel();
+        if (bytes == 6 && std::memcmp(command, "cancel", 6) == 0) { m_captureCancelled = true; cancel(); }
     }
     if (!m_cancelled) {
         char state[16];

@@ -74,6 +74,16 @@ int main(int argc, char** argv) {
         app.removeEventFilter(&laterFilter);
     }
     {
+        int lock[2], startup[2];
+        require(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, lock) == 0 &&
+                socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, startup) == 0, "capture cancellation channels");
+        SessionLockGuard guard(lock[1]);
+        guard.setStartupControl(startup[1]);
+        require(send(startup[0], "cancel", 6, MSG_NOSIGNAL) == 6, "queue explicit capture cancel");
+        require(guard.cancelled() && guard.captureCancelled(), "explicit cancellation is distinguishable from session lock");
+        close(lock[0]); close(startup[0]); close(startup[1]);
+    }
+    {
         SessionLockGuard unavailable(-1);
         require(unavailable.cancelled(), "missing compositor channel fails closed");
     }

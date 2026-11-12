@@ -13,6 +13,7 @@ struct LaunchRequest {
     bool            quick = false;
     bool            record = false;
     bool            recordActive = false;
+    std::string     shotSocket;
 };
 
 struct LaunchResult {
@@ -24,6 +25,7 @@ std::optional<std::string> recordingHelperPath(const CaptureDefaults& defaults);
 
 LaunchResult launchHelper(const LaunchRequest& request);
 LaunchResult cancelCaptureHelpers();
+LaunchResult cancelShotHelper(const std::string& socket);
 LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const std::string& outputPath, const std::string& pendingSocket = {});
 LaunchResult launchRecordingTranscodeHelper(const CaptureDefaults& defaults,
                                             const std::string&     inputPath,
