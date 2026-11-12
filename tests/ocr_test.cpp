@@ -1,4 +1,5 @@
 #include "shared/ocr_engine.hpp"
+#include "shared/ocr_warning.hpp"
 #include "shared/protocol.hpp"
 #include "shared/trusted_path.hpp"
 
@@ -122,6 +123,13 @@ void parser() {
     p = paddle(); p["rec_scores"][0] = 2; check(!parsePaddleOcrJson(p.dump()), "Paddle confidence");
     p = paddle(); p["rec_polys"][0] = Json::array(); check(!parsePaddleOcrJson(p.dump()), "Paddle polygon");
     p = paddle(); p.erase("rec_texts"); check(!parsePaddleOcrJson(p.dump()), "Paddle required arrays");
+    p = paddle();
+    p["text_word"] = {{"中", "文"}, {"rotated"}};
+    p["text_word_boxes"] = {{{0,0,10,10},{10,0,20,10}}, {{{50,50},{60,60},{50,70},{40,60}}}};
+    r = parsePaddleOcrJson(p.dump()); success(r,"Paddle word boxes");
+    check(r.results.size()==3 && r.results[0].level==OcrLevel::Word && r.results[2].poly.size()==4,"word geometry preserves adapter level");
+    p["text_word"][0].push_back("extra"); check(!parsePaddleOcrJson(p.dump()),"Paddle word arrays mismatch");
+
 }
 void configTests() {
     auto c = OcrConfig{};
@@ -135,9 +143,19 @@ void configTests() {
         check(!setOcrConfigValue(c, key, value, error) && !error.empty(), "invalid configuration");
         check(c.mode == "capture" && c.timeout == 10 && c.languages == "eng", "failed set leaves config unchanged");
     }
+    OcrFallbackWarning warning;
     c.mode = "text_layer"; c.output = "text";
-    check(!validateOcrConfig(c).empty(), "text-only text_layer rejected");
-    c.mode = "both"; check(!validateOcrConfig(c).empty(), "text-only both rejected");
+    check(warning.update(c), "fallback warns at first config load");
+    check(!warning.update(c), "same config reload does not warn");
+    c.languages = "chi_sim";
+    check(warning.update(c), "changed config warns once");
+    check(!warning.update(c), "capture reads do not repeat warning");
+    c.output = "json"; check(!warning.update(c), "geometry config resets warning key");
+    c.output = "text"; check(warning.update(c), "returning to fallback warns");
+    c.languages = "eng";
+
+    check(validateOcrConfig(c).empty(), "text-only text_layer uses copy fallback");
+    c.mode = "both"; check(validateOcrConfig(c).empty(), "text-only both uses copy fallback");
     c.output = "json"; check(validateOcrConfig(c).empty(), "JSON text_layer accepted");
     CaptureSession session; session.id = "ocr-test"; session.defaults.ocr = c;
     const auto encoded = encodeSessionJson(session);
@@ -166,7 +184,7 @@ void adapters() {
     const std::string paddleScript =
         "#!/bin/sh\n[ \"$1\" = ocr ] && [ \"$2\" = -i ] && [ \"$4\" = --save_path ] || exit 9\n"
         "[ \"$6\" = --use_doc_orientation_classify ] && [ \"$7\" = False ] && [ \"$8\" = --use_doc_unwarping ] && [ \"$9\" = False ] || exit 10\n"
-        "[ \"${10}\" = --use_textline_orientation ] && [ \"${11}\" = False ] && [ \"${12}\" = --enable_mkldnn ] && [ \"${13}\" = False ] && [ \"$#\" = 13 ] || exit 11\n"
+        "[ \"${10}\" = --use_textline_orientation ] && [ \"${11}\" = False ] && [ \"${12}\" = --enable_mkldnn ] && [ \"${13}\" = False ] && [ \"${14}\" = --return_word_box ] && [ \"${15}\" = True ] && [ \"$#\" = 15 ] || exit 11\n"
         "stat -c %a \"$5\" > \"${3}.mode\"\nprintf '%s' \"$5\" > \"${3}.temp\"\n"
         "name=${3##*/}; name=${name%.*}\ncat > \"$5/${name}_res.json\" <<'JSON'\n" + paddle().dump() + "\nJSON\n"
         "printf 'numpy.float64(0.99): ignored logs\\n'\n";

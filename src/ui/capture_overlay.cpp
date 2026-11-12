@@ -5263,6 +5263,7 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
     if (!m_editor) {
         m_editor = new AnnotationEditor(this);
         m_editor->setObjectName("inPlaceEditor");
+        m_editor->setOcrConfig(m_defaults.ocr, m_defaults.notificationBackend, !hyprcapture::ui::shotResultEnabled());
         if (auto* canvas = m_editor->findChild<QWidget*>("annotationCanvas")) canvas->installEventFilter(this);
         connect(m_editor, &AnnotationEditor::previewChanged, this, [this] {
             m_hdrEditPreviewDirty = true;

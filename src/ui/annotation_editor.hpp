@@ -7,6 +7,7 @@
 #include <memory>
 #include <functional>
 #include "ui/scroll_stitcher.hpp"
+#include "shared/config.hpp"
 
 struct AnnotationSnapshot;
 struct HdrAnnotationPreview {
@@ -36,6 +37,7 @@ class AnnotationEditor final : public QWidget {
     std::function<HdrAnnotationPreview()> pqPreviewFrameRendererOn(const QImage& hdrBase, float referenceNits, bool baseOnly = false) const;
     bool needsHdrAnnotationComposition() const;
     void setHdrEnabled(bool enabled);
+    void setOcrConfig(const hyprcapture::OcrConfig& config, hyprcapture::NotificationBackend backend, bool allowed = true);
     // Save is redundant when confirming already writes the capture.
     void setSaveActionVisible(bool visible);
     bool hdrEnabled() const;

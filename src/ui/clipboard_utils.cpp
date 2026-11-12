@@ -1,5 +1,6 @@
 #include "ui/clipboard_utils.hpp"
 #include "shared/process_environment.hpp"
+#include "shared/ocr_result.hpp"
 #include "shared/trusted_path.hpp"
 
 #include <QBuffer>
@@ -552,6 +553,16 @@ QString saveClipboardSnapshotData(const ClipboardSnapshotData& snapshot) {
 
 QString saveClipboardSnapshot() {
     return saveClipboardSnapshotData(captureClipboardSnapshotData());
+}
+
+bool copyTextToClipboardDetached(const QString& text) {
+    const QByteArray bytes = text.toUtf8();
+    if (bytes.isEmpty() || bytes.size() > static_cast<qsizetype>(OcrMaxBytes)) return false;
+    const QString path = runtimeFile("clipboard-text", ".txt");
+    if (path.isEmpty() || !writePrivateFile(path, bytes)) return false;
+    if (copyFileWithWlCopyDetached(path, QStringLiteral("text/plain;charset=utf-8"), true)) return true;
+    QFile::remove(path);
+    return false;
 }
 
 bool copyImageToClipboard(const QImage& image) {

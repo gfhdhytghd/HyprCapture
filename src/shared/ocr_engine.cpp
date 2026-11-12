@@ -92,7 +92,8 @@ std::vector<std::string> environment() {
 }
 
 struct ProcessOutput { std::string out, error; };
-ProcessOutput run(std::vector<std::string> args, std::int64_t timeout) {
+ProcessOutput run(std::vector<std::string> args, std::int64_t timeout, std::stop_token stop) {
+    if (stop.stop_requested()) return {{}, "OCR cancelled"};
     args[0] = executable(args[0]);
     const auto shell = executable("sh");
     if (args[0].empty() || shell.empty()) return {{}, "OCR executable not found or not trusted"};
@@ -119,6 +120,7 @@ ProcessOutput run(std::vector<std::string> args, std::int64_t timeout) {
     std::string stdoutText, stderrText, failure;
     bool statusClosed = false;
     while (output.value >= 0 || errors.value >= 0 || !statusClosed) {
+        if (stop.stop_requested()) { failure = "OCR cancelled"; break; }
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
         if (remaining <= 0) { failure = "OCR timed out (ocr_timeout=" + std::to_string(timeout) + "s)"; break; }
         pollfd fds[] = {{output.value, POLLIN, 0}, {errors.value, POLLIN, 0}, {statusClosed ? -1 : process.statusFd, 0, 0}};
@@ -233,7 +235,8 @@ OcrCommand splitOcrCommand(std::string_view command, std::string_view image) {
     return result;
 }
 
-OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& config) {
+OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& config, std::stop_token stop) {
+    if (stop.stop_requested()) return {{}, "OCR cancelled"};
     if (const auto error = validateOcrConfig(config); !error.empty()) return {{}, error};
     if (config.mode == "off") return {{}, "OCR is disabled: set ocr_mode"};
     std::error_code ec;
@@ -248,7 +251,7 @@ OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& conf
         if (!temporary.create()) return {{}, "paddleocr private directory creation failed"};
         args = {"paddleocr", "ocr", "-i", image.string(), "--save_path", temporary.path.string(),
                 "--use_doc_orientation_classify", "False", "--use_doc_unwarping", "False",
-                "--use_textline_orientation", "False", "--enable_mkldnn", "False"};
+                "--use_textline_orientation", "False", "--enable_mkldnn", "False", "--return_word_box", "True"};
         // Paddle 3.x's recognition pipeline does not accept Tesseract language
         // expressions. Its CLI/model selection is described in docs/ocr.md.
     } else {
@@ -256,7 +259,7 @@ OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& conf
         if (!parsed) return {{}, parsed.error};
         args = std::move(parsed.argv);
     }
-    auto output = run(std::move(args), config.timeout);
+    auto output = run(std::move(args), config.timeout, stop);
     if (!output.error.empty()) return {{}, output.error};
     if (config.engine == "tesseract") return parseTesseractTsv(output.out);
     if (config.engine == "paddleocr") return readPaddle(temporary.path / (image.stem().string() + "_res.json"));

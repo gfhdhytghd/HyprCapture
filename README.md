@@ -438,6 +438,46 @@ The plugin captures native, cursor-free frames while excluding this helper's lay
 
 Image matching uses a bounded CPU worker and preserves source pixels; it does not infer displacement from wheel distances. The limits are 200 accepted frames, 64 megapixels, 32,768 output rows and five minutes. Closing the target or changing its geometry/scale stops new capture and leaves confirmed content available. Both plugin and helper must support scroll-session version 1; older plugins retain ordinary capture and editing.
 
+### OCR
+
+Enable the editor tool in your Hyprland Lua configuration:
+
+```lua
+hl.plugin.hyprcapture.ocr_mode = "text_layer" -- select recognized text
+-- Use "capture" for one-click recognition and copying of the whole image.
+hl.plugin.hyprcapture.ocr_engine = "tesseract"
+hl.plugin.hyprcapture.ocr_languages = "eng+chi_sim"
+hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.open_editor)
+```
+
+Open the annotation editor, click **Live text (O)** or press **O**, then drag over
+recognized text. Double-click selects a word; triple-click selects a line.
+**Ctrl+A** selects all text and **Ctrl+C** copies the selection. The context menu
+also offers **Copy**, **Copy all text**, and **Select all**. Press **O** or **Esc**
+to hide the text layer and return to the drawing tool. OCR reads the original
+image at physical resolution, without annotations. It never changes the image,
+annotation history, capture output, or save directory. Results are cached until
+the base image changes. The tool is hidden in blocking `shot` sessions.
+
+With `ocr_mode = "capture"`, one click copies all recognized text. With
+`text_layer` or `both`, a `command` engine returning `text` uses the same fallback:
+a warning appears once per configuration change, the tooltip explains the
+fallback, and the first successful click in each editor session explains it in
+a toast. Use `ocr_output = "json"` to supply text positions.
+
+- **Tesseract:** install Tesseract and the selected tessdata packages, for example
+  `tesseract-data-eng` and `tesseract-data-chi_sim`.
+- **PaddleOCR:** install PaddleOCR 3.x on PATH. Its installed model controls the
+  language. The adapter requests word boxes and retains line geometry when word
+  boxes are unavailable. Cold model loading can require a longer `ocr_timeout`.
+- **Command:** set `ocr_engine = "command"` and `ocr_command` to an argv command
+  containing `{image}`. `ocr_output = "text"` copies plain stdout;
+  `ocr_output = "json"` accepts polygon JSON Lines. No shell is evaluated.
+
+The scan, text reveal, selection flash, and toast use local editor animations.
+Set `HYPRCAPTURE_REDUCED_MOTION=1` or `QT_ANIMATIONS_DISABLED=1` to make them instant.
+See [OCR engines and output format](docs/ocr.md) for examples and limits.
+
 ### In-place screenshot editing
 
 Use `hl.plugin.hyprcapture.open_editor()` or `open_editor(mode)` to keep the capture overlay open after selecting a screenshot target. Bind it to a separate shortcut from `open()` to choose the editor or direct-output flow for each capture. The editor shows the rendered screenshot with the configured window background, border, shadow, cursor, and watermark options. Annotations use native image coordinates, so exported edits retain their position at the original capture resolution.
@@ -676,12 +716,12 @@ remain subject to `window_background`; no margin is added around its content.
 | `notification_backend` | string | `system` | Backend for screenshot notifications plus non-error recording status and warnings. `hyprland` uses Hyprland's overlay; `system` uses the desktop notification service through `notify-send` (libnotify), includes the saved screenshot as its image/icon hint, and falls back to the Hyprland overlay when the command cannot be launched. Errors always use the Hyprland overlay so missing external notification infrastructure cannot hide failures. |
 | `include_cursor` | bool | `false` | Include the cursor visible when the capture session starts in fullscreen, region, and window screenshots. The interactive overlay cursor is not baked into the output. |
 | `language` | string | `auto` | UI language: `auto`, `en`, `zh_CN`, `zh_TW`, `ja`, `de`, `fr`, `es`, or `ko`. `auto` uses `HYPRCAPTURE_LANGUAGE` when set, then the system locale. Explicit language values take precedence; missing translations fall back to English. |
-| `ocr_mode` | string | `off` | Used by upcoming OCR actions; no user-facing action yet. `off`, `capture`, `text_layer`, or `both`. Plugin registration/helper CLI wiring is pending. See [OCR engines](docs/ocr.md). |
-| `ocr_engine` | string | `tesseract` | Used by upcoming OCR actions. External adapter: `tesseract`, `paddleocr`, or `command`. |
-| `ocr_languages` | string | `eng+chi_sim` | Used by upcoming OCR actions. Tesseract language expression. PaddleOCR uses its installed default model; use `command` for explicit model/language arguments. |
-| `ocr_command` | string | empty | Used by upcoming OCR actions with `ocr_engine=command`. Quoted argv with `{image}` substitution; no shell evaluation. |
-| `ocr_output` | string | `text` | Used by upcoming OCR actions with `ocr_engine=command`. `text` is capture-only; `json` is polygon JSON Lines for capture/text layer. |
-| `ocr_timeout` | integer | `30` | Used by upcoming OCR actions. Deadline in seconds, `1..86400`; timeout kills the engine process group. |
+| `ocr_mode` | string | `off` | Editor OCR tool: `off`, `capture` (copy all), `text_layer` (select text), or `both`. See [OCR](#ocr). |
+| `ocr_engine` | string | `tesseract` | External adapter: `tesseract`, `paddleocr`, or `command`. |
+| `ocr_languages` | string | `eng+chi_sim` | Tesseract language expression. PaddleOCR uses its installed default model; use `command` for explicit model/language arguments. |
+| `ocr_command` | string | empty | For `ocr_engine=command`. Quoted argv with `{image}` substitution; no shell evaluation. |
+| `ocr_output` | string | `text` | For `ocr_engine=command`. `text` copies all text; `json` supplies polygons for selectable text. |
+| `ocr_timeout` | integer | `30` | Deadline in seconds, `1..86400`; timeout kills the engine process group. |
 | `remember_settings` | bool | `false` | Restore only dropdown choices: fullscreen scope, window background, recording format/codec/FPS/duration/backend and sound mode/devices/mix preset. Capture mode and volume sliders are not saved or restored. Saves on capture or cancel (including Esc) to `$XDG_CONFIG_HOME/hyprcapture/last-settings.ini` (default `~/.config/hyprcapture/last-settings.ini`). Quick capture and the stop-recording UI bypass this state. The open/record dispatcher still determines screenshot versus recording. Saved choices override configured defaults while enabled; disabling this option uses the configured defaults again. |
 | `allow_quick` | bool | `false` | Enable no-confirmation `hl.plugin.hyprcapture.quick()` calls. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |
 | `confirm_before_capture` | bool | `false` | For `hl.plugin.hyprcapture.open()`, require an explicit confirmation after choosing a fullscreen, region, or window target. Region targets can be moved or resized; window targets can be switched before confirming. `quick()` and direct `record()` calls keep their existing no-extra-confirmation behavior. |

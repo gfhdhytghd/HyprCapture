@@ -1,11 +1,15 @@
 # OCR engine layer
 
-This is the engine layer for upcoming OCR actions. There is no OCR button,
-`open("ocr")` action, selectable text layer, or helper CLI/config registration
-in this phase. The shared configuration and session protocol carry the settings;
-plugin registration and helper argument forwarding belong to phase 2b.
-HyprCapture does not link any OCR library. The layer is Qt-free and runs external
-programs synchronously. Call it from a worker, not the compositor/UI event thread.
+The annotation editor exposes **Live text (O)** for whole-image recognition.
+`text_layer` and `both` provide a selectable text layer; `capture` copies all text
+on one click. No standalone Lua OCR action or capture-overlay toolbar button is
+registered. `shot` sessions hide the editor tool. Recognition uses the captured
+SDR base image at physical resolution, without annotations, on a cancellable
+worker. Its private PNG is deleted before results are delivered and on cancellation.
+Closing the editor or turning the layer off kills the engine process group.
+
+HyprCapture does not link an OCR library. The shared engine is Qt-free and runs
+external programs synchronously; compositor and UI callers must use a worker.
 
 ## Configuration
 
@@ -18,10 +22,11 @@ programs synchronously. Call it from a worker, not the compositor/UI event threa
 | `ocr_output` | `text` | `text`, `json`; used only by `command` |
 | `ocr_timeout` | `30` | Integer seconds, `1..86400` |
 
-`off` makes the engine API fail with a message naming `ocr_mode`. The future
-`capture` action will copy recognition text. `text_layer` will supply selectable
-polygons in the editor. `both` enables both uses. `command` with `text` output
-cannot be configured for `text_layer` or `both`; use `json` instead.
+`off` hides the editor tool and makes the engine API fail. `capture` copies
+`joinOcrText()` for the entire image; `text_layer` and `both` allow text selection
+with polygons. A command returning plain `text` falls back to copying all text.
+The plugin warns once per configuration change; the editor supplies a fallback
+tooltip and a first-successful-click toast. Results are cached per base image.
 
 The agreed design does not specify numerical timeout or string limits. The
 implementation adds the defensive bounds above. OCR fields in old session JSON
@@ -54,7 +59,7 @@ returns no partial results and an error naming the line number.
 
 `command` with `ocr_output=text` preserves all stdout, including final newlines,
 as one `OcrResult` with an empty polygon. This representation is permitted only
-for that adapter mode. `ocrSupportsTextLayer()` rejects such results. Future text
+for that adapter mode. `ocrSupportsTextLayer()` rejects such results. Text
 layer callers must check this predicate before using geometry.
 
 ## External adapters
@@ -75,12 +80,12 @@ with the TSV line number.
 ### PaddleOCR 3.x
 
 ```text
-paddleocr ocr -i <png> --save_path <private-directory> --use_doc_orientation_classify False --use_doc_unwarping False --use_textline_orientation False --enable_mkldnn False
+paddleocr ocr -i <png> --save_path <private-directory> --use_doc_orientation_classify False --use_doc_unwarping False --use_textline_orientation False --enable_mkldnn False --return_word_box True
 ```
 
 The adapter reads `<png-stem>_res.json`, not stdout logs. The saved plain JSON
-contains parallel `rec_texts`, `rec_polys`, and `rec_scores` arrays. Each result
-has `level=line`. This saved-file format comes from the agreed design's local
+contains parallel `rec_texts`, `rec_polys`, and `rec_scores` arrays. If `text_word` and `text_word_boxes` are present, the adapter emits `level=word`
+with the saved word geometry. Otherwise it retains `level=line`. This saved-file format comes from the agreed design's local
 PaddleOCR 3.4.0 verification. The engine disables MKLDNN by default, as required
 by the task card's command, to avoid the recorded oneDNN
 `ConvertPirAttribute2RuntimeAttribute` failure.
@@ -137,7 +142,7 @@ descendants. As with other group-based supervision, a child that deliberately
 creates a new session is outside that group. Failures return no partial results.
 Process errors include the first stderr line, truncated to 1024 bytes.
 
-The caller supplies a readable SDR PNG. The future capture action owns its
+The caller supplies a readable SDR PNG. The editor worker owns its
 owner-only temporary PNG and must remove it after the call. The engine never
 removes a caller-owned input file.
 
@@ -157,7 +162,7 @@ Public entry points:
 std::string validateOcrConfig(const OcrConfig&);
 bool setOcrConfigValue(OcrConfig&, std::string_view key, std::string_view value, std::string& error);
 OcrCommand splitOcrCommand(std::string_view command, std::string_view image);
-OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig&);
+OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig&, std::stop_token stop = {});
 OcrResponse parseOcrJsonLines(std::string_view);
 OcrResponse parseTesseractTsv(std::string_view);
 OcrResponse parsePaddleOcrJson(std::string_view);
@@ -168,7 +173,8 @@ std::string joinOcrText(const std::vector<OcrResult>&);
 `CaptureDefaults::ocr` carries all six keys. `OcrResponse` contains `results` or
 a nonempty `error`; its boolean conversion tests success. The standalone static
 target `hyprcapture-ocr` supplies the complete engine and process dependencies.
-It is not linked into the UI/plugin until the future action wiring.
+The editor links this target through `hyprcapture-live-text`. The compositor only
+forwards configuration and never runs an OCR process.
 
 ## Offline tests
 
@@ -208,3 +214,27 @@ skip when the engine is absent. The PaddleOCR smoke check prepends
 `~/data/model/.venv/bin` to PATH. These optional checks invoke real engines and
 may require models already installed locally; the default offline suite never
 downloads models or invokes a real engine.
+
+## Editor layer and PaddleOCR probe
+
+The text layout uses the same `ocrReadingRows()` and `ocrTextSeparator()` as
+`joinOcrText()`. Selection offsets are UTF-16 grapheme boundaries. Character
+areas interpolate along each polygon's baseline with advance weights 1.0 for
+CJK/full-width characters and 0.55 otherwise. Pointer hit-testing uses the inverse
+canvas transform, so zoom, pan, and rotated text retain image coordinates.
+Double-click selects a word; triple-click selects its reading-order row.
+
+The local PaddleOCR 3.4.0 probe with `--return_word_box True`, run under
+`capmem 6G`, saved `text_word` and `text_word_boxes` in `input_res.json` for
+"Hello OCR 123". Word boxes were `[x0,y0,x1,y1]`; the parser also accepts polygon
+word boxes and validates parallel array lengths. The probe artifacts and command
+output are recorded in this task's result card. This confirms one installed
+engine and sample, not every PaddleOCR model or language.
+
+For the complete offscreen suite, build the main project with `BUILD_TESTING=ON`
+and run `tests/ocr_test_env.sh ctest --test-dir build --output-on-failure -j1`.
+The wrapper applies `capmem 8G` before isolating the runtime/DBus environment,
+uses a private mount/network namespace, and confines writable host paths to the
+build directory. It supplies trusted disposable clipboard/engine fixtures via a
+synthetic Nix store. Run the suite after compilation finishes; image-registration
+and HEIC tests have independent per-test timeouts.

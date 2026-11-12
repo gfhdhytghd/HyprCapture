@@ -170,6 +170,36 @@ OcrResponse parsePaddleOcrJson(std::string_view input) {
             result.text = obj["rec_texts"][i].get<std::string>();
             polygon(obj["rec_polys"][i], result);
             confidence(obj["rec_scores"][i], result);
+            if (obj.contains("text_word_boxes") || obj.contains("text_word")) {
+                if (!obj.contains("text_word_boxes") || !obj.contains("text_word") ||
+                    !obj["text_word_boxes"].is_array() || !obj["text_word"].is_array() ||
+                    obj["text_word_boxes"].size() != size || obj["text_word"].size() != size)
+                    throw std::runtime_error("word arrays must match recognition lines");
+                const auto& boxes = obj["text_word_boxes"][i];
+                const auto& words = obj["text_word"][i];
+                if (!boxes.is_array() || !words.is_array() || boxes.size() != words.size())
+                    throw std::runtime_error("word boxes and texts must have equal lengths");
+                // Older PaddleOCR versions omit word boxes. Empty word arrays
+                // retain the line geometry instead of losing recognized text.
+                if (!words.empty()) {
+                    for (std::size_t j = 0; j < words.size(); ++j) {
+                        if (!words[j].is_string()) throw std::runtime_error("word text must be a string");
+                        if (response.results.size() >= OcrMaxResults) throw std::runtime_error("too many OCR words");
+                        OcrResult word;
+                        word.text = words[j].get<std::string>(); word.level = OcrLevel::Word; word.conf = result.conf;
+                        const auto& box = boxes[j];
+                        if (box.is_array() && box.size() == 4 && box[0].is_number()) {
+                            const double x0 = box[0].get<double>(), y0 = box[1].get<double>();
+                            const double x1 = box[2].get<double>(), y1 = box[3].get<double>();
+                            if (x1 <= x0 || y1 <= y0) throw std::runtime_error("word box must have positive dimensions");
+                            polygon(Json::array({{x0,y0},{x1,y0},{x1,y1},{x0,y1}}),word);
+                        } else polygon(box,word);
+                        response.results.push_back(std::move(word));
+                    }
+                    continue;
+                }
+            }
+            if (response.results.size() >= OcrMaxResults) throw std::runtime_error("too many OCR results");
             response.results.push_back(std::move(result));
         }
         return response;
@@ -182,7 +212,7 @@ bool ocrSupportsTextLayer(const std::vector<OcrResult>& results) {
     return std::ranges::all_of(results, [](const auto& r) { return r.poly.size() >= 3; });
 }
 
-std::string joinOcrText(const std::vector<OcrResult>& results) {
+std::vector<std::vector<std::size_t>> ocrReadingRows(const std::vector<OcrResult>& results) {
     struct Item { const OcrResult* result; double x, y, top, bottom; };
     std::vector<Item> items;
     for (const auto& r : results) {
@@ -222,16 +252,30 @@ std::string joinOcrText(const std::vector<OcrResult>& results) {
             target->bottom = std::min(target->bottom, item.bottom);
         }
     }
-    std::string text;
+    std::vector<std::vector<std::size_t>> order;
     for (auto& row : rows) {
         std::stable_sort(row.items.begin(), row.items.end(), [](const auto& a, const auto& b) { return a.x < b.x; });
+        order.emplace_back();
+        for (const auto& item : row.items) order.back().push_back(item.result - results.data());
+    }
+    return order;
+}
+
+std::string ocrTextSeparator(std::string_view previous, std::string_view next) {
+    if (!previous.empty() && !cjkBoundary(previous, next) &&
+        previous.find_last_of(" \t\r\n") != previous.size() - 1 && next.find_first_of(" \t\r\n") != 0)
+        return " ";
+    return {};
+}
+
+std::string joinOcrText(const std::vector<OcrResult>& results) {
+    std::string text;
+    for (const auto& row : ocrReadingRows(results)) {
         if (!text.empty()) text += '\n';
         std::string_view previous;
-        for (const auto& item : row.items) {
-            const auto& next = item.result->text;
-            if (!previous.empty() && !cjkBoundary(previous, next) &&
-                previous.find_last_of(" \t\r\n") != previous.size() - 1 && next.find_first_of(" \t\r\n") != 0)
-                text += ' ';
+        for (const auto index : row) {
+            const auto& next = results[index].text;
+            text += ocrTextSeparator(previous, next);
             text += next;
             previous = next;
         }
