@@ -33,6 +33,7 @@ class SessionLockGuard : public QObject {
     static int connectToCompositor();
     void setStartupControl(int fd) { m_startupFd = fd; }
     bool cancelled();
+    bool captureCancelled() const { return m_captureCancelled; }
     bool filterEvent(QObject* object, QEvent* event);
 
   private:
@@ -40,6 +41,7 @@ class SessionLockGuard : public QObject {
     int m_fd;
     int m_startupFd = -1;
     bool m_cancelled = false;
+    bool m_captureCancelled = false;
     std::unique_ptr<QSocketNotifier> m_notifier;
 };
 

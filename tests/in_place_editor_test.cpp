@@ -1,4 +1,8 @@
 #include "shared/protocol.hpp"
+#include "shared/shot_channel.hpp"
+#include "ui/shot_result.hpp"
+#include <sys/socket.h>
+#include <fcntl.h>
 #include "shared/trusted_path.hpp"
 #include "ui/annotation_editor.hpp"
 #include "ui/capture_overlay.hpp"
@@ -219,6 +223,118 @@ class InPlaceEditorTest final : public QObject {
     Q_OBJECT
 
   private slots:
+    void shotOverridesAndFinalImage_data() {
+        QTest::addColumn<bool>("editor");
+        QTest::addColumn<bool>("hdr");
+        QTest::newRow("SDR-direct") << false << false;
+        QTest::newRow("SDR-annotated") << true << false;
+        QTest::newRow("HDR-to-SDR-annotated") << true << true;
+    }
+    void shotOverridesAndFinalImage() {
+        QFETCH(bool, editor);
+        QFETCH(bool, hdr);
+        int sockets[2];
+        QCOMPARE(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets), 0);
+        hyprcapture::ui::enableShotResult(sockets[0]);
+        const auto cleanup = qScopeGuard([&] {
+            hyprcapture::ui::enableShotResult(-1);
+            close(sockets[0]); close(sockets[1]);
+        });
+        QTemporaryDir output;
+        QVERIFY(output.isValid());
+        const QString clipboard = qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD");
+        QFile::remove(clipboard);
+        const auto thumbnail = output.filePath("thumbnail");
+        qputenv("HYPRCAPTURE_TEST_THUMBNAIL", thumbnail.toUtf8());
+        const auto reset = qScopeGuard([] { qunsetenv("HYPRCAPTURE_TEST_THUMBNAIL"); });
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Fullscreen;
+        defaults.save = defaults.clipboard = defaults.showThumbnail = true;
+        defaults.rememberSettings = defaults.confirmBeforeCapture = true;
+        defaults.screenshotNotification = true;
+        defaults.saveDir = output.path().toStdString();
+        defaults.inPlaceEditToolbar = editor;
+        defaults.screenshotFormat = hdr ? "heic" : "png";
+        const auto settingsPath = qEnvironmentVariable("XDG_CONFIG_HOME") + "/hyprcapture/last-settings.ini";
+        QDir().mkpath(QFileInfo(settingsPath).absolutePath());
+        QFile settings(settingsPath);
+        QVERIFY(settings.open(QIODevice::WriteOnly));
+        const QByteArray remembered("[General]\nversion=1\nwindowBackground=black\n");
+        QCOMPARE(settings.write(remembered), qint64(remembered.size())); settings.close();
+        const auto resetSettings = qScopeGuard([&] { QFile::remove(settingsPath); });
+        CaptureOverlay overlay(defaults, false, false, false,
+            hdr ? hdrSessionJson(defaults, true) : sessionJson(defaults));
+        QVERIFY(!overlay.m_defaults.save && !overlay.m_defaults.clipboard && !overlay.m_defaults.showThumbnail);
+        QVERIFY(!overlay.m_defaults.rememberSettings && !overlay.m_defaults.confirmBeforeCapture);
+        QVERIFY(!overlay.m_defaults.screenshotNotification);
+        QCOMPARE(overlay.m_defaults.screenshotFormat, std::string("png"));
+        QVERIFY(overlay.m_defaults.windowBackground == defaults.windowBackground);
+        overlay.show();
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_hdrStartupWaiting, 2000);
+        QImage expected;
+        if (editor) {
+            overlay.beginInPlaceEdit();
+            QVERIFY(overlay.m_editor && overlay.m_editor->isVisible());
+            auto* canvas = overlay.m_editor->findChild<QWidget*>("annotationCanvas");
+            QVERIFY(canvas);
+            QVERIFY(clickEditorAction(*overlay.m_editor, "annotationTool5"));
+            const auto rect = overlay.m_editor->canvasGeometry();
+            QTest::mousePress(canvas, Qt::LeftButton, Qt::NoModifier, rect.center() - QPoint(30, 30));
+            QTest::mouseMove(canvas, rect.center() + QPoint(30, 30));
+            QTest::mouseRelease(canvas, Qt::LeftButton, Qt::NoModifier, rect.center() + QPoint(30, 30));
+            expected = overlay.m_editor->resultImage();
+            QVERIFY(expected != overlay.renderResultImage());
+            overlay.exportInPlaceImage();
+        } else {
+            expected = overlay.renderResultImage();
+            overlay.renderAndSaveCapture();
+        }
+        QByteArray bytes;
+        char buffer[65536];
+        for (;;) {
+            const auto size = recv(sockets[1], buffer, sizeof(buffer), 0);
+            QVERIFY(size >= 0);
+            if (!size) break;
+            bytes.append(buffer, size);
+            if (bytes.size() >= 9 && uint64_t(bytes.size() - 9) >= hyprcapture::shot::payloadSize(std::string_view(bytes.constData(), 9))) break;
+        }
+        QVERIFY(bytes.size() > 9);
+        QCOMPARE(bytes[0], char(0));
+        QCOMPARE(hyprcapture::shot::payloadSize(std::string_view(bytes.constData(), 9)), uint64_t(bytes.size() - 9));
+        const QImage result = QImage::fromData(bytes.mid(9), "PNG");
+        QVERIFY(!result.isNull());
+        QCOMPARE(result.convertToFormat(QImage::Format_RGBA8888), expected.convertToFormat(QImage::Format_RGBA8888));
+        QTest::qWait(100);
+        QVERIFY(QDir(output.path()).entryList(QDir::Files).isEmpty());
+        QVERIFY(!QFile::exists(clipboard));
+        QVERIFY(settings.open(QIODevice::ReadOnly));
+        QCOMPARE(settings.readAll(), remembered);
+    }
+    void shotCancelHasNoImage_data() {
+        QTest::addColumn<bool>("rightClick");
+        QTest::newRow("Esc") << false;
+        QTest::newRow("right-click") << true;
+    }
+    void shotCancelHasNoImage() {
+        QFETCH(bool, rightClick);
+        int sockets[2];
+        QCOMPARE(socketpair(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0, sockets), 0);
+        hyprcapture::ui::enableShotResult(sockets[0]);
+        const auto cleanup = qScopeGuard([&] {
+            hyprcapture::ui::enableShotResult(-1);
+            close(sockets[0]); close(sockets[1]);
+        });
+        hyprcapture::CaptureDefaults defaults;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        overlay.show();
+        if (rightClick) QTest::mouseClick(&overlay, Qt::RightButton, Qt::NoModifier, QPoint(10, 10));
+        else QTest::keyClick(&overlay, Qt::Key_Escape);
+        char bytes[16];
+        QCOMPARE(recv(sockets[1], bytes, sizeof(bytes), 0), ssize_t(9));
+        QCOMPARE(bytes[0], char(1));
+        QCOMPARE(hyprcapture::shot::payloadSize(std::string_view(bytes, 9)), uint64_t(0));
+    }
+
     void monitorArtifactsMatchSharedTransforms() {
         // Same asymmetric pixel fixture as rgba_transform_test.cpp. Transform 1
         // also verifies that Qt's +90 rotation matches rotate90Clockwise.

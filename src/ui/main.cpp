@@ -1,4 +1,5 @@
 #include "shared/session_startup.hpp"
+#include "ui/shot_result.hpp"
 #include "shared/protocol.hpp"
 #include "ui/timing.hpp"
 #include "audio/helper.hpp"
@@ -818,6 +819,7 @@ int main(int argc, char** argv) {
     // This standalone helper owns its process policy, before Qt starts threads.
     // FFmpeg transcodes and every temporary/thumbnail writer inherit it.
     umask(0077);
+    if (hasArgument(argc, argv, "--shot-result-stdout")) hyprcapture::ui::enableShotResult(STDOUT_FILENO);
     if (argc > 1 && (std::string_view(argv[1]) == "--sound-meter" || std::string_view(argv[1]) == "--sound-list" || std::string_view(argv[1]) == "--sound-capture" || std::string_view(argv[1]) == "--sound-finalize"))
         return hyprcapture::audio::runHelper(argc, argv);
     qputenv("QT_WAYLAND_SHELL_INTEGRATION", "layer-shell");
@@ -911,6 +913,7 @@ int main(int argc, char** argv) {
         {"watermark-offset", "Watermark x/y offset in pixels or percent.", "vec2", "0 0"},
         {"session-json", "Compositor session metadata.", "json", "{}"},
         {"session-json-file", "Private compositor session metadata file.", "path"},
+        {"shot-result-stdout", "Private blocking screenshot result socket on stdout."},
         {"session-json-stdin", "Receive a private session filename from the compositor startup socket."},
         {"thumbnail-save-session", "Private capture settings for manual save.", "path"},
         {"thumbnail-save-sdr", "Full resolution SDR capture for manual save.", "path"},
@@ -938,6 +941,8 @@ int main(int argc, char** argv) {
         qWarning("HyprCapture: unlocked compositor connection required");
         return 1;
     }
+    if (hyprcapture::ui::shotResultEnabled())
+        hyprcapture::ui::setShotCancellationCheck([&] { return sessionLock.cancelled(); });
     hyprcapture::ui::installUiTranslations(parser.value("language"));
 
     if (parser.isSet("pin-image")) {
@@ -1149,10 +1154,10 @@ int main(int argc, char** argv) {
         }
         sessionPath = QString::fromStdString(*received);
         sessionLock.setStartupControl(STDIN_FILENO);
-        if (sessionLock.cancelled()) return 0;
+        if (sessionLock.cancelled() && !hyprcapture::ui::shotResultEnabled()) return 0;
     }
     // The snapshot must already be frozen before dismissing any countdown.
-    cancelRecordingCountdown();
+    if (!hyprcapture::ui::shotResultEnabled()) cancelRecordingCountdown();
     if (!sessionPath.isEmpty()) {
         QFile file(sessionPath);
         const bool loaded = hyprcapture::ui::isPrivateRuntimeFile(sessionPath, MAX_SESSION_JSON_BYTES) && file.open(QIODevice::ReadOnly);
@@ -1167,10 +1172,22 @@ int main(int argc, char** argv) {
             return 1;
         }
     }
+    const auto shotCancelled = [&] {
+        if (!hyprcapture::ui::shotResultEnabled()) return false;
+        if (!sessionLock.cancelled() && !hyprcapture::ui::shotPeerCancelled()) return false;
+        if (!hyprcapture::ui::shotPeerCancelled())
+            hyprcapture::ui::finishShotResult(sessionLock.captureCancelled() ? 1 : 2, {}, QStringLiteral("capture session closed"));
+        return true;
+    };
+    if (shotCancelled()) {
+        hyprcapture::ui::discardShotSession(sessionJson);
+        return 0;
+    }
     hyprcapture::ui::traceTiming(QStringLiteral("ui.session_loaded"));
 
     const bool quick = parser.isSet("quick");
     CaptureOverlay overlay(defaults, quick, parser.isSet("record"), parser.isSet("record-active"), sessionJson);
+    if (shotCancelled()) return 0;
     const auto     overlayScope = overlay.overlayScope();
 
     std::vector<std::unique_ptr<CaptureOverlay>> extraOverlays;
@@ -1245,6 +1262,15 @@ int main(int argc, char** argv) {
     overlay.raise();
     hyprcapture::ui::traceTiming(QStringLiteral("ui.show_end"));
 
+    std::unique_ptr<QSocketNotifier> shotControl;
+    if (hyprcapture::ui::shotResultEnabled()) {
+        shotControl = std::make_unique<QSocketNotifier>(STDOUT_FILENO, QSocketNotifier::Read, &app);
+        QObject::connect(shotControl.get(), &QSocketNotifier::activated, &app, [&] {
+            char command[16];
+            const auto size = recv(STDOUT_FILENO, command, sizeof(command), MSG_DONTWAIT);
+            if (size >= 0) { shotControl->setEnabled(false); app.quit(); }
+        });
+    }
     std::unique_ptr<QSocketNotifier> captureControl;
     if (parser.isSet("session-json-stdin")) {
         captureControl = std::make_unique<QSocketNotifier>(STDIN_FILENO, QSocketNotifier::Read, &app);
@@ -1256,5 +1282,11 @@ int main(int argc, char** argv) {
         });
     }
 
-    return app.exec();
+    if (shotCancelled()) return 0;
+    const int exitCode = app.exec();
+    if (hyprcapture::ui::shotResultEnabled()) {
+        // Closing the overlay normally is cancellation; lock/failure stays an error.
+        hyprcapture::ui::finishShotResult((sessionLock.cancelled() && !sessionLock.captureCancelled()) || exitCode ? 2 : 1, {}, QStringLiteral("capture session closed"));
+    }
+    return exitCode;
 }
