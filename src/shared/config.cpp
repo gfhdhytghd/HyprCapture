@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
+#include <charconv>
 #include <cstdlib>
 #include <ctime>
 #include <fstream>
@@ -121,6 +122,47 @@ std::optional<std::pair<std::string_view, std::string_view>> splitLeadingXdgVari
 }
 
 } // namespace
+
+std::string validateOcrConfig(const OcrConfig& config) {
+    if (config.mode != "off" && config.mode != "capture" && config.mode != "text_layer" && config.mode != "both")
+        return "ocr_mode must be off, capture, text_layer or both";
+    if (config.engine != "tesseract" && config.engine != "paddleocr" && config.engine != "command")
+        return "ocr_engine must be tesseract, paddleocr or command";
+    if (config.output != "text" && config.output != "json")
+        return "ocr_output must be text or json";
+    if (config.timeout < 1 || config.timeout > 86400)
+        return "ocr_timeout must be 1..86400 seconds";
+    if (config.languages.empty() || config.languages.size() > 4096 || config.languages.find('\0') != std::string::npos)
+        return "ocr_languages must be a non-empty string of at most 4096 bytes without NUL";
+    if (config.command.size() > 65536 || config.command.find('\0') != std::string::npos)
+        return "ocr_command must be at most 65536 bytes without NUL";
+    if ((config.mode == "text_layer" || config.mode == "both") && config.engine == "command" && config.output == "text")
+        return "ocr_output=json is required for text_layer with ocr_engine=command";
+    return {};
+}
+
+bool setOcrConfigValue(OcrConfig& config, std::string_view key, std::string_view value, std::string& error) {
+    auto next = config;
+    if (key == "ocr_mode") next.mode = value;
+    else if (key == "ocr_engine") next.engine = value;
+    else if (key == "ocr_languages") next.languages = value;
+    else if (key == "ocr_command") next.command = value;
+    else if (key == "ocr_output") next.output = value;
+    else if (key == "ocr_timeout") {
+        const auto parsed = std::from_chars(value.data(), value.data() + value.size(), next.timeout);
+        if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {
+            error = "ocr_timeout must be an integer number of seconds";
+            return false;
+        }
+    } else {
+        error = "unknown OCR key: " + std::string(key);
+        return false;
+    }
+    error = validateOcrConfig(next);
+    if (!error.empty()) return false;
+    config = std::move(next);
+    return true;
+}
 
 CaptureMode parseCaptureMode(std::string_view value, CaptureMode fallback) {
     const auto v = normalized(value);

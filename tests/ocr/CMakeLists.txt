@@ -1,0 +1,8 @@
+cmake_minimum_required(VERSION 3.19)
+project(HyprCaptureOcrTests LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(CTest)
+find_package(nlohmann_json REQUIRED)
+add_compile_options(-Wall -Wextra -Wpedantic)
+include(../../cmake/Ocr.cmake)

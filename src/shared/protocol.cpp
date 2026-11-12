@@ -61,6 +61,12 @@ Json pointJson(const Point& point) {
 
 Json defaultsJson(const CaptureDefaults& defaults) {
     return Json{
+        {"ocrMode", defaults.ocr.mode},
+        {"ocrEngine", defaults.ocr.engine},
+        {"ocrLanguages", defaults.ocr.languages},
+        {"ocrCommand", defaults.ocr.command},
+        {"ocrOutput", defaults.ocr.output},
+        {"ocrTimeout", defaults.ocr.timeout},
         {"mode", toString(defaults.mode)},
         {"fullscreenScope", toString(defaults.fullscreenScope)},
         {"overlayScope", toString(defaults.overlayScope)},
@@ -303,6 +309,14 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
     if (obj.contains("notificationBodyTemplate") &&
         !stringValue(obj, "notificationBodyTemplate", defaults.notificationBodyTemplate, MAX_METADATA_STRING_BYTES, false))
         return false;
+
+    if (!stringValue(obj, "ocrMode", defaults.ocr.mode, 32, false) ||
+        !stringValue(obj, "ocrEngine", defaults.ocr.engine, 32, false) ||
+        !stringValue(obj, "ocrLanguages", defaults.ocr.languages, 4096, false) ||
+        !stringValue(obj, "ocrCommand", defaults.ocr.command, 65536, false) ||
+        !stringValue(obj, "ocrOutput", defaults.ocr.output, 16, false) ||
+        !int64Value(obj, "ocrTimeout", defaults.ocr.timeout, 1, 86400, false) ||
+        !validateOcrConfig(defaults.ocr).empty()) return false;
 
     return boolValue(obj, "save", defaults.save, false) && boolValue(obj, "clipboard", defaults.clipboard, false) &&
         boolValue(obj, "showHdrControl", defaults.showHdrControl, false) && boolValue(obj, "showThumbnail", defaults.showThumbnail, false) && boolValue(obj, "includeCursor", defaults.includeCursor, false) &&
