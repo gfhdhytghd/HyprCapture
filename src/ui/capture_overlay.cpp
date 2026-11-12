@@ -1,4 +1,6 @@
 #include "ui/capture_output.hpp"
+#include "ui/shot_result.hpp"
+#include "shared/shot_options.hpp"
 #include "shared/thumbnail_config.hpp"
 #include "ui/timing.hpp"
 #include "ui/mapped_image.hpp"
@@ -1438,6 +1440,7 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
     parseTimer.start();
     const std::string requestedLanguage = m_defaults.language;
     parseSessionJson(sessionJson);
+    if (hyprcapture::ui::shotResultEnabled()) hyprcapture::shot::applyOverrides(m_defaults);
     if (!requestedLanguage.empty() && requestedLanguage != "auto" && requestedLanguage != "system")
         m_defaults.language = requestedLanguage;
     hyprcapture::ui::installUiTranslations(qString(m_defaults.language));
@@ -2069,6 +2072,7 @@ void CaptureOverlay::buildToolbar() {
     m_recordToggle->setChecked(m_record || m_recordActive);
     layout->addWidget(m_recordToggle);
     connect(m_recordToggle, &QPushButton::clicked, this, [this] {
+        if (hyprcapture::ui::shotResultEnabled()) { m_recordToggle->setChecked(false); return; }
         if (m_recordActive) {
             m_recordToggle->setChecked(true);
             if (stopRecording()) {
@@ -2678,8 +2682,9 @@ void CaptureOverlay::updateToolbarControlsForMode() {
     }
 
     if (m_recordToggle) {
-        m_recordToggle->setVisible(!m_scrollResult);
-        m_recordToggle->setFixedSize(m_scrollResult ? QSize(0, 0) : QSize(36, 32));
+        const bool visible = !m_scrollResult && !hyprcapture::ui::shotResultEnabled();
+        m_recordToggle->setVisible(visible);
+        m_recordToggle->setFixedSize(visible ? QSize(36, 32) : QSize(0, 0));
     }
     updateRecordOptionsVisibility();
     updateConfirmButtonVisibility();
@@ -3362,6 +3367,11 @@ void CaptureOverlay::paintCursorSnapshot(QPainter& painter, const QRect& outputR
 }
 
 bool CaptureOverlay::eventFilter(QObject* watched, QEvent* event) {
+    if (hyprcapture::ui::shotResultEnabled() && event->type() == QEvent::MouseButtonPress &&
+        static_cast<QMouseEvent*>(event)->button() == Qt::RightButton) {
+        cancelCapture();
+        return true;
+    }
     if (m_firstEditorPaintPending && event->type() == QEvent::Paint && watched->objectName() == "annotationCanvas") {
         m_firstEditorPaintPending = false;
         traceTiming(QStringLiteral("overlay.editor_first_paint_begin native=%1 hdr_pending=%2")
@@ -3541,6 +3551,10 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
 }
 
 void CaptureOverlay::mousePressEvent(QMouseEvent* event) {
+    if (hyprcapture::ui::shotResultEnabled() && event->button() == Qt::RightButton && !m_finishing) {
+        cancelCapture();
+        return;
+    }
     if (m_editing || m_finishing)
         return;
     if (!requestActivation())
@@ -5562,6 +5576,12 @@ void CaptureOverlay::renderAndSaveCapture() {
     auto image = edited ? m_editedOutput : renderResultImage();
     traceTiming(QStringLiteral("render_result"), renderTimer.elapsed());
     if (image.isNull()) {
+        if (hyprcapture::ui::shotResultEnabled()) {
+            hyprcapture::ui::finishShotResult(2, {}, QStringLiteral("could not render screenshot"));
+            endHymissionCaptureInputSuppression();
+            qApp->quit();
+            return;
+        }
         m_finishing = false;
         endHymissionCaptureInputSuppression();
         if (isVisible())
@@ -5596,6 +5616,13 @@ void CaptureOverlay::renderAndSaveCapture() {
     if (!edited)
         hyprcapture::ui::applyWatermark(image, m_defaults);
     traceTiming(QStringLiteral("apply_watermark"), watermarkTimer.elapsed());
+
+    if (hyprcapture::ui::shotResultEnabled()) {
+        hyprcapture::ui::finishShotResult(0, image);
+        endHymissionCaptureInputSuppression();
+        qApp->quit();
+        return;
+    }
 
     const auto filenameMetadata = resolvedFilenameMetadata();
     const QString plannedOutputPath = plannedCaptureOutputPath(m_defaults,
@@ -5754,6 +5781,7 @@ void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& ta
 }
 
 void CaptureOverlay::cancelCapture() {
+    if (hyprcapture::ui::shotResultEnabled()) hyprcapture::ui::finishShotResult(1);
     invalidateHdrEditBase();
     m_finishing = true;
     if (m_editing && m_editor) {

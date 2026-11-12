@@ -71,6 +71,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
     "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ffmpeg ]}"
   ];
 
+  # CMake installs hyprcapture-shot into $out/bin alongside the Qt helper.
   doCheck = false;
   preCheck = ''
     # Nix defaults HOME to an unwritable /homeless-shelter. Tests need a

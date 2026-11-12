@@ -43,6 +43,8 @@ constexpr auto        kMinDispatchInterval = std::chrono::milliseconds(750);
 constexpr std::array  kLuaFunctionNames = {
     "open",
     "open_editor",
+    "shot",
+    "shot_cancel",
     "quick",
     "record",
     "record_toggle",
@@ -504,6 +506,35 @@ int luaOpenEditor(lua_State* L) {
     return luaCapture(L, false, true);
 }
 
+// Socket is positional; mode/editor follow, so no shell quoting or request files are needed.
+int luaShot(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
+    if (hyprcapture::isRecordingActive()) return luaL_error(L, "another capture session already active");
+    const char* socket = luaL_checkstring(L, 1);
+    const char* mode = luaL_optstring(L, 2, "region");
+    const bool editor = lua_toboolean(L, 3);
+    bool failed = false;
+    {
+        auto defaults = readDefaults();
+        if (std::string_view(mode) != "region" && std::string_view(mode) != "fullscreen" && std::string_view(mode) != "window") {
+            lua_pushliteral(L, "invalid shot mode");
+            failed = true;
+        } else {
+            defaults.inPlaceEditToolbar = editor;
+            installOverlayLayerRule();
+            const auto result = hyprcapture::launchHelper({.defaults = defaults,
+                .requestedMode = hyprcapture::parseCaptureMode(mode, hyprcapture::CaptureMode::Region), .shotSocket = socket});
+            if (!result.success) { lua_pushstring(L, result.error.c_str()); failed = true; }
+        }
+    }
+    return failed ? lua_error(L) : 0;
+}
+
+int luaShotCancel(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
+    return luaDispatchResult(L, dispatchResult(hyprcapture::cancelShotHelper(luaOptionalString(L, 1))));
+}
+
 int luaQuick(lua_State* L) {
     if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaCapture(L, true, false);
@@ -621,6 +652,8 @@ void registerLuaFunctions() {
 
         registerLuaFunction("open", luaOpen);
         registerLuaFunction("open_editor", luaOpenEditor);
+        registerLuaFunction("shot", luaShot);
+        registerLuaFunction("shot_cancel", luaShotCancel);
         registerLuaFunction("quick", luaQuick);
         registerLuaFunction("record", luaRecord);
         registerLuaFunction("record_toggle", luaRecordToggle);

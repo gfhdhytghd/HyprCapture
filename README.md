@@ -338,6 +338,49 @@ Build outputs:
 
 ## Usage
 
+### Shell pipelines
+
+```sh
+hyprcapture-shot [region|fullscreen|window] [-o PATH|-o -] [--editor] [--timeout SEC]
+```
+
+`hyprcapture-shot` opens the normal target selection overlay and blocks until the
+capture finishes. The mode defaults to `region`; output defaults to stdout.
+`--editor` opens the annotation toolbar after selection and exports the final
+annotated image. Output is exactly one SDR PNG, including in HDR sessions.
+
+```sh
+hyprcapture-shot > shot.png
+hyprcapture-shot -o "$tmp" && ocr --image "$tmp"
+hyprcapture-shot | wl-copy -t image/png
+hyprcapture-shot window | swappy -f -
+```
+
+`-o PATH` writes a private temporary file in the destination directory and renames
+it atomically after success. Cancellation or errors preserve an existing PATH.
+Stdout carries only PNG bytes; diagnostics use stderr. Writing PNG to a terminal
+is refused. `--timeout SEC` accepts positive seconds (including fractions) and
+bounds the wait; the default has no timeout. Timeout and SIGINT/SIGTERM request
+cancellation of this capture and remove the command's temporary files and socket.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | One complete PNG delivered. |
+| `1` | User cancelled (Esc, right-click, or normal Cancel), or SIGINT. No image output. |
+| `2` | Plugin unavailable, helper failure, locked session, active capture, timeout, SIGTERM, or I/O error. One-line reason on stderr. |
+| `64` | Usage error, including stdout being a terminal. |
+
+This invocation suppresses save_dir output, clipboard writes, thumbnails,
+screenshot notifications, and confirm-before-capture prompts. It does not read
+or write remembered interactive settings. Cursor, window decorations, shadow,
+scale, and other capture settings still apply. The capture toolbar's recording
+button is hidden for this screenshot-only command.
+
+The command uses `hyprctl eval` and the Lua actions below. This branch supports
+Lua configuration only. Its owner-only result socket lives in a unique directory
+under the existing `hyprcapture-$UID` private runtime root. The command never
+cancels another invocation's capture.
+
 ### Lua actions and key bindings
 
 ```lua
@@ -357,6 +400,8 @@ end)
 | --- | --- |
 | `hl.plugin.hyprcapture.open()` | Select a screenshot target using `default_mode`, then capture without the annotation toolbar. |
 | `hl.plugin.hyprcapture.open(mode)` | Select a target in `region`, `fullscreen`, or `window` mode, then capture without the annotation toolbar. |
+| `hl.plugin.hyprcapture.shot(socket_path, mode, editor)` | Internal shell command entry: pass the private result socket, capture mode, and editor boolean. Prefer `hyprcapture-shot` in scripts. |
+| `hl.plugin.hyprcapture.shot_cancel(socket_path)` | Cancel only the shot associated with this result socket. |
 | `hl.plugin.hyprcapture.open_editor()` | Select a screenshot target using `default_mode`, then open the annotation toolbar before output. |
 | `hl.plugin.hyprcapture.open_editor(mode)` | Select a target in `region`, `fullscreen`, or `window` mode, then open the annotation toolbar before output. |
 | `hl.plugin.hyprcapture.quick()` | Capture immediately using `default_mode`; disabled unless `allow_quick = true`. |
@@ -364,7 +409,7 @@ end)
 | `hl.plugin.hyprcapture.export_pipe(fifo)` | Export fullscreen compositor RGBA frames to a trusted private FIFO client. Intended for tools such as screenland. |
 | `hl.plugin.hyprcapture.cancel()` | Reserved action; currently returns successfully without changing an active helper. |
 
-Available Lua functions are `open`, `open_editor`, `quick`, `record`, `record_toggle`, `record_stop`, `record_start`, `window_capture`, `export_pipe`, `cancel`, and `dispatch`.
+Available Lua functions are `open`, `open_editor`, `shot`, `shot_cancel`, `quick`, `record`, `record_toggle`, `record_stop`, `record_start`, `window_capture`, `export_pipe`, `cancel`, and `dispatch`.
 `dispatch` accepts the dispatcher name plus an optional argument, for example `hl.plugin.hyprcapture.dispatch("open", "fullscreen")`.
 Use `hl.plugin.hyprcapture.dispatch("open_editor", "fullscreen")` for the editor flow.
 
