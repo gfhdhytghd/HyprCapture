@@ -32,6 +32,7 @@ add_compile_options(
 )
 
 include(cmake/Dependencies.cmake)
+include(cmake/Ocr.cmake)
 # Native HDR presentation is independent of the SDR Qt raster backing store.
 add_library(hyprcapture-hdr-backdrop STATIC src/ui/hdr_backdrop.cpp src/ui/hdr_gpu.cpp src/ui/hdr_shm.cpp
   src/ui/clipboard_utils.cpp src/shared/process_environment.cpp src/shared/trusted_path.cpp)
