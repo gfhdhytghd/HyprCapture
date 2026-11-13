@@ -82,6 +82,7 @@ After a Hyprland update, a notification offers to rebuild. `omarchy plugin updat
 - `pkg-config`
 - a C++23-capable compiler
 - nlohmann-json
+- OpenSSL libcrypto (OCR API SHA-256 and base64)
 - Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
 - OpenCV `core` and `imgproc` (CPU image registration; no neural-network runtime)
@@ -126,7 +127,7 @@ Perform a full system upgrade while installing the build tools and libraries:
 
 ```sh
 sudo pacman -Syu --needed base-devel cmake git cpio \
-    hyprland nlohmann-json lua glib2 \
+    hyprland nlohmann-json openssl lua glib2 \
     qt6-base qt6-svg qt6-wayland layer-shell-qt opencv vtk hdf5 \
     pipewire libpipewire fftw libpulse ffmpeg wl-clipboard
 ```
@@ -474,6 +475,12 @@ a toast. Use `ocr_output = "json"` to supply text positions.
   containing `{image}`. `ocr_output = "text"` copies plain stdout;
   `ocr_output = "json"` accepts polygon JSON Lines. No shell is evaluated.
 
+For a persistent PaddleOCR service, set `ocr_engine = "paddleocr"` and
+`ocr_api_url = "http://ocr.example.lan:8008/ocr"` with `curl` on PATH.
+`ocr_api_key` is optional and is stored in the Hyprland config in plain text.
+Simple PP-OCR and official PaddleX/AI Studio formats are detected and cached
+automatically. See [PaddleOCR HTTP API](docs/ocr.md#paddleocr-http-api).
+
 The scan, text reveal, selection flash, and toast use local editor animations.
 Set `HYPRCAPTURE_REDUCED_MOTION=1` or `QT_ANIMATIONS_DISABLED=1` to make them instant.
 See [OCR engines and output format](docs/ocr.md) for examples and limits.
@@ -721,6 +728,8 @@ remain subject to `window_background`; no margin is added around its content.
 | `ocr_languages` | string | `eng+chi_sim` | Tesseract language expression. PaddleOCR uses its installed default model; use `command` for explicit model/language arguments. |
 | `ocr_command` | string | empty | For `ocr_engine=command`. Quoted argv with `{image}` substitution; no shell evaluation. |
 | `ocr_output` | string | `text` | For `ocr_engine=command`. `text` copies all text; `json` supplies polygons for selectable text. |
+| `ocr_api_url` | string | empty | Full PaddleOCR HTTP endpoint; empty uses the local CLI. Other engines ignore it. |
+| `ocr_api_key` | string | empty | Optional HTTP API key; stored in plain text in the Hyprland config. |
 | `ocr_timeout` | integer | `30` | Deadline in seconds, `1..86400`; timeout kills the engine process group. |
 | `remember_settings` | bool | `false` | Restore only dropdown choices: fullscreen scope, window background, recording format/codec/FPS/duration/backend and sound mode/devices/mix preset. Capture mode and volume sliders are not saved or restored. Saves on capture or cancel (including Esc) to `$XDG_CONFIG_HOME/hyprcapture/last-settings.ini` (default `~/.config/hyprcapture/last-settings.ini`). Quick capture and the stop-recording UI bypass this state. The open/record dispatcher still determines screenshot versus recording. Saved choices override configured defaults while enabled; disabling this option uses the configured defaults again. |
 | `allow_quick` | bool | `false` | Enable no-confirmation `hl.plugin.hyprcapture.quick()` calls. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |

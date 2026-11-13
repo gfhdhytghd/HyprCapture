@@ -25,12 +25,14 @@ struct OcrConfig {
     std::string languages = "eng+chi_sim";
     std::string command;
     std::string output = "text";
+    std::string apiUrl;
+    std::string apiKey;
     std::int64_t timeout = 30; // seconds, 1..86400
 };
 
 // Empty means valid. Configuration strings never undergo shell expansion.
 std::string validateOcrConfig(const OcrConfig& config);
-// Parses one of the six ocr_* keys; leaves config unchanged on error.
+// Parses one of the eight ocr_* keys; leaves config unchanged on error.
 bool setOcrConfigValue(OcrConfig& config, std::string_view key, std::string_view value, std::string& error);
 
 struct CaptureDefaults {

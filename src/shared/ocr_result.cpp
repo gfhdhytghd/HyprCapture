@@ -10,11 +10,29 @@ namespace hyprcapture {
 namespace {
 using Json = nlohmann::json;
 
+// The DOM callback parser scans an entire parent array at every object end.
+// A bounded SAX pass followed by the ordinary DOM parser stays linear even at
+// the 65536-result limit, while rejecting deep input before allocating a DOM.
+struct DepthCheck final : nlohmann::json_sax<Json> {
+    int depth = 0;
+    bool null() override { return true; }
+    bool boolean(bool) override { return true; }
+    bool number_integer(Json::number_integer_t) override { return true; }
+    bool number_unsigned(Json::number_unsigned_t) override { return true; }
+    bool number_float(Json::number_float_t, const Json::string_t&) override { return true; }
+    bool string(Json::string_t&) override { return true; }
+    bool binary(Json::binary_t&) override { return true; }
+    bool key(Json::string_t&) override { return true; }
+    bool start_object(std::size_t) override { return ++depth <= 32; }
+    bool start_array(std::size_t) override { return ++depth <= 32; }
+    bool end_object() override { --depth; return true; }
+    bool end_array() override { --depth; return true; }
+    bool parse_error(std::size_t, const std::string&, const Json::exception&) override { return false; }
+};
 Json boundedJson(std::string_view input) {
-    return Json::parse(input, [](int depth, Json::parse_event_t, Json&) {
-        if (depth > 32) throw std::runtime_error("JSON nesting exceeds 32");
-        return true;
-    });
+    DepthCheck check;
+    if (!Json::sax_parse(input, &check)) throw std::runtime_error("invalid JSON or nesting exceeds 32");
+    return Json::parse(input);
 }
 
 void polygon(const Json& value, OcrResult& result) {
@@ -205,6 +223,78 @@ OcrResponse parsePaddleOcrJson(std::string_view input) {
         return response;
     } catch (const std::exception& e) {
         return {{}, std::string("paddleocr JSON: ") + std::string(e.what()).substr(0, 512)};
+    }
+}
+
+OcrResponse parseOcrApiJson(std::string_view input, bool* mismatch, bool* serviceError) {
+    if (mismatch) *mismatch = false;
+    if (serviceError) *serviceError = false;
+    if (input.size() > OcrMaxBytes) return {{}, "OCR API response exceeds 8 MiB"};
+    Json obj;
+    try { obj = boundedJson(input); }
+    catch (...) { return {{}, "OCR API response is not valid JSON"}; }
+    try {
+        if (obj.is_object() && obj.contains("errorCode")) {
+            if (!obj["errorCode"].is_number_integer()) throw std::runtime_error("invalid errorCode");
+            if (obj["errorCode"] != 0) {
+                if (serviceError) *serviceError = true;
+                auto message = obj.value("errorMsg", std::string("recognition failed"));
+                message = message.substr(0, message.find_first_of("\r\n"));
+                // The transport redacts credentials before applying its display
+                // limit; truncating here could expose a credential prefix.
+                return {{}, "OCR API: " + message};
+            }
+        }
+        OcrResponse response;
+        auto append = [&](const Json& text, const Json& poly, const Json* score) {
+            if (response.results.size() >= OcrMaxResults) throw std::runtime_error("too many OCR results");
+            if (!text.is_string()) throw std::runtime_error("text must be a string");
+            OcrResult result;
+            result.text = text.get<std::string>();
+            polygon(poly, result);
+            if (score) confidence(*score, result);
+            response.results.push_back(std::move(result));
+        };
+        if (obj.is_object() && obj.contains("results") && obj["results"].is_array()) {
+            if (obj["results"].size() > OcrMaxResults) throw std::runtime_error("too many OCR results");
+            for (const auto& entry : obj["results"]) {
+                if (!entry.is_object()) throw std::runtime_error("result must be an object");
+                const auto* box = entry.contains("box") ? "box" : entry.contains("poly") ? "poly" : "bbox";
+                const Json* score = entry.contains("confidence") ? &entry["confidence"] : entry.contains("score") ? &entry["score"] : nullptr;
+                append(entry.at("text"), entry.at(box), score);
+            }
+        } else if (obj.is_object() && obj.contains("result") && obj["result"].is_object() &&
+                   obj["result"].contains("ocrResults") && obj["result"]["ocrResults"].is_array()) {
+            for (const auto& page : obj["result"]["ocrResults"]) {
+                const auto& result = page.at("prunedResult");
+                const auto& texts = result.at("rec_texts");
+                const auto& scores = result.at("rec_scores");
+                const bool rectangles = !result.contains("rec_polys");
+                const auto& polys = result.at(rectangles ? "rec_boxes" : "rec_polys");
+                if (!texts.is_array() || !scores.is_array() || !polys.is_array() ||
+                    texts.size() != scores.size() || texts.size() != polys.size())
+                    throw std::runtime_error("recognition arrays must have equal lengths");
+                for (std::size_t i = 0; i < texts.size(); ++i) {
+                    if (!rectangles) append(texts[i], polys[i], &scores[i]);
+                    else {
+                        const auto& box = polys[i];
+                        if (!box.is_array() || box.size() != 4 ||
+                            !std::ranges::all_of(box, [](const Json& n) { return n.is_number(); }))
+                            throw std::runtime_error("rec_boxes must contain [x1,y1,x2,y2]");
+                        const double x1 = box[0], y1 = box[1], x2 = box[2], y2 = box[3];
+                        if (x2 <= x1 || y2 <= y1) throw std::runtime_error("box must have positive dimensions");
+                        append(texts[i], Json::array({{x1,y1},{x2,y1},{x2,y2},{x1,y2}}), &scores[i]);
+                    }
+                }
+            }
+        } else {
+            if (mismatch) *mismatch = true;
+            return {{}, "OCR API response has an unsupported format"};
+        }
+        return response;
+    } catch (...) {
+        // Do not echo JSON fragments: servers can reflect credentials/URLs.
+        return {{}, "OCR API response contains invalid recognition data"};
     }
 }
 

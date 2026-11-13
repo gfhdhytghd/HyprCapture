@@ -227,6 +227,8 @@ void registerConfigValues() {
     addStringConfig("ocr_command", "OCR argv command with {image} substitution", "");
     addStringConfig("ocr_output", "Custom OCR output: text or json", "text");
     addIntConfig("ocr_timeout", "OCR deadline in seconds", 30);
+    addStringConfig("ocr_api_url", "PaddleOCR HTTP endpoint URL", "");
+    addStringConfig("ocr_api_key", "Optional PaddleOCR HTTP API key", "");
     addStringConfig("helper", "Optional helper executable override", "");
     addStringConfig("watermark", "Watermark path or built-in name", "");
     addStringConfig("watermark_position", "Watermark position", "central");
@@ -248,6 +250,8 @@ hyprcapture::CaptureDefaults readDefaults() {
     defaults.ocr.command = configString("ocr_command", defaults.ocr.command);
     defaults.ocr.output = configString("ocr_output", defaults.ocr.output);
     defaults.ocr.timeout = configInt("ocr_timeout", defaults.ocr.timeout);
+    defaults.ocr.apiUrl = configString("ocr_api_url", defaults.ocr.apiUrl);
+    defaults.ocr.apiKey = configString("ocr_api_key", defaults.ocr.apiKey);
     defaults.mode = hyprcapture::parseCaptureMode(configString("default_mode", hyprcapture::toString(defaults.mode)), defaults.mode);
     defaults.fullscreenScope =
         hyprcapture::parseFullscreenScope(configString("fullscreen_scope", hyprcapture::toString(defaults.fullscreenScope)), defaults.fullscreenScope);
@@ -687,7 +691,10 @@ void registerLuaFunctions() {
 }
 
 hyprcapture::OcrFallbackWarning g_ocrFallbackWarning;
+hyprcapture::OcrApiWarning g_ocrApiWarning;
 void warnOcrFallback() {
+    if (g_ocrApiWarning.update(readDefaults().ocr))
+        hyprcapture::notifyUser(hyprcapture::OcrApiWarning::message, hyprcapture::NotificationLevel::Warning, 8000);
     if (g_ocrFallbackWarning.update(readDefaults().ocr))
         hyprcapture::notifyUser(hyprcapture::OcrFallbackWarning::message, hyprcapture::NotificationLevel::Warning, 8000);
 }

@@ -475,6 +475,7 @@ LaunchResult launchHelper(const LaunchRequest& request) {
                              "--ocr-command", request.defaults.ocr.command,
                              "--ocr-output", request.defaults.ocr.output,
                              "--ocr-timeout", std::to_string(request.defaults.ocr.timeout)});
+    // API URL/key travel only in the owner-only session JSON, never argv.
     args.push_back("--session-json-stdin");
 
     std::vector<char*> argv;

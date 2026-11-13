@@ -31,6 +31,9 @@ struct OcrResponse {
 OcrResponse parseOcrJsonLines(std::string_view input);
 OcrResponse parseTesseractTsv(std::string_view input);
 OcrResponse parsePaddleOcrJson(std::string_view input);
+// mismatch is true only for valid JSON with neither supported response shape.
+// serviceError identifies nonzero errorCode, including on mismatch HTTP statuses.
+OcrResponse parseOcrApiJson(std::string_view input, bool* mismatch = nullptr, bool* serviceError = nullptr);
 bool ocrSupportsTextLayer(const std::vector<OcrResult>& results);
 std::vector<std::vector<std::size_t>> ocrReadingRows(const std::vector<OcrResult>& results);
 std::string ocrTextSeparator(std::string_view previous, std::string_view next);

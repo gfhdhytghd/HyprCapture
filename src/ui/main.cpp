@@ -931,6 +931,8 @@ int main(int argc, char** argv) {
         {"recording-transcode-duration-ms", "Expected transcode duration.", "ms", "1"},
         {"thumbnail-delete-root", "Directory where thumbnail files may be deleted.", "path"},
         {"restore-clipboard", "Clipboard snapshot to restore when deleting the thumbnail image.", "path"},
+        {"ocr-api-url", "PaddleOCR HTTP endpoint URL.", "url", ""},
+        {"ocr-api-key", "Optional PaddleOCR HTTP API key.", "key", ""},
         {"ocr-mode", "OCR editor tool mode.", "mode", "off"},
         {"ocr-engine", "External OCR engine.", "engine", "tesseract"},
         {"ocr-languages", "Tesseract languages.", "languages", "eng+chi_sim"},
@@ -1051,6 +1053,8 @@ int main(int argc, char** argv) {
     }
 
     hyprcapture::CaptureDefaults defaults;
+    defaults.ocr.apiUrl = parser.value("ocr-api-url").toStdString();
+    defaults.ocr.apiKey = parser.value("ocr-api-key").toStdString();
     defaults.ocr.mode = parser.value("ocr-mode").toStdString();
     defaults.ocr.engine = parser.value("ocr-engine").toStdString();
     defaults.ocr.languages = parser.value("ocr-languages").toStdString();

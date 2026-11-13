@@ -131,9 +131,54 @@ void parser() {
     p["text_word"][0].push_back("extra"); check(!parsePaddleOcrJson(p.dump()),"Paddle word arrays mismatch");
 
 }
+void apiParser() {
+    auto a = Json{{"results", {{{"text", "hello"}, {"confidence", .99}, {"box", quad(.25, .75)}}}}};
+    auto r = parseOcrApiJson(a.dump()); success(r, "simple shape");
+    check(r.results.size() == 1 && r.results[0].poly[0].x == .25 && r.results[0].conf == .99 && r.results[0].level == OcrLevel::Line, "simple float fields");
+    for (const auto* alias : {"poly", "bbox"}) {
+        auto copy = a; auto& entry = copy["results"][0];
+        entry[alias] = entry["box"]; entry.erase("box"); entry["score"] = entry["confidence"]; entry.erase("confidence");
+        success(parseOcrApiJson(copy.dump()), "simple aliases");
+    }
+    Json page{{"prunedResult", paddle()}};
+    auto b = Json{{"errorCode", 0}, {"errorMsg", "Success"}, {"result", {{"ocrResults", {page, page}}}}};
+    r = parseOcrApiJson(b.dump()); success(r, "official shape");
+    check(r.results.size() == 4 && r.results[1].poly[1].x == 50 && r.results[0].level == OcrLevel::Line, "pages concatenated and winding normalized");
+    b["result"]["ocrResults"][0]["prunedResult"] = {{"rec_texts", {"rectangle"}}, {"rec_boxes", {{.5,1.5,10.5,20.5}}}, {"rec_scores", {.9}}};
+    r = parseOcrApiJson(b.dump()); success(r, "official rec_boxes");
+    check(r.results.size() == 3 && r.results[0].poly[2].x == 10.5, "rectangle float coordinates");
+    auto emptyPage = page;
+    emptyPage["prunedResult"] = {{"rec_texts", Json::array()}, {"rec_scores", Json::array()}, {"rec_polys", Json::array()}};
+    auto emptyOfficial = b;
+    emptyOfficial["result"]["ocrResults"] = Json::array();
+    auto emptyLine = b;
+    emptyLine["result"]["ocrResults"] = {emptyPage};
+    for (const auto& empty : {Json{{"results", Json::array()}}, emptyOfficial, emptyLine}) {
+        r = parseOcrApiJson(empty.dump()); check(r && r.results.empty(), "empty recognition succeeds");
+    }
+    bool mismatch = false;
+    r = parseOcrApiJson("{}", &mismatch); check(!r && mismatch, "unknown JSON permits format fallback");
+    r = parseOcrApiJson("{", &mismatch); check(!r && !mismatch && r.error == "OCR API response is not valid JSON", "invalid JSON is a real error");
+    b["errorCode"] = 7; b["errorMsg"] = "model unavailable";
+    r = parseOcrApiJson(b.dump(), &mismatch); check(!r && !mismatch && r.error.find("model unavailable") != r.error.npos, "official error is not mismatch");
+    check(!parseOcrApiJson(std::string(OcrMaxBytes + 1, ' ')), "API byte limit");
+    for (const auto& poly : {Json::array(), Json::array({{0,0},{1,1},{2,2}}), Json::array({{0,0},{1e8,0},{0,1}}), Json::array({{0,0},{1},{0,1}})}) {
+        auto copy = a; copy["results"][0]["box"] = poly;
+        r = parseOcrApiJson(copy.dump(), &mismatch); check(!r && !mismatch && r.results.empty(), "bad polygon atomic failure");
+    }
+    auto many = Json::array();
+    for (std::size_t i = 0; i <= OcrMaxResults; ++i) many.push_back(a["results"][0]);
+    check(!parseOcrApiJson(Json{{"results", many}}.dump()), "API result count limit");
+    auto copy = a; copy["results"][0]["confidence"] = 2; check(!parseOcrApiJson(copy.dump()), "API confidence bounds");
+    copy = a; copy["results"][0]["box"] = Json::array();
+    for (std::size_t i = 0; i <= OcrMaxPoints; ++i) copy["results"][0]["box"].push_back({i,i%2});
+    check(!parseOcrApiJson(copy.dump()), "API polygon point limit");
+    check(!parseOcrApiJson("{\"results\":[],\"extra\":" + std::string(40, '[') + "0" + std::string(40, ']') + "}"), "API nesting limit");
+}
 void configTests() {
     auto c = OcrConfig{};
     check(c.mode == "off" && c.engine == "tesseract" && c.languages == "eng+chi_sim" && c.command.empty() && c.output == "text" && c.timeout == 30, "six defaults");
+    check(c.apiUrl.empty() && c.apiKey.empty(), "API defaults empty");
     std::string error;
     for (auto [key, value] : {std::pair{"ocr_mode", "capture"}, {"ocr_engine", "command"}, {"ocr_languages", "eng"},
                              {"ocr_command", "test '{image}'"}, {"ocr_output", "json"}, {"ocr_timeout", "10"}})
@@ -143,6 +188,20 @@ void configTests() {
         check(!setOcrConfigValue(c, key, value, error) && !error.empty(), "invalid configuration");
         check(c.mode == "capture" && c.timeout == 10 && c.languages == "eng", "failed set leaves config unchanged");
     }
+    check(setOcrConfigValue(c, "ocr_api_url", "http://127.0.0.1/ocr", error), "API URL setting");
+    check(setOcrConfigValue(c, "ocr_api_key", "secret", error), "API key setting");
+    for (const auto* key : {"ocr_api_url", "ocr_api_key"}) {
+        check(!setOcrConfigValue(c, key, "bad\r\nheader", error), "API CRLF rejected");
+        check(!setOcrConfigValue(c, key, std::string_view("bad\0value",9), error), "API NUL rejected");
+        check(!setOcrConfigValue(c, key, std::string(65537,'x'), error), "API length limit");
+    }
+    OcrApiWarning apiWarning;
+    check(apiWarning.update(c), "URL with command warns");
+    check(!apiWarning.update(c), "identical API config warns once");
+    c.apiKey = "changed"; check(apiWarning.update(c), "API config change warns once");
+    c.engine = "paddleocr"; check(!apiWarning.update(c), "URL with paddleocr has no warning");
+    c.apiUrl.clear(); c.engine = "tesseract"; check(!apiWarning.update(c), "empty URL no warning");
+    c.apiUrl = "http://127.0.0.1/ocr"; c.engine = "command";
     OcrFallbackWarning warning;
     c.mode = "text_layer"; c.output = "text";
     check(warning.update(c), "fallback warns at first config load");
@@ -161,9 +220,19 @@ void configTests() {
     const auto encoded = encodeSessionJson(session);
     auto decoded = decodeSessionJson(encoded);
     check(decoded && decoded->defaults.ocr.command == c.command && decoded->defaults.ocr.timeout == 10 && decoded->defaults.ocr.mode == "both", "session roundtrip");
+    check(decoded && decoded->defaults.ocr.apiUrl == c.apiUrl && decoded->defaults.ocr.apiKey == c.apiKey, "API session roundtrip");
     auto json = Json::parse(encoded);
-    for (const auto* key : {"ocrMode", "ocrEngine", "ocrLanguages", "ocrCommand", "ocrOutput", "ocrTimeout"}) json["defaults"].erase(key);
+    auto beforeApi = json;
+    beforeApi["defaults"].erase("ocrApiUrl"); beforeApi["defaults"].erase("ocrApiKey");
+    auto legacyApi = decodeSessionJson(beforeApi.dump());
+    check(legacyApi && legacyApi->defaults.ocr.mode == c.mode && legacyApi->defaults.ocr.engine == c.engine &&
+          legacyApi->defaults.ocr.apiUrl.empty() && legacyApi->defaults.ocr.apiKey.empty(), "existing OCR session without API keys retains old settings");
+    for (const auto* key : {"ocrMode", "ocrEngine", "ocrLanguages", "ocrCommand", "ocrOutput", "ocrTimeout", "ocrApiUrl", "ocrApiKey"}) json["defaults"].erase(key);
     decoded = decodeSessionJson(json.dump()); check(decoded && decoded->defaults.ocr.mode == "off", "legacy session defaults off");
+    check(decoded && decoded->defaults.ocr.apiUrl.empty() && decoded->defaults.ocr.apiKey.empty(), "legacy API defaults");
+    for (const auto* key : {"ocrApiUrl", "ocrApiKey"}) {
+        auto bad = json; bad["defaults"][key] = 42; check(!decodeSessionJson(bad.dump()), "API session rejects non-string");
+    }
     for (const auto& bad : {Json(0), Json(1.5), Json("30"), Json(86401)}) {
         auto copy = json; copy["defaults"]["ocrTimeout"] = bad; check(!decodeSessionJson(copy.dump()), "protocol timeout validation");
     }
@@ -297,7 +366,8 @@ int live(const std::string& engine) {
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     const std::string suite = argv[1];
-    if (suite == "parser") parser();
+    if (suite == "api-parser") apiParser();
+    else if (suite == "parser") parser();
     else if (suite == "config") configTests();
     else if (suite == "adapters") adapters();
     else if (suite == "runner") runner();
