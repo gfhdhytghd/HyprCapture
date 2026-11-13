@@ -136,6 +136,9 @@ std::string validateOcrConfig(const OcrConfig& config) {
         return "ocr_languages must be a non-empty string of at most 4096 bytes without NUL";
     if (config.command.size() > 65536 || config.command.find('\0') != std::string::npos)
         return "ocr_command must be at most 65536 bytes without NUL";
+    for (const auto* value : {&config.apiUrl, &config.apiKey})
+        if (value->size() > 65536 || value->find_first_of(std::string_view("\0\r\n", 3)) != std::string::npos)
+            return "OCR API settings must be at most 65536 bytes without NUL, CR or LF";
     return {};
 }
 
@@ -146,6 +149,8 @@ bool setOcrConfigValue(OcrConfig& config, std::string_view key, std::string_view
     else if (key == "ocr_languages") next.languages = value;
     else if (key == "ocr_command") next.command = value;
     else if (key == "ocr_output") next.output = value;
+    else if (key == "ocr_api_url") next.apiUrl = value;
+    else if (key == "ocr_api_key") next.apiKey = value;
     else if (key == "ocr_timeout") {
         const auto parsed = std::from_chars(value.data(), value.data() + value.size(), next.timeout);
         if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size()) {

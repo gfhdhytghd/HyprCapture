@@ -28,7 +28,18 @@ constexpr struct {
     int off = 140, copy = 220, flashIn = 120, flashHold = 220, flashOut = 280;
     int toastIn = 160, toastHold = 1200, toastOut = 220, shake = 240;
 } timing;
-auto configKey(const OcrConfig& c) { return std::tuple(c.mode, c.engine, c.languages, c.command, c.output, c.timeout); }
+auto configKey(const OcrConfig& c) { return std::tuple(c.mode, c.engine, c.languages, c.command, c.output, c.timeout, c.apiUrl, c.apiKey); }
+QString ocrErrorText(const std::string& error) {
+    const auto text = QString::fromStdString(error);
+    for (const auto& [prefix, pattern] : {
+             std::pair{"OCR API returned HTTP ", "OCR API returned HTTP %1"},
+             {"OCR API unreachable: ", "OCR API unreachable: %1"},
+             {"OCR API: ", "OCR API: %1"}}) {
+        const auto start = QString::fromLatin1(prefix);
+        if (text.startsWith(start)) return uiText(pattern).arg(text.mid(start.size()));
+    }
+    return uiText(text);
+}
 QPointF polygonCentroid(const QPainterPath& path) {
     const auto polygon = path.toFillPolygon();
     qreal twiceArea = 0; QPointF weighted;
@@ -157,7 +168,7 @@ void LiveTextLayer::startJob() {
 void LiveTextLayer::receive(quint64 generation, OcrResponse response) {
     if (generation != m_generation || !m_on) return;
     m_busy = false;
-    if (!response) { fail(uiText(QString::fromStdString(response.error))); return; }
+    if (!response) { fail(ocrErrorText(response.error)); return; }
     m_results = std::move(response); m_layout.setResults(m_results.results);
     if (m_layout.text.trimmed().isEmpty()) {
         turnOff(); shake(); toast(uiText("No text found")); emit recognized(); return;

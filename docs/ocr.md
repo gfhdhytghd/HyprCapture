@@ -21,6 +21,8 @@ external programs synchronously; compositor and UI callers must use a worker.
 | `ocr_command` | empty | At most 65536 bytes, no NUL; required when running `command` |
 | `ocr_output` | `text` | `text`, `json`; used only by `command` |
 | `ocr_timeout` | `30` | Integer seconds, `1..86400` |
+| `ocr_api_url` | empty | Full PaddleOCR HTTP endpoint; empty uses the CLI |
+| `ocr_api_key` | empty | Optional API key; stored in the Hyprland config in plain text |
 
 `off` hides the editor tool and makes the engine API fail. `capture` copies
 `joinOcrText()` for the entire image; `text_layer` and `both` allow text selection
@@ -101,6 +103,72 @@ The adapter atomically creates a 0700 directory under a private owned
 parse failure, process failure, or timeout. The result must be a regular owned
 file, not a symlink, and no larger than 8 MiB.
 
+## PaddleOCR HTTP API
+
+A persistent PaddleOCR service avoids loading the CLI models on every click.
+Install `curl` on the trusted PATH, then set the plugin options:
+
+```lua
+ocr_engine = "paddleocr",
+ocr_api_url = "http://ocr.example.lan:8008/ocr",
+ocr_api_key = "",   -- optional
+```
+
+Use these entries in your HyprCapture plugin configuration table, or assign
+`hl.plugin.hyprcapture.ocr_engine`, `hl.plugin.hyprcapture.ocr_api_url`, and
+`hl.plugin.hyprcapture.ocr_api_key` individually. The URL is a full endpoint.
+An empty URL retains the existing local CLI behavior. Other engines ignore both
+API settings and warn once per configuration change when the URL is nonempty.
+The key is stored in the Hyprland config in plain text. API settings accept up to
+65536 bytes each and reject NUL, CR and LF.
+
+Both formats are detected automatically; there is no format option:
+
+- **Simple PP-OCR server:** POST multipart/form-data with one `file` field,
+  filename `image.png`, type `image/png`. A nonempty key adds
+  `Authorization: Bearer <key>`. The response has a `results` array of
+  `{ "text": "...", "confidence": 0.99, "box": [[x,y], ...] }`.
+  `poly`/`bbox` alias `box`; `score` aliases `confidence`.
+- **Official PaddleOCR/PaddleX serving (including Baidu AI Studio):** POST JSON
+  with base64 PNG in `file`, `fileType: 1`, and
+  `useDocOrientationClassify`, `useDocUnwarping`, `useTextlineOrientation`,
+  `visualize` all false. A nonempty key adds `Authorization: token <key>`.
+  Recognition comes from `result.ocrResults[].prunedResult` with `rec_texts`,
+  `rec_polys`, `rec_scores`. All pages are concatenated. If `rec_polys` is absent,
+  `rec_boxes` supplies `[x1,y1,x2,y2]` rectangles. Nonzero `errorCode` reports
+  `errorMsg` as an error.
+
+An exact-URL cached format takes priority. Otherwise, AI Studio hosts
+(`aistudio-app.com`/`aistudio.baidu.com`, including subdomains) and endpoint paths
+ending in `/layout-parsing` try the official format first. Other endpoints try
+the simple format first. HTTP 400/415/422 or successful JSON with neither shape
+triggers one retry with the other format. Network errors, timeouts, 401/403,
+5xx, malformed JSON, invalid recognition data and nonzero `errorCode` are real
+errors and do not trigger a format retry. A stale cached format that mismatches
+is removed, and the other format is tried next without repeating the URL guess.
+Every call makes at most two requests and never tries the same format twice.
+Both attempts, including a stale-cache probe, share one `ocr_timeout` budget.
+Cancellation kills the active curl process group.
+
+Success caches the request format in the helper process and in
+`$XDG_CACHE_HOME/hyprcapture/ocr-api-format.json` (default
+`~/.cache/hyprcapture/ocr-api-format.json`). This owner-only 0600 file maps the
+SHA-256 of the exact URL to `"simple"` or `"paddlex"`; it stores no URL or key.
+Remove this file to clear the persistent cache. Close the editor/helper to clear
+its in-memory cache. An unwritable or unsafe cache does not prevent recognition.
+
+API geometry uses floating input-pixel coordinates and the same polygon,
+winding, confidence, nesting, 65536-result and 8 MiB response limits as JSONL.
+API results have `level=line`. Empty results mean no recognition, not an error.
+The shared worker remains Qt-free. OpenSSL libcrypto supplies SHA-256 and base64.
+URL, headers and curl options travel through stdin; the official JSON body is a
+0600 file inside the existing 0700 OCR temporary directory and never an argv
+value. Files are removed after completion or cancellation. API settings also
+travel from the plugin to the helper through the private session JSON, not argv.
+HTTP is permitted for LAN services. HTTPS uses normal certificate verification;
+only HTTP/HTTPS protocols are enabled. Redirects are reported as HTTP errors.
+No proxy settings are added or changed.
+
 ### Custom commands
 
 Example configuration value (not a shell command):
@@ -136,7 +204,7 @@ not inherited.
 Commands run as argv. The existing fixed `supervised_process` shell supervisor
 reports the exit status even under Hyprland's `SA_NOCLDWAIT`; it does not evaluate
 the configured command as shell code. Child file creation uses umask 077. Stdin
-is `/dev/null`. Stdout is capped at 8 MiB; stderr is capped at 64 KiB. Timeout,
+is `/dev/null` for CLI engines; HTTP mode reads its private curl config. Stdout is capped at 8 MiB; stderr is capped at 64 KiB. Timeout,
 output overflow, and completion terminate the process group, including ordinary
 descendants. As with other group-based supervision, a child that deliberately
 creates a new session is outside that group. Failures return no partial results.
@@ -170,7 +238,7 @@ bool ocrSupportsTextLayer(const std::vector<OcrResult>&);
 std::string joinOcrText(const std::vector<OcrResult>&);
 ```
 
-`CaptureDefaults::ocr` carries all six keys. `OcrResponse` contains `results` or
+`CaptureDefaults::ocr` carries all eight keys. `OcrResponse` contains `results` or
 a nonempty `error`; its boolean conversion tests success. The standalone static
 target `hyprcapture-ocr` supplies the complete engine and process dependencies.
 The editor links this target through `hyprcapture-live-text`. The compositor only
@@ -178,7 +246,7 @@ forwards configuration and never runs an OCR process.
 
 ## Offline tests
 
-The main CMake build registers five deterministic suites and two live smoke
+The main CMake build registers seven deterministic suites and two live smoke
 checks. A smaller project uses the exact same library/test targets without Qt,
 Hyprland, audio, HDR downloads, or other engine-independent dependencies:
 

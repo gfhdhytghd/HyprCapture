@@ -67,6 +67,8 @@ Json defaultsJson(const CaptureDefaults& defaults) {
         {"ocrCommand", defaults.ocr.command},
         {"ocrOutput", defaults.ocr.output},
         {"ocrTimeout", defaults.ocr.timeout},
+        {"ocrApiUrl", defaults.ocr.apiUrl},
+        {"ocrApiKey", defaults.ocr.apiKey},
         {"mode", toString(defaults.mode)},
         {"fullscreenScope", toString(defaults.fullscreenScope)},
         {"overlayScope", toString(defaults.overlayScope)},
@@ -316,6 +318,8 @@ bool parseDefaults(const Json& obj, CaptureDefaults& defaults) {
         !stringValue(obj, "ocrCommand", defaults.ocr.command, 65536, false) ||
         !stringValue(obj, "ocrOutput", defaults.ocr.output, 16, false) ||
         !int64Value(obj, "ocrTimeout", defaults.ocr.timeout, 1, 86400, false) ||
+        !stringValue(obj, "ocrApiUrl", defaults.ocr.apiUrl, 65536, false) ||
+        !stringValue(obj, "ocrApiKey", defaults.ocr.apiKey, 65536, false) ||
         !validateOcrConfig(defaults.ocr).empty()) return false;
 
     return boolValue(obj, "save", defaults.save, false) && boolValue(obj, "clipboard", defaults.clipboard, false) &&

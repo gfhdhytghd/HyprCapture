@@ -1,4 +1,5 @@
 #include "shared/ocr_engine.hpp"
+#include "shared/ocr_api.hpp"
 #include "shared/process_environment.hpp"
 #include "shared/supervised_process.hpp"
 #include "shared/trusted_path.hpp"
@@ -91,8 +92,7 @@ std::vector<std::string> environment() {
     return env;
 }
 
-struct ProcessOutput { std::string out, error; };
-ProcessOutput run(std::vector<std::string> args, std::int64_t timeout, std::stop_token stop) {
+detail::OcrProcessOutput run(std::vector<std::string> args, std::chrono::milliseconds timeout, std::stop_token stop, int inputFd = -1, std::size_t outputLimit = OcrMaxBytes) {
     if (stop.stop_requested()) return {{}, "OCR cancelled"};
     args[0] = executable(args[0]);
     const auto shell = executable("sh");
@@ -110,19 +110,20 @@ ProcessOutput run(std::vector<std::string> args, std::int64_t timeout, std::stop
     if (error) return {{}, "OCR spawn actions failed: " + std::string(std::strerror(error))};
     error = posix_spawn_file_actions_adddup2(&actions, outputWriter.value, STDOUT_FILENO);
     if (!error) error = posix_spawn_file_actions_adddup2(&actions, errorWriter.value, STDERR_FILENO);
-    if (!error) error = posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+    if (!error) error = inputFd >= 0 ? posix_spawn_file_actions_adddup2(&actions, inputFd, STDIN_FILENO) :
+                                     posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
     SupervisedProcess process;
     if (!error) process = spawnSupervisedProcess(shell, args, envp.data(), actions, true);
     posix_spawn_file_actions_destroy(&actions);
     if (error || process.spawnError) return {{}, "OCR spawn failed: " + std::string(std::strerror(error ? error : process.spawnError))};
     outputWriter.reset(); errorWriter.reset();
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeout);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     std::string stdoutText, stderrText, failure;
     bool statusClosed = false;
     while (output.value >= 0 || errors.value >= 0 || !statusClosed) {
         if (stop.stop_requested()) { failure = "OCR cancelled"; break; }
         const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now()).count();
-        if (remaining <= 0) { failure = "OCR timed out (ocr_timeout=" + std::to_string(timeout) + "s)"; break; }
+        if (remaining <= 0) { failure = "OCR timed out (ocr_timeout=" + (timeout.count() % 1000 == 0 ? std::to_string(timeout.count() / 1000) : std::to_string(timeout.count() / 1000.0)) + "s)"; break; }
         pollfd fds[] = {{output.value, POLLIN, 0}, {errors.value, POLLIN, 0}, {statusClosed ? -1 : process.statusFd, 0, 0}};
         const int ready = poll(fds, 3, static_cast<int>(std::min<std::int64_t>(remaining, 100)));
         if (ready < 0) {
@@ -137,7 +138,7 @@ ProcessOutput run(std::vector<std::string> args, std::int64_t timeout, std::stop
             std::array<char, 8192> buffer;
             const auto count = read(fd.value, buffer.data(), buffer.size());
             if (count > 0) {
-                const auto limit = i == 0 ? OcrMaxBytes : std::size_t(64 * 1024);
+                const auto limit = i == 0 ? outputLimit : std::size_t(64 * 1024);
                 const auto available = limit - text.size();
                 text.append(buffer.data(), std::min<std::size_t>(count, available));
                 if (static_cast<std::size_t>(count) > available) failure = i == 0 ? "OCR stdout exceeds 8 MiB" : "OCR stderr exceeds 64 KiB";
@@ -155,7 +156,7 @@ ProcessOutput run(std::vector<std::string> args, std::int64_t timeout, std::stop
         const auto end = stderrText.find_first_of("\r\n");
         const auto first = stderrText.substr(0, std::min<std::size_t>(end, 1024));
         if (!first.empty()) failure += ": " + first;
-        return {{}, std::move(failure)};
+        return {{}, std::move(failure), status.value_or(-1)};
     }
     return {std::move(stdoutText), {}};
 }
@@ -246,6 +247,13 @@ OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& conf
         return {{}, "OCR input PNG is not a readable regular file"};
     std::vector<std::string> args;
     PrivateDirectory temporary;
+    if (config.engine == "paddleocr" && !config.apiUrl.empty()) {
+        if (executable("curl").empty()) return {{}, "OCR API needs curl"};
+        if (!temporary.create()) return {{}, "OCR API private directory creation failed"};
+        return detail::runOcrApi(image, config, temporary.path, stop, [&](auto remaining, int input) {
+            return run({"curl", "-q", "-K", "-"}, remaining, stop, input, OcrMaxBytes + 4);
+        });
+    }
     if (config.engine == "tesseract") args = {"tesseract", image.string(), "stdout", "-l", config.languages, "tsv"};
     else if (config.engine == "paddleocr") {
         if (!temporary.create()) return {{}, "paddleocr private directory creation failed"};
@@ -259,7 +267,7 @@ OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& conf
         if (!parsed) return {{}, parsed.error};
         args = std::move(parsed.argv);
     }
-    auto output = run(std::move(args), config.timeout, stop);
+    auto output = run(std::move(args), std::chrono::seconds(config.timeout), stop);
     if (!output.error.empty()) return {{}, output.error};
     if (config.engine == "tesseract") return parseTesseractTsv(output.out);
     if (config.engine == "paddleocr") return readPaddle(temporary.path / (image.stem().string() + "_res.json"));

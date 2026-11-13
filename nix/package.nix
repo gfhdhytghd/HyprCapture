@@ -8,6 +8,7 @@
   pipewire,
   fftw,
   cmake,
+  curl,
   glib,
   hyprland,
   hyprlandPlugins,
@@ -17,6 +18,7 @@
   libheif,
   ffmpeg,
   nlohmann_json,
+  openssl,
   opencv,
   pkg-config,
   python3,
@@ -59,6 +61,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
     libpulseaudio
     hdrCodec
     nlohmann_json
+    openssl
     opencv
   ];
 
@@ -68,7 +71,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
     "-DHYPRCAPTURE_AEC_MODEL_DIR=${aecModels}"
     "-DHYPRCAPTURE_TFLITE_LIBRARY=${aecRuntime}/lib/libtensorflowlite_c.so"
     "-DHYPRCAPTURE_DEFAULT_HELPER_PATH=${builtins.placeholder "out"}/bin/hyprcapture-ui"
-    "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ffmpeg ]}"
+    "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ffmpeg curl ]}"
   ];
 
   # CMake installs hyprcapture-shot into $out/bin alongside the Qt helper.
