@@ -1,4 +1,5 @@
 #include "shared/ocr_engine.hpp"
+#include "shared/ocr_api.hpp"
 #include "shared/ocr_warning.hpp"
 #include "shared/protocol.hpp"
 #include "shared/trusted_path.hpp"
@@ -111,8 +112,81 @@ void parser() {
     std::string nested(40, '['); nested += '0'; nested += std::string(40, ']');
     check(!parseOcrJsonLines("{\"text\":\"x\",\"poly\":[],\"unknown\":" + nested + "}"), "nesting cap");
     success(parseOcrJsonLines(""), "empty OCR output");
+    obj = item("中文 OCR");
+    obj["words"] = {{{"text", "中"}, {"poly", {{0,0},{0,10},{5,10},{5,0}}}, {"conf", .8}},
+                    {{"text", "文"}, {"box", {5,0,10,10}}},
+                    {{"text", " OCR "}, {"box", {12,0,20,10}}}, {{"text", "　 \t"}}};
+    r = parseOcrJsonLines(obj.dump() + "\r\n"); success(r, "words CRLF poly and box");
+    check(r.warning.empty() && r.results[0].words.size() == 3, "blank words skipped");
+    check(r.results[0].words[0].conf == .8 && !r.results[0].words[1].conf &&
+          r.results[0].words[0].poly[1].x == 5 && r.results[0].words[2].text == "OCR", "word winding confidence and trim");
+    for (const auto& bad : {Json{{"text", "absent"}, {"box", {0,0,10,10}}},
+                           Json{{"text", "中"}}, Json{{"text", "中"}, {"box", {0,0,0,10}}},
+                           Json{{"text", "中"}, {"box", {0,0,10,10}}, {"conf", 1.1}},
+                           Json{{"text", "中"}, {"poly", {{0,0},{1e8,0},{0,1}}}},
+                           Json{{"text", 3}}, Json{{"text", "中"}, {"poly", {{0,0},{1,1},{2,2}}}}}) {
+        auto copy = obj; copy["words"].push_back(bad);
+        r = parseOcrJsonLines(copy.dump() + "\n" + copy.dump());
+        check(r && r.results.size() == 2 && r.results[0].words.empty() && !r.warning.empty(), "malformed words soft drop one response warning");
+    }
+    auto tooManyPoints = obj;
+    tooManyPoints["words"][0]["poly"] = Json::array();
+    for (std::size_t i = 0; i <= OcrMaxPoints; ++i) tooManyPoints["words"][0]["poly"].push_back({i,i%2});
+    r = parseOcrJsonLines(tooManyPoints.dump());
+    check(r && r.results[0].words.empty() && !r.warning.empty(), "word point count limit soft failure");
+    auto spaced = item("中　文 OCR");
+    spaced["words"] = {{{"text", "中 文"}, {"box", {0,0,10,10}}}, {{"text", "OCR"}, {"box", {10,0,20,10}}}};
+    r = parseOcrJsonLines(spaced.dump());
+    check(r && r.results[0].words.size() == 2 && r.warning.empty(), "word matching ignores Unicode whitespace");
+    auto copyWords = obj; std::swap(copyWords["words"][0], copyWords["words"][1]);
+    r = parseOcrJsonLines(copyWords.dump()); check(r && r.results[0].words.empty() && !r.warning.empty(), "word reading order mismatch");
+    copyWords = obj; copyWords["level"] = "word"; copyWords["words"] = false;
+    r = parseOcrJsonLines(copyWords.dump()); check(r && r.results[0].words.empty() && r.warning.empty(), "level word ignores words");
+    copyWords = obj; copyWords["words"] = false;
+    r = parseOcrJsonLines(copyWords.dump()); check(r && !r.warning.empty(), "nonarray words soft failure");
+    copyWords = item("中"); copyWords["words"] = Json::array();
+    for (std::size_t i = 0; i < OcrMaxWords; ++i) copyWords["words"].push_back({{"text", " "}});
+    auto tiny = item("中"); tiny["words"] = {{{"text", "中"}, {"box", {0,0,10,10}}}};
+    const auto limitInput = copyWords.dump();
+    r = parseOcrJsonLines(limitInput); check(r && r.warning.empty(), "word count cap inclusive");
+    r = parseOcrJsonLines(limitInput + "\n" + tiny.dump());
+    check(r && r.results[1].words.empty() && !r.warning.empty(), "word count cap across lines");
+    copyWords["words"].push_back({{"text", " "}});
+    r = parseOcrJsonLines(copyWords.dump()); check(r && !r.warning.empty(), "single line word limit");
+    // Preserve the pre-grouping copy text for CJK, Latin and punctuation words.
+    const std::vector<std::string> mixedTokens{"中", "文", "OCR", "123", ",", "测", "试", "。", "next", "word", "!", "中", "A", "文"};
+    std::string mixedTsv = tsv.substr(0, tsv.find('\n') + 1);
+    std::vector<OcrResult> legacyWords;
+    for (std::size_t i = 0; i < mixedTokens.size(); ++i) {
+        const double x = i * 25;
+        mixedTsv += "5\t1\t1\t1\t1\t" + std::to_string(i + 1) + "\t" + std::to_string(i * 25) +
+            "\t0\t20\t10\t95\t" + mixedTokens[i] + "\n";
+        legacyWords.push_back({mixedTokens[i], {{x,0},{x+20,0},{x+20,10},{x,10}}, .95, OcrLevel::Word});
+    }
+    r = parseTesseractTsv(mixedTsv); success(r, "mixed CJK/Latin/punctuation TSV");
+    const std::string mixedExpected = "中文 OCR 123 , 测试。 next word ! 中 A 文";
+    check(joinOcrText(r.results) == mixedExpected, "TSV mixed copy text preserves separators: got " + joinOcrText(r.results));
+    check(joinOcrText(r.results) == joinOcrText(legacyWords), "grouped TSV copy text matches legacy word records");
+    check(r.results.size() == 1 && r.results[0].words.size() == mixedTokens.size(), "mixed TSV retains all words in one line");
+    const auto& mixedLine = r.results[0];
+    const auto ranges = ocrWordRanges(mixedLine.text, mixedLine.words);
+    check(ranges && ranges->size() == mixedTokens.size(), "joined TSV words match line text in order");
+    Json nestedWords = Json::array();
+    for (std::size_t i = 0; i < mixedTokens.size(); ++i) {
+        const auto [begin, end] = (*ranges)[i];
+        check(mixedLine.text.substr(begin, end - begin) == mixedTokens[i], "joined TSV word range preserves token text");
+        nestedWords.push_back({{"text", mixedTokens[i]}, {"poly", quad(i * 25,0)}});
+    }
+    auto mixedRecord = item(mixedLine.text);
+    mixedRecord["poly"] = quad(0,0,(mixedTokens.size() - 1) * 25 + 20);
+    mixedRecord["words"] = std::move(nestedWords);
+    const auto validated = parseOcrJsonLines(mixedRecord.dump());
+    check(validated && validated.warning.empty() && validated.results[0].words.size() == mixedTokens.size(),
+          "joined TSV text passes word-in-line parser validation");
     r = parseTesseractTsv(tsv); success(r, "TSV fixture");
-    check(r.results.size() == 4 && r.results[0].level == OcrLevel::Word && r.results[0].conf == .925, "TSV fields and skips");
+    check(r.results.size() == 2 && r.results[0].level == OcrLevel::Line && r.results[0].words.size() == 2 && r.results[0].words[0].conf == 1 && r.results[0].words[1].conf == .925, "TSV fields and skips");
+    check(joinOcrText(r.results) == "Hello world\n中文", "TSV copy text unchanged from legacy words");
+    check(r.results[1].poly[2].x == 42 && r.results[1].poly[2].y == 51, "TSV line union");
     check(!parseTesseractTsv("not TSV"), "TSV header");
     check(!parseTesseractTsv(tsv + "5\tbad\n"), "TSV columns");
     auto invalidTsv = tsv; invalidTsv.replace(invalidTsv.find("92.5"), 4, "101");
@@ -124,11 +198,12 @@ void parser() {
     p = paddle(); p["rec_polys"][0] = Json::array(); check(!parsePaddleOcrJson(p.dump()), "Paddle polygon");
     p = paddle(); p.erase("rec_texts"); check(!parsePaddleOcrJson(p.dump()), "Paddle required arrays");
     p = paddle();
-    p["text_word"] = {{"中", "文"}, {"rotated"}};
+    p["text_word"] = {{"中", "文"}, {"Rotated"}};
     p["text_word_boxes"] = {{{0,0,10,10},{10,0,20,10}}, {{{50,50},{60,60},{50,70},{40,60}}}};
     r = parsePaddleOcrJson(p.dump()); success(r,"Paddle word boxes");
-    check(r.results.size()==3 && r.results[0].level==OcrLevel::Word && r.results[2].poly.size()==4,"word geometry preserves adapter level");
-    p["text_word"][0].push_back("extra"); check(!parsePaddleOcrJson(p.dump()),"Paddle word arrays mismatch");
+    check(r.results.size()==2 && r.results[0].level==OcrLevel::Line && r.results[0].words.size()==2 && r.results[1].words[0].poly.size()==4,"word geometry preserves adapter level");
+    p["text_word"][0].push_back("extra"); r = parsePaddleOcrJson(p.dump());
+    check(r && r.results[0].words.empty() && !r.warning.empty(),"Paddle word arrays mismatch retains line");
 
 }
 void apiParser() {
@@ -147,6 +222,20 @@ void apiParser() {
     b["result"]["ocrResults"][0]["prunedResult"] = {{"rec_texts", {"rectangle"}}, {"rec_boxes", {{.5,1.5,10.5,20.5}}}, {"rec_scores", {.9}}};
     r = parseOcrApiJson(b.dump()); success(r, "official rec_boxes");
     check(r.results.size() == 3 && r.results[0].poly[2].x == 10.5, "rectangle float coordinates");
+    auto withWords = a;
+    withWords["results"][0]["words"] = {{{"text", "he"}, {"box", {0,0,8,10}}}, {{"text", "llo"}, {"poly", quad(8,0,12)}}};
+    r = parseOcrApiJson(withWords.dump()); check(r && r.results[0].words.size() == 2 && r.warning.empty(), "simple API nested words");
+    withWords["results"][0]["words"][0]["text"] = "bad";
+    r = parseOcrApiJson(withWords.dump()); check(r && r.results[0].words.empty() && !r.warning.empty(), "simple API metadata soft failure");
+    auto officialWords = page;
+    officialWords["prunedResult"]["text_word"] = {{"中", "　", "文"}, {"Rotated"}};
+    officialWords["prunedResult"]["text_word_boxes"] = {{{0,0,10,10}, nullptr, {10,0,20,10}}, {{30,30,50,50}}};
+    auto officialResponse = Json{{"result", {{"ocrResults", {officialWords}}}}};
+    r = parseOcrApiJson(officialResponse.dump());
+    check(r && r.results.size() == 2 && r.results[0].words.size() == 2 && r.warning.empty(), "official API parallel word arrays and whitespace");
+    officialResponse["result"]["ocrResults"][0]["prunedResult"]["text_word_boxes"][0] = nullptr;
+    r = parseOcrApiJson(officialResponse.dump());
+    check(r && r.results[0].words.empty() && r.results[1].words.size() == 1 && !r.warning.empty(), "official bad words preserve other lines");
     auto emptyPage = page;
     emptyPage["prunedResult"] = {{"rec_texts", Json::array()}, {"rec_scores", Json::array()}, {"rec_polys", Json::array()}};
     auto emptyOfficial = b;
@@ -174,6 +263,66 @@ void apiParser() {
     for (std::size_t i = 0; i <= OcrMaxPoints; ++i) copy["results"][0]["box"].push_back({i,i%2});
     check(!parseOcrApiJson(copy.dump()), "API polygon point limit");
     check(!parseOcrApiJson("{\"results\":[],\"extra\":" + std::string(40, '[') + "0" + std::string(40, ']') + "}"), "API nesting limit");
+}
+void apiCache() {
+    Temp root;
+    Env cacheEnv("XDG_CACHE_HOME", root.path.string());
+    const auto cacheFile = root.path / "hyprcapture/ocr-api-format.json";
+    const auto image = root.path / "probe.png"; write(image, "sample");
+    std::int64_t now = 1800000000;
+    for (bool official : {false, true}) {
+        auto c = config("paddleocr");
+        c.apiUrl = official ? "http://cache.test/layout-parsing" : "http://cache.test/ocr";
+        const auto hash = detail::ocrApiUrlHash(c.apiUrl);
+        bool reject = true;
+        std::vector<bool> flags;
+        auto call = [&] {
+            Temp attempt;
+            return detail::runOcrApi(image, c, attempt.path, {}, [&](auto, int fd) {
+                std::string options;
+                char buffer[1024];
+                for (ssize_t n; (n = ::read(fd, buffer, sizeof(buffer))) > 0;) options.append(buffer, n);
+                const bool flag = official ? options.find("request-lines.json") == std::string::npos :
+                    options.find("return_word_box=true") != std::string::npos;
+                flags.push_back(flag);
+                if (reject && flag) return detail::OcrProcessOutput{"{}\n422", {}};
+                return detail::OcrProcessOutput{Json{{"results", {{{"text", "hello"}, {"box", quad()}}}}}.dump() + "\n200", {}};
+            }, [&] { return std::chrono::system_clock::time_point(std::chrono::seconds(now)); });
+        };
+        success(call(), "initial rejected parameter fallback");
+        check(flags == std::vector<bool>({true,false}), "one retry on rejection");
+        auto data = Json::parse(read(cacheFile));
+        check(data[hash + ":no_word_box"]["recorded_at"] == now, "rejection timestamp persisted");
+        struct stat st{}; check(stat(cacheFile.c_str(), &st) == 0 && (st.st_mode & 0777) == 0600, "cache remains 0600");
+        const auto recorded = now;
+        now += 86399; flags.clear(); success(call(), "unexpired rejection reused");
+        check(flags == std::vector<bool>({false}), "no retry cost within 24 hours");
+        check(Json::parse(read(cacheFile))[hash + ":no_word_box"]["recorded_at"] == recorded, "cache hits do not extend rejection lifetime");
+        ++now; reject = false; flags.clear(); success(call(), "reprobe at exact 24-hour expiry");
+        check(flags == std::vector<bool>({true}), "expired in-memory flag sends parameter again");
+        check(!Json::parse(read(cacheFile)).contains(hash + ":no_word_box"), "parameter success clears persisted flag");
+        flags.clear(); success(call(), "success clears in-memory rejection"); check(flags == std::vector<bool>({true}), "parameter stays enabled");
+        data = Json::parse(read(cacheFile)); data[hash + ":no_word_box"] = true;
+        write(cacheFile, data.dump()); flags.clear(); success(call(), "legacy flag without timestamp loads");
+        check(flags == std::vector<bool>({true}), "legacy untimed flag reprobed immediately");
+        // An independent atomic writer changes inode, even with equal-size contents.
+        data = Json::parse(read(cacheFile)); data[hash + ":no_word_box"] = {{"recorded_at", now}};
+        const auto replacement = cacheFile.string()+".external";
+        write(replacement, data.dump()); fs::rename(replacement, cacheFile);
+        flags.clear(); success(call(), "external cache replacement reloaded");
+        check(flags == std::vector<bool>({false}), "external rejection flag replaces in-memory copy");
+        data[hash + ":no_word_box"]["recorded_at"] = now-86400;
+        write(replacement, data.dump()); fs::rename(replacement, cacheFile);
+        flags.clear(); success(call(), "expired persisted flag reloaded");
+        check(flags == std::vector<bool>({true}), "expired disk flag re-probed and cleared");
+        check(!Json::parse(read(cacheFile)).contains(hash + ":no_word_box"), "disk expiry clears rejection after success");
+    }
+    const auto view = detail::ocrApiCacheShow(); success(view, "cache view");
+    check(view.entries.size() == 2, "format cache retained across timestamp changes");
+    const auto removed = detail::ocrApiCacheClear("http://cache.test/ocr"); success(removed, "scoped cache clear");
+    check(removed.entries.size() == 1 && detail::ocrApiCacheShow().entries.size() == 1, "scoped cache clear retains other URLs");
+    success(detail::ocrApiCacheClear(), "clear all cache entries");
+    check(detail::ocrApiCacheShow().entries.empty(), "cache empty after clear");
 }
 void configTests() {
     auto c = OcrConfig{};
@@ -249,17 +398,20 @@ void adapters() {
     write(t.path / "tesseract", "#!/bin/sh\n[ \"$2\" = stdout ] && [ \"$3\" = -l ] && [ \"$4\" = eng+chi_sim ] && [ \"$5\" = tsv ] && [ \"$#\" = 5 ] || exit 8\ncat <<'TSV'\n" + tsv + "TSV\n", true);
     check(security::trustedExecutablePath((t.path / "tesseract").string()).has_value(), "fake executable path must be trusted; run fixture suites in the CTest sandbox");
     auto r = runOcrEngine(image, config("tesseract")); success(r, "fake Tesseract");
-    check(joinOcrText(r.results) == "Hello world\n中文", "Tesseract CJK join");
+    check(joinOcrText(r.results) == "Hello world\n中文", "Tesseract copy text unchanged from legacy words");
+    auto saved = paddle();
+    saved["text_word"] = {{"中", "文"}, {"Rotated"}};
+    saved["text_word_boxes"] = {{{0,0,10,10},{10,0,20,10}}, {{30,30,50,50}}};
     const std::string paddleScript =
         "#!/bin/sh\n[ \"$1\" = ocr ] && [ \"$2\" = -i ] && [ \"$4\" = --save_path ] || exit 9\n"
         "[ \"$6\" = --use_doc_orientation_classify ] && [ \"$7\" = False ] && [ \"$8\" = --use_doc_unwarping ] && [ \"$9\" = False ] || exit 10\n"
         "[ \"${10}\" = --use_textline_orientation ] && [ \"${11}\" = False ] && [ \"${12}\" = --enable_mkldnn ] && [ \"${13}\" = False ] && [ \"${14}\" = --return_word_box ] && [ \"${15}\" = True ] && [ \"$#\" = 15 ] || exit 11\n"
         "stat -c %a \"$5\" > \"${3}.mode\"\nprintf '%s' \"$5\" > \"${3}.temp\"\n"
-        "name=${3##*/}; name=${name%.*}\ncat > \"$5/${name}_res.json\" <<'JSON'\n" + paddle().dump() + "\nJSON\n"
+        "name=${3##*/}; name=${name%.*}\ncat > \"$5/${name}_res.json\" <<'JSON'\n" + saved.dump() + "\nJSON\n"
         "printf 'numpy.float64(0.99): ignored logs\\n'\n";
     write(t.path / "paddleocr", paddleScript, true);
     r = runOcrEngine(image, config("paddleocr")); success(r, "fake Paddle");
-    check(r.results.size() == 2 && r.results[0].text == "中文", "Paddle saved JSON not stdout");
+    check(r.results.size() == 2 && r.results[0].text == "中文" && r.results[0].words.size() == 2, "Paddle saved line plus words not stdout");
     check(read(image.string() + ".mode") == "700\n", "Paddle directory private");
     check(!fs::exists(read(image.string() + ".temp")), "Paddle temporary directory removed");
     write(t.path / "paddleocr", "#!/bin/sh\nprintf '%s' \"$5\" > \"${3}.temp\"\necho 'first failure' >&2\nexit 4\n", true);
@@ -366,7 +518,8 @@ int live(const std::string& engine) {
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
     const std::string suite = argv[1];
-    if (suite == "api-parser") apiParser();
+    if (suite == "api-cache") apiCache();
+    else if (suite == "api-parser") apiParser();
     else if (suite == "parser") parser();
     else if (suite == "config") configTests();
     else if (suite == "adapters") adapters();

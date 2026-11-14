@@ -33,7 +33,13 @@ int main() {
             const auto start = std::chrono::steady_clock::now();
             const auto result = hyprcapture::runOcrEngine(request.at("image").get<std::string>(), config, stop.get_token());
             timer.request_stop();
-            std::cout << Json{{"error", result.error}, {"text", hyprcapture::joinOcrText(result.results)},
+            Json words = Json::array();
+            for (const auto& line : result.results) {
+                Json row = Json::array();
+                for (const auto& word : line.words) row.push_back({{"text", word.text}, {"points", word.poly.size()}, {"conf", word.conf ? Json(*word.conf) : Json(nullptr)}});
+                words.push_back(std::move(row));
+            }
+            std::cout << Json{{"words", words}, {"warning", result.warning}, {"error", result.error}, {"text", hyprcapture::joinOcrText(result.results)},
                 {"count", result.results.size()}, {"ms", std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()}}.dump() << std::endl;
         } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
     }

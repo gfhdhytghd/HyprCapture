@@ -10,7 +10,7 @@ repo = pathlib.Path(__file__).resolve().parents[1]
 
 def run(body, root):
     return subprocess.run(
-        ['bash', '-c', 'set -euo pipefail; DIR=$1; CACHE=$2; source "$DIR/omarchy/plugin.conf"; ' + body,
+        ['bash', '-c', 'set -euo pipefail; DIR=$1; CACHE=$2; HOME="$CACHE/home"; export HOME; source "$DIR/omarchy/plugin.conf"; ' + body,
          'test', str(repo), str(root)], capture_output=True, text=True, timeout=3,
     )
 
@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-optional-aec-') as folder:
     cmake.write_text('#!/bin/sh\necho simulated-AEC-build-failure >&2\nexit 1\n')
     cmake.chmod(0o755)
     result = run('PATH="$CACHE/bin:$PATH"; stage_extras "$CACHE/stage"; '
-                 '[[ ${#FILES[@]} == 2 && ${#TARGETS[@]} == 2 ]]', root)
+                 '[[ ${#FILES[@]} == 4 && ${#TARGETS[@]} == 4 ]]', root)
     assert result.returncode == 0, result.stderr
     assert 'AEC components pending' in result.stderr
     assert (stage / 'hyprcapture-install-aec').exists()
@@ -33,6 +33,9 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-optional-aec-') as folder:
     assert (stage / 'hyprcapture-prepare-aec-sources.cmake').exists()
     assert not (stage / 'hyprcapture-aec').exists()
 
+    for name in ('hyprcapture-shot', 'hyprcapture-ocr'):
+        (stage / name).write_text('#!/bin/sh\nexit 0\n')
+        (stage / name).chmod(0o755)
     worker = stage / 'hyprcapture-aec'
     worker.write_text('#!/bin/sh\nexit 0\n')
     worker.chmod(0o755)
@@ -46,6 +49,8 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-optional-aec-') as folder:
         body = 'exec 9>"$CACHE/.lock"; flock 9; setup_extras "$CACHE/stage"'
         result = run(body, root)
         assert result.returncode == 0, result.stderr
+        for name in ('hyprcapture-shot', 'hyprcapture-ocr'):
+            assert (root / 'home/.local/bin' / name).read_bytes() == (stage / name).read_bytes()
         deadline = time.monotonic() + 2
         while not (stage / 'started').exists() and time.monotonic() < deadline:
             time.sleep(.01)

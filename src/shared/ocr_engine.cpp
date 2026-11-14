@@ -200,6 +200,10 @@ OcrResponse readPaddle(const std::filesystem::path& file) {
 }
 } // namespace
 
+detail::OcrProcessOutput detail::ocrReadHyprlandOption(std::string_view name) {
+    return run({"hyprctl", "getoption", "-j", std::string(name)}, std::chrono::seconds(5), {});
+}
+
 OcrCommand splitOcrCommand(std::string_view command, std::string_view image) {
     if (command.size() > 65536 || command.find('\0') != command.npos || image.find('\0') != image.npos)
         return {{}, "ocr_command is too long or contains NUL"};
@@ -236,7 +240,7 @@ OcrCommand splitOcrCommand(std::string_view command, std::string_view image) {
     return result;
 }
 
-OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& config, std::stop_token stop) {
+OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& config, std::stop_token stop, bool ignoreApiCache) {
     if (stop.stop_requested()) return {{}, "OCR cancelled"};
     if (const auto error = validateOcrConfig(config); !error.empty()) return {{}, error};
     if (config.mode == "off") return {{}, "OCR is disabled: set ocr_mode"};
@@ -252,7 +256,7 @@ OcrResponse runOcrEngine(const std::filesystem::path& png, const OcrConfig& conf
         if (!temporary.create()) return {{}, "OCR API private directory creation failed"};
         return detail::runOcrApi(image, config, temporary.path, stop, [&](auto remaining, int input) {
             return run({"curl", "-q", "-K", "-"}, remaining, stop, input, OcrMaxBytes + 4);
-        });
+        }, std::chrono::system_clock::now, ignoreApiCache);
     }
     if (config.engine == "tesseract") args = {"tesseract", image.string(), "stdout", "-l", config.languages, "tsv"};
     else if (config.engine == "paddleocr") {
