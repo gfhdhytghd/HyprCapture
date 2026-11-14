@@ -163,8 +163,17 @@ Both formats are detected automatically; there is no format option:
   `{ "text": "...", "confidence": 0.99, "box": [[x,y], ...] }`.
   `poly`/`bbox` alias `box`; `score` aliases `confidence`.
   Each result may include `"words": [{"text":"hello", "box":[[0,0],[50,0],[50,20],[0,20]], "conf":0.98}]`.
-  Words also accept `poly` or `box: [x1,y1,x2,y2]`. Servers that ignore the new
-  request field and return no words retain line-only behavior.
+  Words also accept `poly` or `box: [x1,y1,x2,y2]`. Alternatively, each result
+  may carry a flat `text_word` string array paired with a same-length
+  `text_word_boxes` array, for example `"text_word": ["Latin", " ", "Hello"]`
+  and `"text_word_boxes": [[[0,0],[50,0],[50,20],[0,20]], null, [80,0,140,20]]`.
+  Word boxes accept polygons or `[x0,y0,x1,y1]` rectangles. Whitespace tokens
+  are skipped before geometry validation, so their boxes may be `null`.
+  Neighbouring CJK boxes may overlap. If `words` is present, it takes precedence,
+  including when empty or malformed. Mismatched or malformed word arrays drop
+  only that line's word metadata and produce a warning; the line remains usable.
+  Both forms share the same word limits and validation. Servers that ignore the
+  new request field and return no words retain line-only behavior.
 - **Official PaddleOCR/PaddleX serving (including Baidu AI Studio):** POST JSON
   with base64 PNG in `file`, `fileType: 1`, and
   `useDocOrientationClassify`, `useDocUnwarping`, `useTextlineOrientation`,

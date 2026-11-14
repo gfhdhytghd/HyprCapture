@@ -140,7 +140,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     pruned['text_word'] = [['he', ' ', 'llo']]
                     pruned['text_word_boxes'] = [[[0,0,8,10], None, [8,0,20,10]]]
                 else:
-                    response['results'][0]['words'] = [{'text': 'he', 'box': [[0,0],[8,0],[8,10],[0,10]], 'conf': .9}, {'text': 'llo', 'box': [8,0,20,10]}]
+                    response['results'][0]['text_word'] = ['he', ' ', 'llo']
+                    response['results'][0]['text_word_boxes'] = [[[0,0],[8,0],[8,10],[0,10]], None, [8,0,20,10]]
             elif self.path in ('/slow', '/cancel'):
                 time.sleep(2)
             elif self.path == '/budget':
