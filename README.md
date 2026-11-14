@@ -85,6 +85,7 @@ After a Hyprland update, a notification offers to rebuild. `omarchy plugin updat
 - nlohmann-json
 - OpenSSL libcrypto (OCR API SHA-256 and base64)
 - ICU (Qt-free OCR grapheme counting)
+- `curl` (runtime, for the PaddleOCR HTTP API)
 - Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
 - OpenCV `core` and `imgproc` (CPU image registration; no neural-network runtime)
@@ -129,7 +130,7 @@ Perform a full system upgrade while installing the build tools and libraries:
 
 ```sh
 sudo pacman -Syu --needed base-devel cmake git cpio \
-    hyprland nlohmann-json openssl lua glib2 \
+    hyprland nlohmann-json openssl icu curl lua glib2 \
     qt6-base qt6-svg qt6-wayland layer-shell-qt opencv vtk hdf5 \
     pipewire libpipewire fftw libpulse ffmpeg wl-clipboard
 ```
@@ -681,12 +682,12 @@ remain subject to `window_background`; no margin is added around its content.
 | `language` | string | `auto` | UI language: `auto`, `en`, `zh_CN`, `zh_TW`, `ja`, `de`, `fr`, `es`, or `ko`. `auto` uses `HYPRCAPTURE_LANGUAGE` when set, then the system locale. Explicit language values take precedence; missing translations fall back to English. |
 | `ocr_mode` | string | `off` | Editor OCR tool: `off`, `capture` (copy all), `text_layer` (select text), or `both`. See [OCR](#ocr). |
 | `ocr_engine` | string | `tesseract` | External adapter: `tesseract`, `paddleocr`, or `command`. See [Engines](#engines). |
-| `ocr_languages` | string | `eng+chi_sim` | Tesseract language expression. PaddleOCR uses its installed default model; use `command` for explicit model/language arguments. |
+| `ocr_languages` | string | `eng+chi_sim` | Tesseract language expression. PaddleOCR uses its installed default model; use `command` for explicit model/language arguments. See [Engines](#engines). |
 | `ocr_command` | string | empty | For `ocr_engine=command`. Quoted argv with `{image}` substitution; no shell evaluation. See [Custom command](#custom-command-json-lines). |
 | `ocr_output` | string | `text` | For `ocr_engine=command`. `text` copies all text; `json` supplies polygons (and optional word boxes) for selectable text. See [Custom command](#custom-command-json-lines). |
 | `ocr_api_url` | string | empty | Full PaddleOCR HTTP endpoint; empty uses the local CLI. Other engines ignore it. See [PaddleOCR HTTP API](#paddleocr-http-api). |
 | `ocr_api_key` | string | empty | Optional HTTP API key; stored in plain text in the Hyprland config. See [PaddleOCR HTTP API](#paddleocr-http-api). |
-| `ocr_timeout` | integer | `30` | Deadline in seconds, `1..86400`; timeout kills the engine process group. |
+| `ocr_timeout` | integer | `30` | Deadline in seconds, `1..86400`; timeout kills the engine process group. See [OCR](#ocr). |
 | `remember_settings` | bool | `false` | Restore only dropdown choices: fullscreen scope, window background, recording format/codec/FPS/duration/backend and sound mode/devices/mix preset. Capture mode and volume sliders are not saved or restored. Saves on capture or cancel (including Esc) to `$XDG_CONFIG_HOME/hyprcapture/last-settings.ini` (default `~/.config/hyprcapture/last-settings.ini`). Quick capture and the stop-recording UI bypass this state. The open/record dispatcher still determines screenshot versus recording. Saved choices override configured defaults while enabled; disabling this option uses the configured defaults again. |
 | `allow_quick` | bool | `false` | Enable no-confirmation `hl.plugin.hyprcapture.quick()` calls. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |
 | `confirm_before_capture` | bool | `false` | For `hl.plugin.hyprcapture.open()`, require an explicit confirmation after choosing a fullscreen, region, or window target. Region targets can be moved or resized; window targets can be switched before confirming. `quick()` and direct `record()` calls keep their existing no-extra-confirmation behavior. |
@@ -823,9 +824,11 @@ working when no engine is installed. OCR is off by default.
 ### Quick start
 
 ```lua
-hl.plugin.hyprcapture.ocr_mode = "text_layer"    -- or "capture", "both", "off"
-hl.plugin.hyprcapture.ocr_engine = "tesseract"   -- or "paddleocr", "command"
-hl.plugin.hyprcapture.ocr_languages = "eng+chi_sim"
+hl.config({ plugin = { hyprcapture = {
+    ocr_mode = "text_layer",    -- or "capture", "both", "off"
+    ocr_engine = "tesseract",   -- or "paddleocr", "command"
+    ocr_languages = "eng+chi_sim",
+} } })
 hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.open_editor)
 ```
 
@@ -862,9 +865,11 @@ result until the image changes. The tool is hidden in blocking
 A resident service avoids reloading the model for every click:
 
 ```lua
-hl.plugin.hyprcapture.ocr_engine = "paddleocr"
-hl.plugin.hyprcapture.ocr_api_url = "http://ocr.example.lan:8008/ocr"
-hl.plugin.hyprcapture.ocr_api_key = ""   -- optional; stored in the config in plain text
+hl.config({ plugin = { hyprcapture = {
+    ocr_engine = "paddleocr",
+    ocr_api_url = "http://ocr.example.lan:8008/ocr",
+    ocr_api_key = "",   -- optional; stored in the config in plain text
+} } })
 ```
 
 Two wire formats are detected automatically, with no extra setting:
