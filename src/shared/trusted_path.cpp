@@ -1,5 +1,6 @@
 #include "shared/trusted_path.hpp"
 
+#include <cstdlib>
 #include <fstream>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -51,6 +52,14 @@ bool hasWritableGroupOrOther(mode_t mode) {
 }
 
 } // namespace
+
+std::filesystem::path xdgNixProfileBinDirectory() {
+    if (const char* state = std::getenv("XDG_STATE_HOME"); state && *state && std::filesystem::path(state).is_absolute())
+        return std::filesystem::path(state) / "nix/profile/bin";
+    if (const char* home = std::getenv("HOME"); home && *home)
+        return std::filesystem::path(home) / ".local/state/nix/profile/bin";
+    return {};
+}
 
 bool parentChainTrusted(const std::filesystem::path& path, std::filesystem::path immutableBoundary) {
     immutableBoundary = immutableBoundary.lexically_normal();
