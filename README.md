@@ -36,6 +36,7 @@ The screenshot annotation interface is inspired by [Omarchy Screenshot](https://
 - Optional window border and shadow removal
 - Optional image watermarks from PNG, JPG/JPEG, or built-in presets
 - Optional in-place screenshot editing with annotations and desktop pinning
+- [OCR](#ocr): select recognized text in the editor like a document, or copy it all with one click (Tesseract, PaddleOCR CLI/HTTP API, or any command)
 - UI translations for English, Simplified and Traditional Chinese, Japanese, German, French, Spanish, and Korean
 - Save-to-file and clipboard output
 - Stable Wayland clipboard writes through `wl-copy` when available, with Qt clipboard fallback
@@ -440,73 +441,6 @@ The plugin captures native, cursor-free frames while excluding this helper's lay
 
 Image matching uses a bounded CPU worker and preserves source pixels; it does not infer displacement from wheel distances. The limits are 200 accepted frames, 64 megapixels, 32,768 output rows and five minutes. Closing the target or changing its geometry/scale stops new capture and leaves confirmed content available. Both plugin and helper must support scroll-session version 1; older plugins retain ordinary capture and editing.
 
-### OCR
-
-Enable the editor tool in your Hyprland Lua configuration:
-
-```lua
-hl.plugin.hyprcapture.ocr_mode = "text_layer" -- select recognized text
--- Use "capture" for one-click recognition and copying of the whole image.
-hl.plugin.hyprcapture.ocr_engine = "tesseract"
-hl.plugin.hyprcapture.ocr_languages = "eng+chi_sim"
-hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.open_editor)
-```
-
-Open the annotation editor, click **Live text (O)** or press **O**, then drag over
-recognized text. Double-click selects a word; triple-click selects a line.
-**Ctrl+A** selects all text and **Ctrl+C** copies the selection. Copying joins
-wrapped prose into paragraphs; list items and lead-ins retain hard breaks,
-and detected code keeps its lines and indentation. The context menu
-also offers **Copy**, **Copy all text**, and **Select all**. Press **O** or **Esc**
-to hide the text layer and return to the drawing tool. OCR reads the original
-image at physical resolution, without annotations. It never changes the image,
-annotation history, capture output, or save directory. Results are cached until
-the base image changes. The tool is hidden in blocking `shot` sessions.
-
-With `ocr_mode = "capture"`, one click copies all recognized text. With
-`text_layer` or `both`, a `command` engine returning `text` uses the same fallback:
-a warning appears once per configuration change, the tooltip explains the
-fallback, and the first successful click in each editor session explains it in
-a toast. Use `ocr_output = "json"` to supply text positions.
-
-- **Tesseract:** install Tesseract and the selected tessdata packages, for example
-  `tesseract-data-eng` and `tesseract-data-chi_sim`.
-- **PaddleOCR:** install PaddleOCR 3.x on PATH. Its installed model controls the
-  language. The adapter requests word boxes and retains line geometry when word
-  boxes are unavailable. Cold model loading can require a longer `ocr_timeout`.
-- **Command:** set `ocr_engine = "command"` and `ocr_command` to an argv command
-  containing `{image}`. `ocr_output = "text"` copies plain stdout;
-  `ocr_output = "json"` accepts polygon JSON Lines. No shell is evaluated.
-
-For a persistent PaddleOCR service, set `ocr_engine = "paddleocr"` and
-`ocr_api_url = "http://ocr.example.lan:8008/ocr"` with `curl` on PATH.
-`ocr_api_key` is optional and is stored in the Hyprland config in plain text.
-Simple PP-OCR and official PaddleX/AI Studio formats are detected and cached
-automatically. See [PaddleOCR HTTP API](docs/ocr.md#paddleocr-http-api).
-
-The scan, text reveal, selection flash, and toast use local editor animations.
-Set `HYPRCAPTURE_REDUCED_MOTION=1` or `QT_ANIMATIONS_DISABLED=1` to make them instant.
-Nested word/character boxes refine Live Text selection for JSON Lines, PaddleOCR API/CLI, and grouped Tesseract lines.
-
-`hyprcapture-ocr cache show` displays cached formats and word-box parameter
-rejections. The private cache is `~/.cache/hyprcapture/ocr-api-format.json`
-(or under `$XDG_CACHE_HOME`); rejection flags expire after 24 hours. The helper
-reloads external cache changes on the next OCR call.
-
-```sh
-hyprcapture-ocr cache clear                    # clear all cached decisions
-hyprcapture-ocr cache clear --url http://ocr.example.lan:8008/ocr
-hyprcapture-ocr probe                         # read endpoint/key/timeout from hyprctl
-hyprcapture-ocr probe --url http://ocr.example.lan:8008/ocr --key-file /private/ocr-key
-```
-
-After changing or upgrading your OCR server, run `hyprcapture-ocr cache clear`
-or `hyprcapture-ocr probe` to re-test immediately. Probe ignores the cache and
-reports the format, observed word boxes, line/word counts, and latency. Keys
-come from a 0600 file or Hyprland configuration, never a key argument or output.
-
-See [OCR engines and output format](docs/ocr.md) for examples and limits.
-
 ### In-place screenshot editing
 
 Use `hl.plugin.hyprcapture.open_editor()` or `open_editor(mode)` to keep the capture overlay open after selecting a screenshot target. Bind it to a separate shortcut from `open()` to choose the editor or direct-output flow for each capture. The editor shows the rendered screenshot with the configured window background, border, shadow, cursor, and watermark options. Annotations use native image coordinates, so exported edits retain their position at the original capture resolution.
@@ -603,6 +537,137 @@ The thumbnail appears after a completed capture when `show_thumbnail = true`. HD
 - Right click opens the thumbnail menu.
 - Swipe right with a touchpad or two-dimensional wheel to close.
 - Swipe down to delete the file and restore the clipboard snapshot captured before the screenshot.
+
+## OCR
+
+HyprCapture can recognize text in a screenshot and let you select it like a
+document (macOS Live Text style) or copy all of it with one click. Recognition
+runs in an external engine: HyprCapture never links an OCR library and keeps
+working when no engine is installed. OCR is off by default.
+
+### Quick start
+
+```lua
+hl.plugin.hyprcapture.ocr_mode = "text_layer"    -- or "capture", "both", "off"
+hl.plugin.hyprcapture.ocr_engine = "tesseract"   -- or "paddleocr", "command"
+hl.plugin.hyprcapture.ocr_languages = "eng+chi_sim"
+hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.open_editor)
+```
+
+Take a screenshot into the annotation editor and click **Live text (O)** or press
+**O**. While the engine runs, a light sweeps across the image; recognized text is
+then outlined.
+
+| `ocr_mode` | Editor button |
+| --- | --- |
+| `off` (default) | Hidden. |
+| `capture` | One click recognizes the whole image and copies all text. |
+| `text_layer` | Toggles the selectable text layer. |
+| `both` | Same as `text_layer`. |
+
+In the text layer, drag to select, double-click for a word, triple-click for a
+line, **Ctrl+A** selects all and **Ctrl+C** copies. The context menu offers
+**Copy**, **Copy all text** and **Select all**. **O** or **Esc** returns to the
+drawing tools. OCR reads the original image at physical resolution without
+annotations, never changes the image, history or saved output, and caches the
+result until the image changes. The tool is hidden in blocking
+`hyprcapture-shot` sessions.
+
+### Engines
+
+| Engine | Setup | Text positions |
+| --- | --- | --- |
+| Tesseract | Install `tesseract` and the tessdata packages for `ocr_languages`, e.g. `tesseract-data-eng`, `tesseract-data-chi_sim`. | Lines and words |
+| PaddleOCR CLI | Install PaddleOCR 3.x on `PATH`. Its installed model sets the language. The model loads on every run, so raise `ocr_timeout` if needed. | Lines and words |
+| PaddleOCR HTTP API | Set `ocr_api_url` (and `ocr_api_key` if the service needs one). Needs `curl`. | Lines, plus words when the service returns them |
+| Command | `ocr_engine = "command"`, `ocr_command` with `{image}`; `ocr_output = "text"` or `"json"`. No shell is evaluated. | Only with `json` |
+
+#### PaddleOCR HTTP API
+
+A resident service avoids reloading the model for every click:
+
+```lua
+hl.plugin.hyprcapture.ocr_engine = "paddleocr"
+hl.plugin.hyprcapture.ocr_api_url = "http://ocr.example.lan:8008/ocr"
+hl.plugin.hyprcapture.ocr_api_key = ""   -- optional; stored in the config in plain text
+```
+
+Two wire formats are detected automatically, with no extra setting:
+
+- **Simple PP-OCR servers**: multipart field `file`; response
+  `results[{text, confidence, box}]`, optionally with per-line `words`.
+- **Official PaddleX / AI Studio serving**: base64 JSON request; response
+  `result.ocrResults[].prunedResult` with `rec_texts`/`rec_polys` and, when
+  available, `text_word`/`text_word_boxes`.
+
+HyprCapture always asks for word boxes (`return_word_box=true` or
+`returnWordBox: true`). A service that rejects the parameter is retried once
+without it and used with line boxes only. The URL, key and request body are
+passed to `curl` on stdin, never on the command line, and are redacted from
+errors.
+
+#### Custom command (JSON Lines)
+
+With `ocr_output = "json"`, the command prints one JSON object per line. `words`
+is optional; each word takes `poly` or `box` (`[x1,y1,x2,y2]`):
+
+```json
+{"text":"中文 OCR","poly":[[10,70],[200,70],[200,95],[10,95]],"conf":0.98,"words":[{"text":"中","box":[10,70,40,95]},{"text":"文","box":[40,70,70,95]},{"text":"OCR","box":[90,70,200,95]}]}
+```
+
+Coordinates are physical image pixels. Lines whose words do not match their text
+keep the line and drop only its word boxes. `ocr_output = "text"` copies plain
+stdout; the text layer then falls back to copy-all and says so once.
+
+### Selection accuracy
+
+With word or character boxes, selection edges follow the real glyph positions.
+Without them (line boxes only), characters are placed proportionally inside the
+line, counting a Latin character as half the width of a CJK character. Each
+line falls back independently, so mixed responses work.
+
+### Copied text
+
+Copied text is reflowed for reading rather than copied one row per line:
+
+- A larger vertical gap between rows starts a new paragraph (blank line).
+- Inside a paragraph, wrapped rows are joined (a space only between Latin
+  words); a row that is clearly shorter than the paragraph keeps its line break.
+- List items (`-`, `•`, `1.`, `a.`, `(1)`, `①`, `一、`, `[ ]`), indentation
+  changes and rows after a trailing colon always start a new line.
+- Monospace, symbol-rich text is treated as code: every line and its
+  indentation are kept.
+
+### Cache and probe
+
+The detected API format and "this service does not return word boxes" are
+cached per URL in `~/.cache/hyprcapture/ocr-api-format.json` (only a hash of the
+URL is stored). The word-box decision expires after 24 hours, so an upgraded
+service is picked up automatically. To re-test immediately:
+
+```sh
+hyprcapture-ocr probe                 # endpoint, key and timeout from hyprctl
+hyprcapture-ocr cache show
+hyprcapture-ocr cache clear [--url URL]
+```
+
+`probe` runs a built-in sample against the configured service and prints the
+format, whether word boxes are returned, line and word counts and latency, then
+refreshes the cache. A key can be given with `--key-file` (an owner-only file);
+keys are never printed.
+
+### Pipelines
+
+`hyprcapture-shot` prints a screenshot as PNG, so any OCR tool can be chained
+without the editor (see [Shell pipelines](#shell-pipelines)):
+
+```sh
+hyprcapture-shot | tesseract stdin stdout -l eng+chi_sim | wl-copy
+```
+
+Set `HYPRCAPTURE_REDUCED_MOTION=1` or `QT_ANIMATIONS_DISABLED=1` to make the OCR
+animations instant. Full format details and limits are in
+[docs/ocr.md](docs/ocr.md).
 
 ## Configuration
 
