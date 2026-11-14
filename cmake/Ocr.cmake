@@ -1,4 +1,5 @@
 find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+find_package(ICU REQUIRED COMPONENTS uc i18n)
 
 # Qt-free engine layer; also usable by the standalone offline test project.
 add_library(hyprcapture-ocr STATIC
@@ -11,7 +12,7 @@ add_library(hyprcapture-ocr STATIC
   ${CMAKE_CURRENT_LIST_DIR}/../src/shared/trusted_path.cpp)
 set_target_properties(hyprcapture-ocr PROPERTIES POSITION_INDEPENDENT_CODE ON AUTOMOC OFF)
 target_include_directories(hyprcapture-ocr PUBLIC ${CMAKE_CURRENT_LIST_DIR}/../src)
-target_link_libraries(hyprcapture-ocr PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto)
+target_link_libraries(hyprcapture-ocr PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto ICU::uc ICU::i18n)
 add_executable(hyprcapture-ocr-cli ${CMAKE_CURRENT_LIST_DIR}/../src/ocr/main.cpp)
 set_target_properties(hyprcapture-ocr-cli PROPERTIES OUTPUT_NAME hyprcapture-ocr AUTOMOC OFF)
 target_link_libraries(hyprcapture-ocr-cli PRIVATE hyprcapture-ocr)

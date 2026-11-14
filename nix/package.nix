@@ -19,6 +19,7 @@
   ffmpeg,
   nlohmann_json,
   openssl,
+  icu,
   opencv,
   pkg-config,
   python3,
@@ -62,6 +63,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
     hdrCodec
     nlohmann_json
     openssl
+    icu
     opencv
   ];
 

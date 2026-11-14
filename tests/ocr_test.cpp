@@ -185,7 +185,7 @@ void parser() {
           "joined TSV text passes word-in-line parser validation");
     r = parseTesseractTsv(tsv); success(r, "TSV fixture");
     check(r.results.size() == 2 && r.results[0].level == OcrLevel::Line && r.results[0].words.size() == 2 && r.results[0].words[0].conf == 1 && r.results[0].words[1].conf == .925, "TSV fields and skips");
-    check(joinOcrText(r.results) == "Hello world\n中文", "TSV copy text unchanged from legacy words");
+    check(joinOcrText(r.results) == "Hello world\n\n中文", "TSV paragraph copy preserves CJK words");
     check(r.results[1].poly[2].x == 42 && r.results[1].poly[2].y == 51, "TSV line union");
     check(!parseTesseractTsv("not TSV"), "TSV header");
     check(!parseTesseractTsv(tsv + "5\tbad\n"), "TSV columns");
@@ -398,7 +398,7 @@ void adapters() {
     write(t.path / "tesseract", "#!/bin/sh\n[ \"$2\" = stdout ] && [ \"$3\" = -l ] && [ \"$4\" = eng+chi_sim ] && [ \"$5\" = tsv ] && [ \"$#\" = 5 ] || exit 8\ncat <<'TSV'\n" + tsv + "TSV\n", true);
     check(security::trustedExecutablePath((t.path / "tesseract").string()).has_value(), "fake executable path must be trusted; run fixture suites in the CTest sandbox");
     auto r = runOcrEngine(image, config("tesseract")); success(r, "fake Tesseract");
-    check(joinOcrText(r.results) == "Hello world\n中文", "Tesseract copy text unchanged from legacy words");
+    check(joinOcrText(r.results) == "Hello world\n\n中文", "Tesseract paragraph copy preserves CJK words");
     auto saved = paddle();
     saved["text_word"] = {{"中", "文"}, {"Rotated"}};
     saved["text_word_boxes"] = {{{0,0,10,10},{10,0,20,10}}, {{30,30,50,50}}};
@@ -480,12 +480,20 @@ void runner() {
     c.mode = "off"; r = runOcrEngine(image, c); check(!r && r.error.find("ocr_mode") != r.error.npos, "off mode error names key");
 }
 void join() {
+    const std::vector<OcrResult> paragraphFixture{
+        {"alpha", {{0,0},{100,0},{100,10},{0,10}}},
+        {"beta", {{0,12},{100,12},{100,22},{0,22}}},
+        {"short", {{0,24},{50,24},{50,34},{0,34}}},
+        {"tail", {{0,36},{100,36},{100,46},{0,46}}},
+        {"next", {{0,80},{100,80},{100,90},{0,90}}},
+    };
+    check(joinOcrText(paragraphFixture) == "alpha beta short\ntail\n\nnext", "paragraph-aware copy preserves hard breaks and merges soft wraps");
     auto a = item("world", 40, 11); a["level"] = "word";
     auto b = item("Hello", 0, 10); b["level"] = "word";
     auto c = item("文", 22, 40), d = item("中", 0, 41);
     auto r = parseOcrJsonLines(c.dump() + "\n" + a.dump() + "\n" + d.dump() + "\n" + b.dump());
     success(r, "join fixture");
-    check(joinOcrText(r.results) == "Hello world\n中文", "vertical overlap and centroid order");
+    check(joinOcrText(r.results) == "Hello world\n\n中文", "vertical overlap and centroid order");
     r = parsePaddleOcrJson(paddle().dump()); success(r, "rotated join");
     check(joinOcrText(r.results) == "中文\nRotated", "rotated centroid order");
     r = parseOcrJsonLines(item("中文", 0, 0).dump() + "\n" + item("OCR", 40, 0).dump());

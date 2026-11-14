@@ -51,6 +51,14 @@ OcrResponse parseOcrApiJson(std::string_view input, bool* mismatch = nullptr, bo
 bool ocrSupportsTextLayer(const std::vector<OcrResult>& results);
 std::vector<std::vector<std::size_t>> ocrReadingRows(const std::vector<OcrResult>& results);
 std::string ocrTextSeparator(std::string_view previous, std::string_view next);
+struct OcrCopyRow {
+    std::vector<std::size_t> results;
+    std::string text, separator, prefix;
+    bool code = false;
+};
+struct OcrCopyResult { std::string text; std::vector<OcrCopyRow> rows; };
+// Last row has no separator; row text/offsets remain unchanged by copy formatting.
+OcrCopyResult ocrCopyText(const std::vector<OcrResult>& results);
 std::string joinOcrText(const std::vector<OcrResult>& results);
 
 } // namespace hyprcapture

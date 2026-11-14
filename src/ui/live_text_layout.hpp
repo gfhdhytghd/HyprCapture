@@ -19,6 +19,7 @@ class LiveTextLayout {
         QTransform fromUnit;
         std::vector<Glyph> glyphs;
     };
+    QString copiedText(int anchor, int caret) const;
     QString text;
     std::vector<Run> runs;
     void setResults(const std::vector<OcrResult>& results);
@@ -27,6 +28,9 @@ class LiveTextLayout {
     std::pair<int, int> wordAt(int position) const;
     std::pair<int, int> lineAt(int position) const;
     QPainterPath selection(int anchor, int caret) const;
+  private:
+    struct CopyRow { int begin, end; QString prefix, separator; };
+    std::vector<CopyRow> m_copyRows;
 };
 
 } // namespace hyprcapture::ui
