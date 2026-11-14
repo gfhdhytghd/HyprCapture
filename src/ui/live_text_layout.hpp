@@ -12,7 +12,7 @@ namespace hyprcapture::ui {
 // All offsets are UTF-16 grapheme boundaries in text, including row separators.
 class LiveTextLayout {
   public:
-    struct Glyph { int begin, end; QPainterPath area; };
+    struct Glyph { int begin, end; QPainterPath area; double x0, x1; };
     struct Run {
         int begin, end, row;
         QPainterPath area;
