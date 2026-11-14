@@ -1,8 +1,10 @@
 #include "shared/ocr_result.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
@@ -35,7 +37,7 @@ Json boundedJson(std::string_view input) {
     return Json::parse(input);
 }
 
-void polygon(const Json& value, OcrResult& result) {
+template<class Result> void polygon(const Json& value, Result& result) {
     if (!value.is_array() || value.size() < 3 || value.size() > OcrMaxPoints)
         throw std::runtime_error("poly must have 3..256 points");
     for (const auto& p : value) {
@@ -57,7 +59,7 @@ void polygon(const Json& value, OcrResult& result) {
     if (area < 0) std::reverse(result.poly.begin() + 1, result.poly.end());
 }
 
-void confidence(const Json& value, OcrResult& result) {
+template<class Result> void confidence(const Json& value, Result& result) {
     if (!value.is_number()) throw std::runtime_error("conf must be a number in 0..1");
     const auto conf = value.get<double>();
     if (!std::isfinite(conf) || conf < 0 || conf > 1) throw std::runtime_error("conf must be in 0..1");
@@ -99,6 +101,81 @@ char32_t codepoint(std::string_view s, std::size_t i) {
         out = (out << 6) | (static_cast<unsigned char>(s[i + n]) & 63);
     return out;
 }
+bool whitespace(char32_t c) {
+    return (c >= 9 && c <= 13) || c == 32 || c == 0x85 || c == 0xa0 || c == 0x1680 ||
+           (c >= 0x2000 && c <= 0x200a) || c == 0x2028 || c == 0x2029 || c == 0x202f || c == 0x205f || c == 0x3000;
+}
+std::string compact(std::string_view text, std::vector<std::size_t>* offsets = nullptr) {
+    std::string out;
+    for (std::size_t i = 0; i < text.size();) {
+        auto end = i + 1;
+        while (end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0) == 0x80) ++end;
+        if (!whitespace(codepoint(text, i))) for (auto j = i; j < end; ++j) {
+            out += text[j];
+            if (offsets) offsets->push_back(j);
+        }
+        i = end;
+    }
+    return out;
+}
+std::string trimmed(std::string_view text) {
+    std::vector<std::size_t> offsets;
+    compact(text, &offsets);
+    if (offsets.empty()) return {};
+    return std::string(text.substr(offsets.front(), offsets.back() + 1 - offsets.front()));
+}
+template<class Result> void geometry(const Json& box, Result& result) {
+    if (box.is_array() && box.size() == 4 && box[0].is_number()) {
+        if (!std::ranges::all_of(box, [](const Json& n) { return n.is_number(); }))
+            throw std::runtime_error("box must contain four numbers");
+        const double x0 = box[0], y0 = box[1], x1 = box[2], y1 = box[3];
+        if (x1 <= x0 || y1 <= y0) throw std::runtime_error("box must have positive dimensions");
+        polygon(Json::array({{x0,y0},{x1,y0},{x1,y1},{x0,y1}}), result);
+    } else polygon(box, result);
+}
+void wordWarning(OcrResponse& response) {
+    response.warning = "OCR word boxes ignored: malformed words, unmatched text or word limit exceeded";
+}
+// Word metadata is optional: all failures discard only this line's enhancement.
+void words(const Json& entries, OcrResult& result, OcrResponse& response, std::size_t& count) {
+    try {
+        if (!entries.is_array()) throw std::runtime_error("words must be an array");
+        const auto available = OcrMaxWords - count;
+        count += std::min(entries.size(), available);
+        if (entries.size() > available) throw std::runtime_error("too many OCR words");
+        for (const auto& entry : entries) {
+            if (!entry.is_object() || !entry.contains("text") || !entry["text"].is_string())
+                throw std::runtime_error("word requires text");
+            OcrWord word;
+            word.text = trimmed(entry["text"].get<std::string>());
+            if (word.text.empty()) continue;
+            if (entry.contains("poly")) polygon(entry["poly"], word);
+            else geometry(entry.at("box"), word);
+            if (entry.contains("conf")) confidence(entry["conf"], word);
+            result.words.push_back(std::move(word));
+        }
+        if (!ocrWordRanges(result.text, result.words)) throw std::runtime_error("word text mismatch");
+    } catch (...) { result.words.clear(); wordWarning(response); }
+}
+void paddleWords(const Json& obj, std::size_t i, std::size_t lines, OcrResult& result,
+                 OcrResponse& response, std::size_t& count) {
+    if (!obj.contains("text_word") && !obj.contains("text_word_boxes")) return;
+    try {
+        const auto& texts = obj.at("text_word");
+        const auto& boxes = obj.at("text_word_boxes");
+        if (!texts.is_array() || !boxes.is_array() || texts.size() != lines || boxes.size() != lines ||
+            !texts[i].is_array() || !boxes[i].is_array() || texts[i].size() != boxes[i].size())
+            throw std::runtime_error("word arrays must match recognition lines");
+        if (texts[i].size() > OcrMaxWords - count) {
+            count = OcrMaxWords;
+            throw std::runtime_error("too many OCR words");
+        }
+        Json entries = Json::array();
+        for (std::size_t j = 0; j < texts[i].size(); ++j)
+            entries.push_back({{"text", texts[i][j]}, {"box", boxes[i][j]}});
+        words(entries, result, response, count);
+    } catch (...) { result.words.clear(); wordWarning(response); }
+}
 bool cjkBoundary(std::string_view a, std::string_view b) {
     if (a.empty() || b.empty()) return false;
     auto i = a.size() - 1;
@@ -107,10 +184,27 @@ bool cjkBoundary(std::string_view a, std::string_view b) {
 }
 } // namespace
 
+std::optional<std::vector<std::pair<std::size_t, std::size_t>>> ocrWordRanges(
+    std::string_view text, const std::vector<OcrWord>& words) {
+    std::vector<std::size_t> offsets;
+    const auto line = compact(text, &offsets);
+    std::vector<std::pair<std::size_t, std::size_t>> ranges;
+    std::size_t cursor = 0;
+    for (const auto& word : words) {
+        const auto token = compact(word.text);
+        if (token.empty()) return {};
+        const auto at = line.find(token, cursor);
+        if (at == line.npos) return {};
+        cursor = at + token.size();
+        ranges.emplace_back(offsets[at], offsets[cursor - 1] + 1);
+    }
+    return ranges;
+}
+
 OcrResponse parseOcrJsonLines(std::string_view input) {
     if (input.size() > OcrMaxBytes) return {{}, "OCR JSON Lines exceeds 8 MiB (line 1)"};
     OcrResponse response;
-    std::size_t start = 0, line = 0;
+    std::size_t start = 0, line = 0, wordCount = 0;
     while (start < input.size()) {
         ++line;
         const auto end = input.find('\n', start);
@@ -128,6 +222,8 @@ OcrResponse parseOcrJsonLines(std::string_view input) {
                 if (obj["level"] == "word") result.level = OcrLevel::Word;
                 else if (obj["level"] != "line") throw std::runtime_error("level must be line or word");
             }
+            if (result.level == OcrLevel::Line && obj.contains("words"))
+                words(obj["words"], result, response, wordCount);
             response.results.push_back(std::move(result));
         } catch (const std::exception& e) {
             return {{}, "OCR JSON Lines line " + std::to_string(line) + ": " + std::string(e.what()).substr(0, 512)};
@@ -145,6 +241,8 @@ OcrResponse parseTesseractTsv(std::string_view input) {
     constexpr std::string_view header = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext";
     if (lines.empty() || (lines[0] != header && lines[0] != std::string(header) + "\r"))
         return {{}, "tesseract TSV line 1: invalid header"};
+    std::map<std::array<double, 4>, std::vector<std::pair<double, OcrResult>>> groups;
+    std::size_t wordCount = 0;
     for (std::size_t i = 1; i < lines.size(); ++i) {
         auto line = lines[i];
         if (i + 1 == lines.size() && line.empty()) break;
@@ -155,7 +253,7 @@ OcrResponse parseTesseractTsv(std::string_view input) {
             if (number(fields[0]) != 5) continue;
             const double conf = number(fields[10]);
             if (conf == -1 || blank(fields[11])) continue;
-            if (response.results.size() >= OcrMaxResults) throw std::runtime_error("too many OCR results");
+            if (++wordCount > OcrMaxWords) throw std::runtime_error("too many OCR words");
             const double x = number(fields[6]), y = number(fields[7]), w = number(fields[8]), h = number(fields[9]);
             if (w <= 0 || h <= 0) throw std::runtime_error("word dimensions must be positive");
             OcrResult result;
@@ -163,10 +261,37 @@ OcrResponse parseTesseractTsv(std::string_view input) {
             result.level = OcrLevel::Word;
             confidence(conf / 100, result);
             polygon(Json::array({{x,y}, {x+w,y}, {x+w,y+h}, {x,y+h}}), result);
-            response.results.push_back(std::move(result));
+            std::array<double, 4> key;
+            for (std::size_t j = 0; j < key.size(); ++j) {
+                key[j] = number(fields[j + 1]);
+                if (key[j] < 0 || std::floor(key[j]) != key[j]) throw std::runtime_error("invalid TSV line id");
+            }
+            const double order = number(fields[5]);
+            if (order < 0 || std::floor(order) != order) throw std::runtime_error("invalid TSV word id");
+            groups[key].emplace_back(order, std::move(result));
+            if (groups.size() > OcrMaxResults) throw std::runtime_error("too many OCR results");
         } catch (const std::exception& e) {
             return {{}, "tesseract TSV line " + std::to_string(i + 1) + ": " + std::string(e.what()).substr(0, 512)};
         }
+    }
+    for (auto& [key, entries] : groups) {
+        std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        OcrResult line;
+        double left = 1e7, top = 1e7, right = -1e7, bottom = -1e7, conf = 0;
+        for (auto& [order, word] : entries) {
+            const std::string_view previous = line.words.empty() ? std::string_view{} : line.words.back().text;
+            line.text += ocrTextSeparator(previous, word.text);
+            line.text += word.text;
+            for (const auto p : word.poly) {
+                left = std::min(left, p.x); right = std::max(right, p.x);
+                top = std::min(top, p.y); bottom = std::max(bottom, p.y);
+            }
+            conf += *word.conf;
+            line.words.push_back({std::move(word.text), std::move(word.poly), word.conf});
+        }
+        line.conf = conf / entries.size();
+        line.poly = {{left,top},{right,top},{right,bottom},{left,bottom}};
+        response.results.push_back(std::move(line));
     }
     return response;
 }
@@ -182,41 +307,14 @@ OcrResponse parsePaddleOcrJson(std::string_view input) {
         if (size > OcrMaxResults || obj["rec_polys"].size() != size || obj["rec_scores"].size() != size)
             throw std::runtime_error("recognition arrays must have equal lengths <= 65536");
         OcrResponse response;
+        std::size_t wordCount = 0;
         for (std::size_t i = 0; i < size; ++i) {
             if (!obj["rec_texts"][i].is_string()) throw std::runtime_error("rec_texts entries must be strings");
             OcrResult result;
             result.text = obj["rec_texts"][i].get<std::string>();
             polygon(obj["rec_polys"][i], result);
             confidence(obj["rec_scores"][i], result);
-            if (obj.contains("text_word_boxes") || obj.contains("text_word")) {
-                if (!obj.contains("text_word_boxes") || !obj.contains("text_word") ||
-                    !obj["text_word_boxes"].is_array() || !obj["text_word"].is_array() ||
-                    obj["text_word_boxes"].size() != size || obj["text_word"].size() != size)
-                    throw std::runtime_error("word arrays must match recognition lines");
-                const auto& boxes = obj["text_word_boxes"][i];
-                const auto& words = obj["text_word"][i];
-                if (!boxes.is_array() || !words.is_array() || boxes.size() != words.size())
-                    throw std::runtime_error("word boxes and texts must have equal lengths");
-                // Older PaddleOCR versions omit word boxes. Empty word arrays
-                // retain the line geometry instead of losing recognized text.
-                if (!words.empty()) {
-                    for (std::size_t j = 0; j < words.size(); ++j) {
-                        if (!words[j].is_string()) throw std::runtime_error("word text must be a string");
-                        if (response.results.size() >= OcrMaxResults) throw std::runtime_error("too many OCR words");
-                        OcrResult word;
-                        word.text = words[j].get<std::string>(); word.level = OcrLevel::Word; word.conf = result.conf;
-                        const auto& box = boxes[j];
-                        if (box.is_array() && box.size() == 4 && box[0].is_number()) {
-                            const double x0 = box[0].get<double>(), y0 = box[1].get<double>();
-                            const double x1 = box[2].get<double>(), y1 = box[3].get<double>();
-                            if (x1 <= x0 || y1 <= y0) throw std::runtime_error("word box must have positive dimensions");
-                            polygon(Json::array({{x0,y0},{x1,y0},{x1,y1},{x0,y1}}),word);
-                        } else polygon(box,word);
-                        response.results.push_back(std::move(word));
-                    }
-                    continue;
-                }
-            }
+            paddleWords(obj, i, size, result, response, wordCount);
             if (response.results.size() >= OcrMaxResults) throw std::runtime_error("too many OCR results");
             response.results.push_back(std::move(result));
         }
@@ -246,6 +344,7 @@ OcrResponse parseOcrApiJson(std::string_view input, bool* mismatch, bool* servic
             }
         }
         OcrResponse response;
+        std::size_t wordCount = 0;
         auto append = [&](const Json& text, const Json& poly, const Json* score) {
             if (response.results.size() >= OcrMaxResults) throw std::runtime_error("too many OCR results");
             if (!text.is_string()) throw std::runtime_error("text must be a string");
@@ -262,6 +361,7 @@ OcrResponse parseOcrApiJson(std::string_view input, bool* mismatch, bool* servic
                 const auto* box = entry.contains("box") ? "box" : entry.contains("poly") ? "poly" : "bbox";
                 const Json* score = entry.contains("confidence") ? &entry["confidence"] : entry.contains("score") ? &entry["score"] : nullptr;
                 append(entry.at("text"), entry.at(box), score);
+                if (entry.contains("words")) words(entry["words"], response.results.back(), response, wordCount);
             }
         } else if (obj.is_object() && obj.contains("result") && obj["result"].is_object() &&
                    obj["result"].contains("ocrResults") && obj["result"]["ocrResults"].is_array()) {
@@ -285,6 +385,7 @@ OcrResponse parseOcrApiJson(std::string_view input, bool* mismatch, bool* servic
                         if (x2 <= x1 || y2 <= y1) throw std::runtime_error("box must have positive dimensions");
                         append(texts[i], Json::array({{x1,y1},{x2,y1},{x2,y2},{x1,y2}}), &scores[i]);
                     }
+                    paddleWords(result, i, texts.size(), response.results.back(), response, wordCount);
                 }
             }
         } else {

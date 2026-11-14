@@ -1,4 +1,5 @@
 #include "ui/live_text_layer.hpp"
+#include <QDebug>
 #include "shared/ocr_engine.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/hdr_image.hpp"
@@ -169,6 +170,7 @@ void LiveTextLayer::receive(quint64 generation, OcrResponse response) {
     if (generation != m_generation || !m_on) return;
     m_busy = false;
     if (!response) { fail(ocrErrorText(response.error)); return; }
+    if (!response.warning.empty()) qWarning("%s", response.warning.c_str());
     m_results = std::move(response); m_layout.setResults(m_results.results);
     if (m_layout.text.trimmed().isEmpty()) {
         turnOff(); shake(); toast(uiText("No text found")); emit recognized(); return;

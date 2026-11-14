@@ -12,6 +12,11 @@ add_library(hyprcapture-ocr STATIC
 set_target_properties(hyprcapture-ocr PROPERTIES POSITION_INDEPENDENT_CODE ON AUTOMOC OFF)
 target_include_directories(hyprcapture-ocr PUBLIC ${CMAKE_CURRENT_LIST_DIR}/../src)
 target_link_libraries(hyprcapture-ocr PUBLIC nlohmann_json::nlohmann_json OpenSSL::Crypto)
+add_executable(hyprcapture-ocr-cli ${CMAKE_CURRENT_LIST_DIR}/../src/ocr/main.cpp)
+set_target_properties(hyprcapture-ocr-cli PROPERTIES OUTPUT_NAME hyprcapture-ocr AUTOMOC OFF)
+target_link_libraries(hyprcapture-ocr-cli PRIVATE hyprcapture-ocr)
+include(GNUInstallDirs)
+install(TARGETS hyprcapture-ocr-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(BUILD_TESTING)
   add_executable(hyprcapture-ocr-test ${CMAKE_CURRENT_LIST_DIR}/../tests/ocr_test.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../src/shared/protocol.cpp)
@@ -19,7 +24,7 @@ if(BUILD_TESTING)
   target_link_libraries(hyprcapture-ocr-test PRIVATE hyprcapture-ocr)
   target_compile_options(hyprcapture-ocr-test PRIVATE -UNDEBUG)
   find_program(HYPRCAPTURE_OCR_BWRAP bwrap)
-  foreach(suite parser api-parser config adapters runner join)
+  foreach(suite parser api-parser api-cache config adapters runner join)
     if(HYPRCAPTURE_OCR_BWRAP AND (suite STREQUAL "adapters" OR suite STREQUAL "runner"))
       # Keep fake executables in the build dir, but give their parent chain a
       # trusted namespace path even when the checkout has a writable ancestor.
@@ -52,12 +57,13 @@ if(BUILD_TESTING)
       --dir /nix/store --ro-bind /usr /nix/store/ocr-system
       --bind ${CMAKE_CURRENT_BINARY_DIR} /nix/store/ocr-build
       --ro-bind ${CMAKE_CURRENT_LIST_DIR}/../tests/ocr_api_http_test.py /ocr_api_http_test.py
+      --ro-bind ${CMAKE_CURRENT_LIST_DIR}/../resources/ocr-probe.png /ocr-probe.png
       --setenv PATH /nix/store/ocr-system/bin
-      --chdir /nix/store/ocr-build ${HYPRCAPTURE_OCR_SYSTEM_PYTHON} -I /ocr_api_http_test.py /nix/store/ocr-build/hyprcapture-ocr-api-driver)
+      --chdir /nix/store/ocr-build ${HYPRCAPTURE_OCR_SYSTEM_PYTHON} -I /ocr_api_http_test.py /nix/store/ocr-build/hyprcapture-ocr-api-driver /nix/store/ocr-build/hyprcapture-ocr /ocr-probe.png)
   else()
-    add_test(NAME ocr-api-http COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_LIST_DIR}/../tests/ocr_api_http_test.py $<TARGET_FILE:hyprcapture-ocr-api-driver>)
+    add_test(NAME ocr-api-http COMMAND ${Python3_EXECUTABLE} -I ${CMAKE_CURRENT_LIST_DIR}/../tests/ocr_api_http_test.py $<TARGET_FILE:hyprcapture-ocr-api-driver> $<TARGET_FILE:hyprcapture-ocr-cli> ${CMAKE_CURRENT_LIST_DIR}/../resources/ocr-probe.png)
   endif()
-  set_tests_properties(ocr-api-http PROPERTIES TIMEOUT 40)
+  set_tests_properties(ocr-api-http PROPERTIES TIMEOUT 60)
   foreach(engine tesseract paddleocr)
     add_test(NAME ocr-live-${engine} COMMAND hyprcapture-ocr-test live-${engine})
     set_tests_properties(ocr-live-${engine} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180)

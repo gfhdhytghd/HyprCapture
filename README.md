@@ -483,6 +483,25 @@ automatically. See [PaddleOCR HTTP API](docs/ocr.md#paddleocr-http-api).
 
 The scan, text reveal, selection flash, and toast use local editor animations.
 Set `HYPRCAPTURE_REDUCED_MOTION=1` or `QT_ANIMATIONS_DISABLED=1` to make them instant.
+Nested word/character boxes refine Live Text selection for JSON Lines, PaddleOCR API/CLI, and grouped Tesseract lines.
+
+`hyprcapture-ocr cache show` displays cached formats and word-box parameter
+rejections. The private cache is `~/.cache/hyprcapture/ocr-api-format.json`
+(or under `$XDG_CACHE_HOME`); rejection flags expire after 24 hours. The helper
+reloads external cache changes on the next OCR call.
+
+```sh
+hyprcapture-ocr cache clear                    # clear all cached decisions
+hyprcapture-ocr cache clear --url http://ocr.example.lan:8008/ocr
+hyprcapture-ocr probe                         # read endpoint/key/timeout from hyprctl
+hyprcapture-ocr probe --url http://ocr.example.lan:8008/ocr --key-file /private/ocr-key
+```
+
+After changing or upgrading your OCR server, run `hyprcapture-ocr cache clear`
+or `hyprcapture-ocr probe` to re-test immediately. Probe ignores the cache and
+reports the format, observed word boxes, line/word counts, and latency. Keys
+come from a 0600 file or Hyprland configuration, never a key argument or output.
+
 See [OCR engines and output format](docs/ocr.md) for examples and limits.
 
 ### In-place screenshot editing

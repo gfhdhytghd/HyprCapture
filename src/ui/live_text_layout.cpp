@@ -65,12 +65,62 @@ void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
             int last = 0;
             for (int next = finder.toNextBoundary(); next >= 0; next = finder.toNextBoundary()) {
                 const auto codepoints = value.mid(last, next - last).toUcs4();
-                total += !codepoints.empty() && wide(codepoints.front()) ? 1.0 : .55;
+                total += !codepoints.empty() && wide(codepoints.front()) ? 1.0 : .5;
                 boundaries.push_back({next, total}); last = next;
             }
             if (total > 0) for (auto& boundary : boundaries) boundary.second /= total;
+            std::vector<std::pair<double, double>> intervals;
+            for (std::size_t i = 1; i < boundaries.size(); ++i)
+                intervals.emplace_back(boundaries[i - 1].second, boundaries[i].second);
+            if (!result.words.empty()) {
+                const auto ranges = ocrWordRanges(result.text, result.words);
+                const auto inverse = transform.inverted();
+                struct Span { std::size_t first, last; double left, right; };
+                std::vector<Span> spans;
+                double previous = 0;
+                std::size_t byteCursor = 0;
+                int utf16Cursor = 0;
+                if (ranges) for (std::size_t i = 0; i < ranges->size(); ++i) {
+                    const auto [start, end] = (*ranges)[i];
+                    const int first = utf16Cursor + QString::fromUtf8(result.text.data() + byteCursor, start - byteCursor).size();
+                    const int last = first + QString::fromUtf8(result.text.data() + start, end - start).size();
+                    byteCursor = end; utf16Cursor = last;
+                    const auto beginIt = std::ranges::lower_bound(boundaries, first, {}, &std::pair<int, double>::first);
+                    const auto endIt = std::ranges::lower_bound(boundaries, last, {}, &std::pair<int, double>::first);
+                    if (beginIt == boundaries.end() || endIt == boundaries.end() || beginIt->first != first ||
+                        endIt->first != last || result.words[i].poly.empty()) {
+                        spans.clear(); break; // Never split a grapheme for bad metadata.
+                    }
+                    double lo = 1, hi = 0;
+                    for (const auto p : result.words[i].poly) {
+                        const double x = inverse.map(QPointF(p.x, p.y)).x();
+                        lo = std::min(lo, x); hi = std::max(hi, x);
+                    }
+                    lo = std::clamp(lo, previous, 1.0);
+                    hi = std::clamp(hi, lo, 1.0);
+                    spans.push_back({std::size_t(beginIt - boundaries.begin()), std::size_t(endIt - boundaries.begin()), lo, hi});
+                    previous = hi;
+                }
+                auto distribute = [&](std::size_t first, std::size_t last, double lo, double hi) {
+                    const double weight = boundaries[last].second - boundaries[first].second;
+                    if (weight <= 0) return;
+                    for (auto i = first; i < last; ++i)
+                        intervals[i] = {lo + (hi - lo) * (boundaries[i].second - boundaries[first].second) / weight,
+                                        lo + (hi - lo) * (boundaries[i + 1].second - boundaries[first].second) / weight};
+                };
+                if (!spans.empty()) {
+                    std::size_t cursor = 0;
+                    previous = 0;
+                    for (const auto& span : spans) {
+                        distribute(cursor, span.first, previous, span.left);
+                        distribute(span.first, span.last, span.left, span.right);
+                        cursor = span.last; previous = span.right;
+                    }
+                    distribute(cursor, intervals.size(), previous, 1);
+                }
+            }
             if (total > 0) for (std::size_t i = 1; i < boundaries.size(); ++i) {
-                const double x = boundaries[i - 1].second, end = boundaries[i].second;
+                const auto [x, end] = intervals[i - 1];
                 QPainterPath cell;
                 cell.addPolygon(transform.map(QPolygonF(QRectF(x, 0, end - x, 1))));
                 cell.closeSubpath();

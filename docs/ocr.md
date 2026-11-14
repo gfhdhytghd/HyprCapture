@@ -40,7 +40,7 @@ With `ocr_engine=command` and `ocr_output=json`, stdout is JSON Lines:
 
 ```json
 {"text":"Hello OCR 123","poly":[[9,32],[198,32],[198,57],[9,57]],"conf":0.99,"level":"line"}
-{"text":"中文","poly":[[10,70],[90,70],[90,95],[10,95]],"level":"line"}
+{"text":"中文 OCR","poly":[[10,70],[200,70],[200,95],[10,95]],"conf":0.98,"words":[{"text":"中","poly":[[10,70],[40,70],[40,95],[10,95]]},{"text":"文","box":[40,70,70,95]},{"text":"OCR","poly":[[90,70],[200,70],[200,95],[90,95]],"conf":0.97}]}
 ```
 
 - `text` is a required UTF-8 JSON string.
@@ -52,9 +52,30 @@ With `ocr_engine=command` and `ocr_output=json`, stdout is JSON Lines:
   preserves this direction, including rotated text.
 - `conf` is optional, numeric, and in `0..1`.
 - `level` is optional: `line` (default) or `word`.
+- A line may have a `words` array in reading order. Each word has a required
+  string `text`, `poly` with the same point/coordinate/winding rules as the line,
+  or `box: [x1,y1,x2,y2]` with positive dimensions, and optional `conf` in `0..1`.
+  Leading/trailing Unicode whitespace is trimmed; empty words are skipped.
+  The word texts must match the line text in order, ignoring whitespace.
+  Uncovered spaces and punctuation remain part of the line text.
+- Malformed or unmatched word metadata drops that line's entire `words` array
+  and records one warning per response; the line remains usable. `level: word`
+  records ignore `words` and retain their previous behavior.
+- Word polygon projections set selection intervals along the line direction.
+  Intervals are clamped to the line and kept monotonic. The existing character
+  width model distributes graphemes within each word and uncovered text within
+  each gap. The estimate is exactly narrow/Latin `0.5` to wide/CJK `1.0` (1:2),
+  including whole lines without valid words; this replaces the previous `0.55`.
+  Selection uses analytic quads in the line frame. Without words,
+  selection uses proportional estimates with that same 1:2 ratio; copying still
+  uses the line text. A response can mix lines with valid words, missing words,
+  and invalid words. Each line independently uses its valid words or estimates.
 - Unknown fields are ignored. JSON nesting is limited to 32 levels.
 
-The input limit is 8 MiB and at most 65536 results. Each nonempty input line must
+The input limit is 8 MiB and at most 65536 results. Up to 262144 word entries
+(including skipped entries) are accepted across the response. Excess word
+metadata is discarded with the same warning; recognized lines are retained.
+Each nonempty input line must
 be an object; blank lines are errors. An empty stream means no recognition.
 CRLF and a final newline are accepted. On any malformed record, the parser
 returns no partial results and an error naming the line number.
@@ -76,8 +97,16 @@ Install Tesseract and the selected tessdata packages, for example
 `tesseract-data-eng` and `tesseract-data-chi_sim`. The TSV adapter requires the
 standard 12-column header. It reads level-5 word rows, skips blank text and
 confidence `-1`, builds axis-aligned clockwise rectangles, and divides confidence
-by 100. Nonpositive word dimensions, invalid confidence, and malformed rows fail
-with the TSV line number.
+by 100. It groups words by page/block/paragraph/line ids and sorts each line by
+word id. Each result is a line with the union rectangle, joined text,
+mean confidence, and the original word rectangles/confidences in `words`.
+Joining uses the same `ocrTextSeparator()` / CJK-boundary rules as copy-all:
+adjacent CJK words have no added space, while Latin words and CJK/Latin
+boundaries retain their existing separators. Punctuation follows these same
+rules. Copy-all text therefore matches the previous separate-word results
+(for example, `Hello world\n中文`). Word texts still match within the joined
+line in reading order. Nonpositive word dimensions, invalid confidence, and
+malformed rows fail with the TSV line number.
 
 ### PaddleOCR 3.x
 
@@ -86,8 +115,13 @@ paddleocr ocr -i <png> --save_path <private-directory> --use_doc_orientation_cla
 ```
 
 The adapter reads `<png-stem>_res.json`, not stdout logs. The saved plain JSON
-contains parallel `rec_texts`, `rec_polys`, and `rec_scores` arrays. If `text_word` and `text_word_boxes` are present, the adapter emits `level=word`
-with the saved word geometry. Otherwise it retains `level=line`. This saved-file format comes from the agreed design's local
+contains parallel `rec_texts`, `rec_polys`, and `rec_scores` arrays. Each result
+retains the line text and `rec_polys` geometry. Optional parallel `text_word`
+and `text_word_boxes` arrays attach tokens inside that line's `words`, rather
+than emitting separate `level=word` records. Word boxes accept polygons or
+`[x1,y1,x2,y2]` rectangles. Whitespace tokens are skipped. Missing word arrays
+retain line-only results; malformed metadata uses the soft warning above.
+This saved-file format comes from the agreed design's local
 PaddleOCR 3.4.0 verification. The engine disables MKLDNN by default, as required
 by the task card's command, to avoid the recorded oneDNN
 `ConvertPirAttribute2RuntimeAttribute` failure.
@@ -124,41 +158,72 @@ The key is stored in the Hyprland config in plain text. API settings accept up t
 
 Both formats are detected automatically; there is no format option:
 
-- **Simple PP-OCR server:** POST multipart/form-data with one `file` field,
-  filename `image.png`, type `image/png`. A nonempty key adds
+- **Simple PP-OCR server:** POST multipart/form-data with `file`, filename
+  `image.png`, type `image/png`, and `return_word_box=true`. A nonempty key adds
   `Authorization: Bearer <key>`. The response has a `results` array of
   `{ "text": "...", "confidence": 0.99, "box": [[x,y], ...] }`.
   `poly`/`bbox` alias `box`; `score` aliases `confidence`.
+  Each result may include `"words": [{"text":"hello", "box":[[0,0],[50,0],[50,20],[0,20]], "conf":0.98}]`.
+  Words also accept `poly` or `box: [x1,y1,x2,y2]`. Servers that ignore the new
+  request field and return no words retain line-only behavior.
 - **Official PaddleOCR/PaddleX serving (including Baidu AI Studio):** POST JSON
   with base64 PNG in `file`, `fileType: 1`, and
   `useDocOrientationClassify`, `useDocUnwarping`, `useTextlineOrientation`,
-  `visualize` all false. A nonempty key adds `Authorization: token <key>`.
+  `visualize` all false, plus `returnWordBox: true`. A nonempty key adds `Authorization: token <key>`.
   Recognition comes from `result.ocrResults[].prunedResult` with `rec_texts`,
   `rec_polys`, `rec_scores`. All pages are concatenated. If `rec_polys` is absent,
   `rec_boxes` supplies `[x1,y1,x2,y2]` rectangles. Nonzero `errorCode` reports
-  `errorMsg` as an error.
+  `errorMsg` as an error. Optional `prunedResult.text_word` contains token
+  arrays per line, paired with `text_word_boxes` in the same order, for example
+  `"text_word": [["中", " ", "文"]]` and
+  `"text_word_boxes": [[[0,0,10,20], null, [10,0,20,20]]]` for one line.
+  Whitespace tokens are skipped before validating their geometry; each
+  remaining token becomes a nested word of the matching `rec_texts` line.
 
 An exact-URL cached format takes priority. Otherwise, AI Studio hosts
 (`aistudio-app.com`/`aistudio.baidu.com`, including subdomains) and endpoint paths
 ending in `/layout-parsing` try the official format first. Other endpoints try
 the simple format first. HTTP 400/415/422 or successful JSON with neither shape
-triggers one retry with the other format. Network errors, timeouts, 401/403,
+triggers one retry with the other format, after the 422 field probe below. Network errors, timeouts, 401/403,
 5xx, malformed JSON, invalid recognition data and nonzero `errorCode` are real
-errors and do not trigger a format retry. A stale cached format that mismatches
+errors and do not trigger a format retry. An `errorCode` response explicitly
+naming the optional word-box parameter can still use the parameter retry below.
+A stale cached format that mismatches
 is removed, and the other format is tried next without repeating the URL guess.
-Every call makes at most two requests and never tries the same format twice.
-Both attempts, including a stale-cache probe, share one `ocr_timeout` budget.
+HTTP 400/422 in either format triggers one retry of the same format without
+its optional word-box parameter (`return_word_box` or `returnWordBox`), including
+servers whose error does not identify the field. A successful retry remembers
+this exception per exact URL and request format, so later calls send only the
+line-recognition parameters. A rejected word-box parameter does not become an
+OCR error when line-only recognition succeeds. Ordinary FastAPI
+form parameters ignore extra fields; explicitly configured `extra="forbid"`
+form models can reject them (see the [FastAPI documentation](https://fastapi.tiangolo.com/tutorial/request-form-models/#forbid-extra-form-fields)).
+If that retry also mismatches, format detection continues. Each of two formats
+gets at most one parameter retry (four requests total). All probes
+share one `ocr_timeout` budget.
 Cancellation kills the active curl process group.
 
 Success caches the request format in the helper process and in
 `$XDG_CACHE_HOME/hyprcapture/ocr-api-format.json` (default
 `~/.cache/hyprcapture/ocr-api-format.json`). This owner-only 0600 file maps the
-SHA-256 of the exact URL to `"simple"` or `"paddlex"`; it stores no URL or key.
-Remove this file to clear the persistent cache. Close the editor/helper to clear
-its in-memory cache. An unwritable or unsafe cache does not prevent recognition.
+SHA-256 of the exact URL to `"simple"` or `"paddlex"`; an optional sibling key
+`"<hash>:no_word_box": {"recorded_at": 1800000000}` remembers a rejected optional
+field for the cached format, with its Unix timestamp in seconds. It expires
+exactly 24 hours after rejection. Calls within that interval keep the original
+timestamp; they do not extend the lifetime. The next OCR after expiry requests
+word boxes again. Success with the parameter clears the rejection flag.
+Existing string entries remain compatible. A legacy rejection flag without a
+timestamp expires immediately; older readers ignore the added flag keys.
+The file stores no URL or key. The helper keeps an in-memory copy and reloads
+it when the file's inode, modification time or size changes, including an
+external atomic rewrite or deletion. Clearing the cache takes effect on the
+next OCR without restarting the editor/helper. An unwritable or unsafe cache
+does not prevent recognition.
 
 API geometry uses floating input-pixel coordinates and the same polygon,
-winding, confidence, nesting, 65536-result and 8 MiB response limits as JSONL.
+winding, confidence, nesting, 65536-result, 262144-word and 8 MiB response limits
+as JSONL. Invalid word metadata preserves the corresponding line and adds one
+warning per response.
 API results have `level=line`. Empty results mean no recognition, not an error.
 The shared worker remains Qt-free. OpenSSL libcrypto supplies SHA-256 and base64.
 URL, headers and curl options travel through stdin; the official JSON body is a
@@ -168,6 +233,43 @@ travel from the plugin to the helper through the private session JSON, not argv.
 HTTP is permitted for LAN services. HTTPS uses normal certificate verification;
 only HTTP/HTTPS protocols are enabled. Redirects are reported as HTTP errors.
 No proxy settings are added or changed.
+
+### Cache commands and immediate probes
+
+`hyprcapture-ocr` is a Qt-free companion installed beside `hyprcapture-shot` by
+CMake, Nix, and the Omarchy recipe. It manages both the detected request format
+and the 24-hour rejected-parameter flag in the cache file described above.
+
+```sh
+hyprcapture-ocr cache show
+hyprcapture-ocr cache show --url http://ocr.example.lan:8008/ocr
+hyprcapture-ocr cache clear
+hyprcapture-ocr cache clear --url http://ocr.example.lan:8008/ocr
+hyprcapture-ocr probe
+hyprcapture-ocr probe --url http://ocr.example.lan:8008/ocr --key-file /private/ocr-key
+```
+
+- `cache show` prints short URL hashes, detected formats, the word-box parameter
+  flag, and its age/expiry. `--url` marks the matching entry with `*`; it does
+  not print the URL. Old string-only cache files remain readable.
+- `cache clear` atomically removes all entries under the existing cache lock.
+  `--url` removes only that URL's format and rejection flag. It prints the
+  removed hashes and succeeds even when there are no entries.
+- `probe` ignores both cached decisions and runs normal detection through the
+  real OCR worker on a built-in PNG reading "OCR 123". It prints the format,
+  observed word-box availability, line/word counts, and latency, then caches
+  the fresh successful result. "Not returned" covers servers that accept the
+  parameter but supply only lines; selection still uses proportional estimates.
+- Without `--url`, `probe` reads `plugin:hyprcapture:ocr_api_url`, `ocr_api_key`,
+  and `ocr_timeout` via `hyprctl getoption -j`. With `--url`, it uses that endpoint
+  and the default timeout. `--key-file` overrides the configured key and requires
+  a regular owned 0600 file. The key never appears in argv or command output.
+- Each command accepts `--help`. Usage errors return 64; failed operations
+  return a short reason and a nonzero status. The format cache keeps its normal
+  invalidation rules; only rejected-parameter flags expire automatically.
+
+After changing or upgrading your OCR server, run `hyprcapture-ocr cache clear`
+or `hyprcapture-ocr probe` to re-test immediately.
 
 ### Custom commands
 
@@ -288,7 +390,9 @@ downloads models or invokes a real engine.
 The text layout uses the same `ocrReadingRows()` and `ocrTextSeparator()` as
 `joinOcrText()`. Selection offsets are UTF-16 grapheme boundaries. Character
 areas interpolate along each polygon's baseline with advance weights 1.0 for
-CJK/full-width characters and 0.55 otherwise. Pointer hit-testing uses the inverse
+CJK/full-width characters and 0.5 otherwise. Valid nested word boxes bound
+those estimates within each word; missing or invalid words retain the 1:2
+whole-line estimate. Pointer hit-testing uses the inverse
 canvas transform, so zoom, pan, and rotated text retain image coordinates.
 Double-click selects a word; triple-click selects its reading-order row.
 
