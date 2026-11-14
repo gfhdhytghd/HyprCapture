@@ -19,6 +19,7 @@
   ffmpeg,
   nlohmann_json,
   openssl,
+  icu,
   opencv,
   pkg-config,
   python3,
@@ -62,6 +63,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
     hdrCodec
     nlohmann_json
     openssl
+    icu
     opencv
   ];
 
@@ -74,7 +76,10 @@ in hyprlandPlugins.mkHyprlandPlugin {
     "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ffmpeg curl ]}"
   ];
 
-  # CMake installs hyprcapture-shot into $out/bin alongside the Qt helper.
+  # CMake installs hyprcapture-shot and hyprcapture-ocr into $out/bin alongside the Qt helper.
+  postInstall = ''
+    test -x "$out/bin/hyprcapture-ocr"
+  '';
   doCheck = false;
   preCheck = ''
     # Nix defaults HOME to an unwritable /homeless-shelter. Tests need a

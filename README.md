@@ -83,6 +83,7 @@ After a Hyprland update, a notification offers to rebuild. `omarchy plugin updat
 - a C++23-capable compiler
 - nlohmann-json
 - OpenSSL libcrypto (OCR API SHA-256 and base64)
+- ICU (Qt-free OCR grapheme counting)
 - Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
 - OpenCV `core` and `imgproc` (CPU image registration; no neural-network runtime)
@@ -453,7 +454,9 @@ hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.open_editor)
 
 Open the annotation editor, click **Live text (O)** or press **O**, then drag over
 recognized text. Double-click selects a word; triple-click selects a line.
-**Ctrl+A** selects all text and **Ctrl+C** copies the selection. The context menu
+**Ctrl+A** selects all text and **Ctrl+C** copies the selection. Copying joins
+wrapped prose into paragraphs; list items and lead-ins retain hard breaks,
+and detected code keeps its lines and indentation. The context menu
 also offers **Copy**, **Copy all text**, and **Select all**. Press **O** or **Esc**
 to hide the text layer and return to the drawing tool. OCR reads the original
 image at physical resolution, without annotations. It never changes the image,
@@ -483,6 +486,25 @@ automatically. See [PaddleOCR HTTP API](docs/ocr.md#paddleocr-http-api).
 
 The scan, text reveal, selection flash, and toast use local editor animations.
 Set `HYPRCAPTURE_REDUCED_MOTION=1` or `QT_ANIMATIONS_DISABLED=1` to make them instant.
+Nested word/character boxes refine Live Text selection for JSON Lines, PaddleOCR API/CLI, and grouped Tesseract lines.
+
+`hyprcapture-ocr cache show` displays cached formats and word-box parameter
+rejections. The private cache is `~/.cache/hyprcapture/ocr-api-format.json`
+(or under `$XDG_CACHE_HOME`); rejection flags expire after 24 hours. The helper
+reloads external cache changes on the next OCR call.
+
+```sh
+hyprcapture-ocr cache clear                    # clear all cached decisions
+hyprcapture-ocr cache clear --url http://ocr.example.lan:8008/ocr
+hyprcapture-ocr probe                         # read endpoint/key/timeout from hyprctl
+hyprcapture-ocr probe --url http://ocr.example.lan:8008/ocr --key-file /private/ocr-key
+```
+
+After changing or upgrading your OCR server, run `hyprcapture-ocr cache clear`
+or `hyprcapture-ocr probe` to re-test immediately. Probe ignores the cache and
+reports the format, observed word boxes, line/word counts, and latency. Keys
+come from a 0600 file or Hyprland configuration, never a key argument or output.
+
 See [OCR engines and output format](docs/ocr.md) for examples and limits.
 
 ### In-place screenshot editing

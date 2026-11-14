@@ -1,4 +1,5 @@
 #include "ui/live_text_layer.hpp"
+#include <QDebug>
 #include "shared/ocr_engine.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/hdr_image.hpp"
@@ -169,6 +170,7 @@ void LiveTextLayer::receive(quint64 generation, OcrResponse response) {
     if (generation != m_generation || !m_on) return;
     m_busy = false;
     if (!response) { fail(ocrErrorText(response.error)); return; }
+    if (!response.warning.empty()) qWarning("%s", response.warning.c_str());
     m_results = std::move(response); m_layout.setResults(m_results.results);
     if (m_layout.text.trimmed().isEmpty()) {
         turnOff(); shake(); toast(uiText("No text found")); emit recognized(); return;
@@ -238,11 +240,11 @@ void LiveTextLayer::toast(const QString& text) {
     }, [this] { const QRect dirty = toastRect(); m_toast.clear(); update(dirty); if (!m_on) hide(); });
 }
 QString LiveTextLayer::selectedText() const {
-    return m_anchor < 0 || m_caret < 0 ? QString{} : m_layout.text.mid(std::min(m_anchor,m_caret), std::abs(m_anchor-m_caret));
+    return m_anchor < 0 || m_caret < 0 ? QString{} : m_layout.copiedText(m_anchor,m_caret);
 }
 void LiveTextLayer::selectAll() { m_anchor = 0; m_caret = m_layout.text.size(); repaintImage(); }
 void LiveTextLayer::copySelection(bool all) {
-    const QString text = all ? m_layout.text : selectedText();
+    const QString text = all ? m_layout.copiedText(0,m_layout.text.size()) : selectedText();
     if (text.isEmpty()) return;
     if (!copyTextToClipboardDetached(text)) { fail(uiText("Could not copy text to the clipboard. Check that wl-copy is installed.")); return; }
     animate(m_copyAnimation, timing.copy, QEasingCurve::OutCubic, [this](qreal t) { m_copyPulse = .4*(1-t); repaintImage(); });
