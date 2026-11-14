@@ -162,23 +162,38 @@ void words(const Json& entries, OcrResult& result, OcrResponse& response, std::s
         if (!ocrWordRanges(result.text, result.words)) throw std::runtime_error("word text mismatch");
     } catch (...) { result.words.clear(); wordWarning(response); }
 }
+void pairedWords(const Json& texts, const Json& boxes, OcrResult& result,
+                 OcrResponse& response, std::size_t& count) {
+    if (!texts.is_array() || !boxes.is_array() || texts.size() != boxes.size())
+        throw std::runtime_error("word arrays must have equal lengths");
+    if (texts.size() > OcrMaxWords - count) {
+        count = OcrMaxWords;
+        throw std::runtime_error("too many OCR words");
+    }
+    Json entries = Json::array();
+    for (std::size_t j = 0; j < texts.size(); ++j)
+        entries.push_back({{"text", texts[j]}, {"box", boxes[j]}});
+    words(entries, result, response, count);
+}
+void rowWords(const Json& obj, OcrResult& result, OcrResponse& response, std::size_t& count) {
+    if (obj.contains("words")) {
+        words(obj["words"], result, response, count);
+        return;
+    }
+    if (!obj.contains("text_word") && !obj.contains("text_word_boxes")) return;
+    try {
+        pairedWords(obj.at("text_word"), obj.at("text_word_boxes"), result, response, count);
+    } catch (...) { result.words.clear(); wordWarning(response); }
+}
 void paddleWords(const Json& obj, std::size_t i, std::size_t lines, OcrResult& result,
                  OcrResponse& response, std::size_t& count) {
     if (!obj.contains("text_word") && !obj.contains("text_word_boxes")) return;
     try {
         const auto& texts = obj.at("text_word");
         const auto& boxes = obj.at("text_word_boxes");
-        if (!texts.is_array() || !boxes.is_array() || texts.size() != lines || boxes.size() != lines ||
-            !texts[i].is_array() || !boxes[i].is_array() || texts[i].size() != boxes[i].size())
+        if (!texts.is_array() || !boxes.is_array() || texts.size() != lines || boxes.size() != lines)
             throw std::runtime_error("word arrays must match recognition lines");
-        if (texts[i].size() > OcrMaxWords - count) {
-            count = OcrMaxWords;
-            throw std::runtime_error("too many OCR words");
-        }
-        Json entries = Json::array();
-        for (std::size_t j = 0; j < texts[i].size(); ++j)
-            entries.push_back({{"text", texts[i][j]}, {"box", boxes[i][j]}});
-        words(entries, result, response, count);
+        pairedWords(texts[i], boxes[i], result, response, count);
     } catch (...) { result.words.clear(); wordWarning(response); }
 }
 bool cjkBoundary(std::string_view a, std::string_view b) {
@@ -366,7 +381,7 @@ OcrResponse parseOcrApiJson(std::string_view input, bool* mismatch, bool* servic
                 const auto* box = entry.contains("box") ? "box" : entry.contains("poly") ? "poly" : "bbox";
                 const Json* score = entry.contains("confidence") ? &entry["confidence"] : entry.contains("score") ? &entry["score"] : nullptr;
                 append(entry.at("text"), entry.at(box), score);
-                if (entry.contains("words")) words(entry["words"], response.results.back(), response, wordCount);
+                rowWords(entry, response.results.back(), response, wordCount);
             }
         } else if (obj.is_object() && obj.contains("result") && obj["result"].is_object() &&
                    obj["result"].contains("ocrResults") && obj["result"]["ocrResults"].is_array()) {

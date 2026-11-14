@@ -227,6 +227,63 @@ void apiParser() {
     r = parseOcrApiJson(withWords.dump()); check(r && r.results[0].words.size() == 2 && r.warning.empty(), "simple API nested words");
     withWords["results"][0]["words"][0]["text"] = "bad";
     r = parseOcrApiJson(withWords.dump()); check(r && r.results[0].words.empty() && !r.warning.empty(), "simple API metadata soft failure");
+    auto nativeWords = Json::parse(R"({"results":[{
+        "text":"Latin Hello中文", "confidence":0.99, "box":[[0,0],[300,0],[300,10],[0,10]],
+        "text_word":["Latin"," ","Hello","中","文"],
+        "text_word_boxes":[[[0,0],[50,0],[50,10],[0,10]],null,[80,0,180,10],[190,0,220,10],[218,0,248,10]]
+    }]})");
+    r = parseOcrApiJson(nativeWords.dump());
+    check(r && r.results.size() == 1 && r.results[0].words.size() == 4 && r.warning.empty(),
+          "simple API native word arrays skip whitespace and accept overlapping CJK boxes");
+    if (r && r.results[0].words.size() == 4) {
+        check(r.results[0].words[0].text == "Latin" && r.results[0].words[0].poly[1].x == 50 &&
+              r.results[0].words[1].text == "Hello" && r.results[0].words[1].poly[0].x == 80 &&
+              r.results[0].words[3].poly[0].x == 218, "simple API native polygon and rectangle coordinates");
+    }
+    for (const auto* fault : {"length", "missing texts", "missing boxes", "nonarray", "null box", "bad text", "unmatched text"}) {
+        auto broken = nativeWords;
+        auto& row = broken["results"][0];
+        if (std::string_view(fault) == "length") row["text_word"].push_back("extra");
+        else if (std::string_view(fault) == "missing texts") row.erase("text_word");
+        else if (std::string_view(fault) == "missing boxes") row.erase("text_word_boxes");
+        else if (std::string_view(fault) == "nonarray") row["text_word_boxes"] = nullptr;
+        else if (std::string_view(fault) == "null box") row["text_word_boxes"][2] = nullptr;
+        else if (std::string_view(fault) == "bad text") row["text_word"][2] = 42;
+        else row["text_word"][2] = "unmatched";
+        broken["results"].push_back(nativeWords["results"][0]);
+        bool formatMismatch = true;
+        r = parseOcrApiJson(broken.dump(), &formatMismatch);
+        check(r && r.results.size() == 2 && r.results[0].text == "Latin Hello中文" &&
+              r.results[0].words.empty() && r.results[1].words.size() == 4 && !r.warning.empty() && !formatMismatch,
+              "simple API malformed native words retain lines and other word metadata");
+    }
+    auto precedence = nativeWords;
+    precedence["results"][0]["words"] = {{{"text", "Latin Hello中文"}, {"box", {0,0,300,10}}}};
+    precedence["results"][0]["text_word_boxes"] = false;
+    r = parseOcrApiJson(precedence.dump());
+    check(r && r.results[0].words.size() == 1 && r.results[0].words[0].text == "Latin Hello中文" && r.warning.empty(),
+          "simple API words override malformed native arrays");
+    precedence["results"][0] = nativeWords["results"][0];
+    precedence["results"][0]["words"] = Json::array();
+    r = parseOcrApiJson(precedence.dump());
+    check(r && r.results[0].words.empty() && r.warning.empty(), "simple API empty words override native arrays");
+    precedence["results"][0]["words"] = false;
+    r = parseOcrApiJson(precedence.dump());
+    check(r && r.results[0].words.empty() && !r.warning.empty(), "simple API invalid words do not fall back to native arrays");
+    auto limited = nativeWords;
+    auto& limitRow = limited["results"][0];
+    limitRow["text_word"] = std::vector<std::string>(OcrMaxWords, " ");
+    limitRow["text_word_boxes"] = std::vector<Json>(OcrMaxWords, nullptr);
+    r = parseOcrApiJson(limited.dump());
+    check(r && r.warning.empty(), "simple API native word limit inclusive");
+    limited["results"].push_back(nativeWords["results"][0]);
+    r = parseOcrApiJson(limited.dump());
+    check(r && r.results.size() == 2 && r.results[1].words.empty() && !r.warning.empty(),
+          "simple API native word limit shared across lines");
+    limited["results"][0]["text_word"].push_back(" ");
+    limited["results"][0]["text_word_boxes"].push_back(nullptr);
+    r = parseOcrApiJson(limited.dump());
+    check(r && r.results[0].words.empty() && !r.warning.empty(), "simple API native word limit soft failure");
     auto officialWords = page;
     officialWords["prunedResult"]["text_word"] = {{"中", "　", "文"}, {"Rotated"}};
     officialWords["prunedResult"]["text_word_boxes"] = {{{0,0,10,10}, nullptr, {10,0,20,10}}, {{30,30,50,50}}};
