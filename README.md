@@ -875,7 +875,11 @@ hl.config({ plugin = { hyprcapture = {
 Two wire formats are detected automatically, with no extra setting:
 
 - **Simple PP-OCR servers**: multipart field `file`; response
-  `results[{text, confidence, box}]`, optionally with per-line `words`.
+  `results[{text, confidence, box}]`, optionally with per-line `words` or flat
+  `text_word`/`text_word_boxes` arrays of equal length. `words` takes precedence
+  when present. Native word boxes accept polygons or `[x0,y0,x1,y1]` rectangles;
+  whitespace tokens are skipped and may have `null` boxes. Neighbouring CJK
+  boxes may overlap. Invalid word metadata keeps the line and emits a warning.
 - **Official PaddleX / AI Studio serving**: base64 JSON request; response
   `result.ocrResults[].prunedResult` with `rec_texts`/`rec_polys` and, when
   available, `text_word`/`text_word_boxes`.

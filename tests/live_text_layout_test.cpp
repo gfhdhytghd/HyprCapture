@@ -148,6 +148,24 @@ class LiveTextLayoutTest final : public QObject {
             QVERIFY(layout.selection(run.begin,run.end).contains(run.fromUnit.map(QPointF(.9,.5))));
         }
     }
+    void simpleApiNativeWordBoxes() {
+        const auto response = hyprcapture::parseOcrApiJson(
+            R"({"results":[{"text":"A 中","box":[[0,0],[120,0],[120,20],[0,20]],"text_word":["A"," ","中"],"text_word_boxes":[[[10,0],[20,0],[20,20],[10,20]],null,[70,0,110,20]]}]})");
+        QVERIFY(response);
+        QVERIFY(response.warning.empty());
+        LiveTextLayout layout; layout.setResults(response.results);
+        QCOMPARE(layout.text, QString::fromUtf8("A 中"));
+        QCOMPARE(layout.runs.size(), std::size_t(1));
+        const auto& run = layout.runs.front();
+        QCOMPARE(run.glyphs.size(), std::size_t(3));
+        QVERIFY(std::abs(run.glyphs[0].x0-10./120)<1e-12);
+        QVERIFY(std::abs(run.glyphs[0].x1-20./120)<1e-12);
+        QVERIFY(std::abs(run.glyphs[2].x0-70./120)<1e-12);
+        QVERIFY(std::abs(run.glyphs[2].x1-110./120)<1e-12);
+        QCOMPARE(run.glyphs[1].x0, run.glyphs[0].x1);
+        QCOMPARE(run.glyphs[1].x1, run.glyphs[2].x0);
+        QVERIFY(layout.selection(run.begin,run.end).contains(QPointF(90,10)));
+    }
     void wordBoxes_data() {
         QTest::addColumn<double>("angle");
         QTest::addColumn<double>("height");
