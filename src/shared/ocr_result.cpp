@@ -3,8 +3,13 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cctype>
 #include <cmath>
 #include <map>
+#include <numeric>
+#include <set>
+#include <unicode/ubrk.h>
+#include <unicode/utext.h>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
@@ -403,51 +408,70 @@ bool ocrSupportsTextLayer(const std::vector<OcrResult>& results) {
     return std::ranges::all_of(results, [](const auto& r) { return r.poly.size() >= 3; });
 }
 
-std::vector<std::vector<std::size_t>> ocrReadingRows(const std::vector<OcrResult>& results) {
-    struct Item { const OcrResult* result; double x, y, top, bottom; };
-    std::vector<Item> items;
-    for (const auto& r : results) {
-        if (r.text.empty()) continue;
-        if (r.textOnly()) { items.push_back({&r, 0, 0, 0, 0}); continue; }
-        double x = 0, y = 0, area = 0, top = r.poly[0].y, bottom = top;
-        for (std::size_t i = 0; i < r.poly.size(); ++i) {
-            const auto a = r.poly[i], b = r.poly[(i + 1) % r.poly.size()];
-            const auto cross = a.x * b.y - b.x * a.y;
-            area += cross; x += (a.x + b.x) * cross; y += (a.y + b.y) * cross;
-            top = std::min(top, a.y); bottom = std::max(bottom, a.y);
-        }
-        if (area == 0) { x = r.poly[0].x; y = r.poly[0].y; }
-        else { x /= 3 * area; y /= 3 * area; }
-        items.push_back({&r, x, y, top, bottom});
+namespace {
+struct Frame {
+    OcrPoint u{1,0}, v{0,1};
+    bool valid = false;
+};
+Frame frame(const OcrResult& result) {
+    if (result.poly.size() < 3) return {};
+    const auto a = result.poly[0], b = result.poly[1];
+    const double length = std::hypot(b.x-a.x,b.y-a.y);
+    if (length < 1e-6) return {};
+    return {{(b.x-a.x)/length,(b.y-a.y)/length},{-(b.y-a.y)/length,(b.x-a.x)/length},true};
+}
+double project(OcrPoint p, OcrPoint axis) { return p.x*axis.x+p.y*axis.y; }
+double angle(Frame a, Frame b) {
+    return std::acos(std::clamp(project(a.u,b.u),-1.,1.))*180/std::acos(-1.);
+}
+struct Extent { double left=1e100,right=-1e100,top=1e100,bottom=-1e100; };
+void extend(Extent& extent, const std::vector<OcrPoint>& poly, Frame axes) {
+    for (const auto p : poly) {
+        const double x=project(p,axes.u),y=project(p,axes.v);
+        extent.left=std::min(extent.left,x); extent.right=std::max(extent.right,x);
+        extent.top=std::min(extent.top,y); extent.bottom=std::max(extent.bottom,y);
     }
-    std::stable_sort(items.begin(), items.end(), [](const auto& a, const auto& b) {
-        return a.y == b.y ? a.x < b.x : a.y < b.y;
-    });
-    struct Row { std::vector<Item> items; double top, bottom; };
+}
+}
+std::vector<std::vector<std::size_t>> ocrReadingRows(const std::vector<OcrResult>& results) {
+    Frame axes;
+    for (const auto& r : results) if ((axes=frame(r)).valid) break;
+    struct Item { std::size_t index; double x,y,top,bottom; Frame axes; };
+    std::vector<Item> items;
+    for (std::size_t index=0;index<results.size();++index) {
+        const auto& r=results[index];
+        if (r.text.empty()) continue;
+        if (r.textOnly()) { items.push_back({index,0,0,0,0,{}}); continue; }
+        double x=0,y=0,area=0;
+        for (std::size_t i=0;i<r.poly.size();++i) {
+            const auto a=r.poly[i],b=r.poly[(i+1)%r.poly.size()];
+            const double cross=a.x*b.y-b.x*a.y;
+            area+=cross; x+=(a.x+b.x)*cross; y+=(a.y+b.y)*cross;
+        }
+        const OcrPoint center=area==0?r.poly[0]:OcrPoint{x/(3*area),y/(3*area)};
+        Extent extent; extend(extent,r.poly,axes);
+        items.push_back({index,project(center,axes.u),project(center,axes.v),extent.top,extent.bottom,frame(r)});
+    }
+    std::stable_sort(items.begin(),items.end(),[](const auto& a,const auto& b) { return a.y==b.y?a.x<b.x:a.y<b.y; });
+    struct Row { std::vector<Item> items; double top,bottom; };
     std::vector<Row> rows;
     for (const auto& item : items) {
-        Row* target = nullptr;
-        // Consecutive centroid-sorted items form rows. Only compare the last
-        // row, keeping the join bounded even for 65536 separate lines.
+        Row* target=nullptr;
         if (!rows.empty()) {
-            auto& row = rows.back();
-            const double overlap = std::min(row.bottom, item.bottom) - std::max(row.top, item.top);
-            if (overlap > 0 && overlap >= .5 * std::min(row.bottom - row.top, item.bottom - item.top)) {
-                target = &row;
-            }
+            auto& row=rows.back();
+            const auto first=row.items.front().axes;
+            const bool compatible=(!first.valid&&!item.axes.valid)||(first.valid&&item.axes.valid&&angle(first,item.axes)<=10+1e-7);
+            const double overlap=std::min(row.bottom,item.bottom)-std::max(row.top,item.top);
+            if (compatible&&overlap>0&&overlap>=.5*std::min(row.bottom-row.top,item.bottom-item.top)) target=&row;
         }
-        if (!target) rows.push_back({{item}, item.top, item.bottom});
-        else {
-            target->items.push_back(item);
-            target->top = std::max(target->top, item.top);
-            target->bottom = std::min(target->bottom, item.bottom);
-        }
+        if (!target) rows.push_back({{item},item.top,item.bottom});
+        else { target->items.push_back(item); target->top=std::max(target->top,item.top); target->bottom=std::min(target->bottom,item.bottom); }
     }
     std::vector<std::vector<std::size_t>> order;
     for (auto& row : rows) {
-        std::stable_sort(row.items.begin(), row.items.end(), [](const auto& a, const auto& b) { return a.x < b.x; });
+        std::stable_sort(row.items.begin(),row.items.end(),[](const auto& a,const auto& b) { return a.x<b.x; });
         order.emplace_back();
-        for (const auto& item : row.items) order.back().push_back(item.result - results.data());
+        for (const auto& item : row.items) order.back().push_back(item.index);
     }
     return order;
 }
@@ -459,19 +483,357 @@ std::string ocrTextSeparator(std::string_view previous, std::string_view next) {
     return {};
 }
 
-std::string joinOcrText(const std::vector<OcrResult>& results) {
-    std::string text;
-    for (const auto& row : ocrReadingRows(results)) {
-        if (!text.empty()) text += '\n';
+namespace {
+// ICU supplies UAX #29 grapheme counts without introducing a Qt dependency.
+struct Graphemes {
+    UBreakIterator* iterator=nullptr;
+    UText utf8=UTEXT_INITIALIZER;
+    Graphemes() { UErrorCode error=U_ZERO_ERROR; iterator=ubrk_open(UBRK_CHARACTER,"root",nullptr,0,&error); }
+    ~Graphemes() { if (iterator) ubrk_close(iterator); utext_close(&utf8); }
+    std::size_t count(std::string_view text) {
+        UErrorCode error=U_ZERO_ERROR;
+        utext_openUTF8(&utf8,text.data(),text.size(),&error);
+        if (iterator&&U_SUCCESS(error)) {
+            ubrk_setUText(iterator,&utf8,&error);
+            if (U_SUCCESS(error)) {
+                std::size_t count=0; ubrk_first(iterator);
+                while (ubrk_next(iterator)!=UBRK_DONE) ++count;
+                return count;
+            }
+        }
+        return 0; // Missing character boundaries cannot establish monospace evidence.
+    }
+};
+bool copyCjk(char32_t c) {
+    return (c>=0x4e00&&c<=0x9fff)||(c>=0x3400&&c<=0x4dbf)||(c>=0x20000&&c<=0x2a6df)||
+        (c>=0x2a700&&c<=0x2b73f)||(c>=0x2b740&&c<=0x2b81f)||(c>=0x2b820&&c<=0x2ceaf)||(c>=0xf900&&c<=0xfaff);
+}
+bool copyPunctuation(char32_t c) {
+    if ((c>=33&&c<=47)||(c>=58&&c<=64)||(c>=91&&c<=96)||(c>=123&&c<=126)) return true;
+    constexpr std::u32string_view punctuation=U"，。、；：！？（）【】《》〈〉「」『』“”‘’—…·～﹔﹕﹖﹗．｡､";
+    return punctuation.find(c)!=punctuation.npos;
+}
+std::string wrapSeparator(std::string_view previous,std::string_view next) {
+    if (previous.empty()||next.empty()) return {};
+    auto last=previous.size()-1;
+    while (last&&(static_cast<unsigned char>(previous[last])&0xc0)==0x80) --last;
+    const auto a=codepoint(previous,last),b=codepoint(next,0);
+    return !whitespace(a)&&!whitespace(b)&&!copyPunctuation(a)&&!copyPunctuation(b)&&!copyCjk(a)&&!copyCjk(b)?" ":"";
+}
+bool listMarker(std::string_view text) {
+    // Only the prefix is relevant; do not copy or scan an entire long row.
+    std::u32string prefix;
+    for (std::size_t at=0;at<text.size()&&prefix.size()<64;) {
+        const auto point=codepoint(text,at);
+        ++at; while (at<text.size()&&(static_cast<unsigned char>(text[at])&0xc0)==0x80) ++at;
+        if (prefix.empty()&&whitespace(point)) continue;
+        prefix.push_back(point);
+    }
+    if (prefix.empty()) return false;
+    const auto digit=[](char32_t c) { return (c>=U'0'&&c<=U'9')||(c>=U'０'&&c<=U'９'); };
+    const auto letter=[](char32_t c) { return (c>=U'a'&&c<=U'z')||(c>=U'A'&&c<=U'Z'); };
+    const auto hanNumber=[](char32_t c) {
+        constexpr std::u32string_view numbers=U"一二三四五六七八九十百千万零〇两壹贰叁肆伍陆柒捌玖拾佰仟";
+        return numbers.find(c)!=numbers.npos;
+    };
+    const auto first=prefix[0];
+    if (std::u32string_view(U"-*•·+").find(first)!=std::u32string_view::npos)
+        return prefix.size()==1||whitespace(prefix[1])||cjk(prefix[1]);
+    if (first>=U'①'&&first<=U'⑳') return true;
+    if (prefix.size()>=3&&first==U'['&&prefix[2]==U']'&&
+        (prefix[1]==U' '||prefix[1]==U'x'||prefix[1]==U'X')) return true;
+    if (prefix.size()>=2&&letter(first)&&
+        (prefix[1]==U'.'||prefix[1]==U'．'||prefix[1]==U')'||prefix[1]==U'）')) {
+        // Common dotted abbreviations (e.g., i.e.) are prose, not enumeration.
+        if (prefix.size()>=4&&(prefix[1]==U'.'||prefix[1]==U'．')&&letter(prefix[2])&&prefix[3]==U'.') return false;
+        return true; // OCR may omit the space, including before Latin item text.
+    }
+    std::size_t end=0;
+    if (digit(first)) {
+        while (end<prefix.size()&&digit(prefix[end])) ++end;
+        if (end==prefix.size()) return false;
+        if (prefix[end]==U')'||prefix[end]==U'）') return true;
+        if (prefix[end]==U'.'||prefix[end]==U'．')
+            return end+1==prefix.size()||!digit(prefix[end+1]); // Preserve decimal prose.
+    }
+    if (hanNumber(first)) {
+        while (end<prefix.size()&&hanNumber(prefix[end])) ++end;
+        if (end<prefix.size()&&prefix[end]==U'、') return true;
+    }
+    if (first==U'('||first==U'（') {
+        end=1;
+        if (end==prefix.size()) return false;
+        const bool numeric=digit(prefix[end]),han=hanNumber(prefix[end]);
+        if (!numeric&&!han) return false;
+        while (end<prefix.size()&&(numeric?digit(prefix[end]):hanNumber(prefix[end]))) ++end;
+        return end<prefix.size()&&prefix[end]==(first==U'('?U')':U'）');
+    }
+    return false;
+}
+bool leadInColon(std::string_view text) {
+    for (std::size_t end=text.size();end;) {
+        auto at=end-1;
+        while (at&&(static_cast<unsigned char>(text[at])&0xc0)==0x80) --at;
+        const auto point=codepoint(text,at);
+        if (!whitespace(point)) return point==U':'||point==U'：';
+        end=at;
+    }
+    return false;
+}
+double median(std::vector<double> values,double fallback) {
+    if (values.empty()) return fallback;
+    const auto middle=values.begin()+values.size()/2;
+    std::nth_element(values.begin(),middle,values.end()); return *middle;
+}
+double variation(const std::vector<double>& values) {
+    if (values.empty()) return 1e100;
+    const double mean=std::accumulate(values.begin(),values.end(),0.)/values.size();
+    if (mean<=1e-6) return 1e100;
+    double variance=0;
+    for (const auto value : values) variance+=(value-mean)*(value-mean);
+    return std::sqrt(variance/values.size())/mean;
+}
+bool codeShape(std::string_view text) {
+    const auto first=text.find_first_not_of(" \t");
+    if (first==text.npos) return false;
+    text.remove_prefix(first);
+    if (text.find('=')!=text.npos||text.find("--")!=text.npos||text.starts_with("#")||text.starts_with("//")) return true;
+    for (auto open=text.find('(');open!=text.npos;open=text.find('(',open+1))
+        if (open&&text.find(')',open)!=text.npos&&
+            (std::isalnum(static_cast<unsigned char>(text[open-1]))||text[open-1]=='_')) return true;
+    if (text.starts_with("- ")) return true;
+    for (const auto prefix : {"return ","local ","def ","class ","import ","from ","if ","for ","while ","with ","end","pass","else","then","do"})
+        if (text==prefix||(text.starts_with(prefix)&&(std::string_view(prefix).ends_with(' ')||
+            (text.size()>std::string_view(prefix).size()&&(whitespace(text[std::string_view(prefix).size()])||copyPunctuation(text[std::string_view(prefix).size()])))))) return true;
+    if (const auto colon=text.find(':'); colon!=text.npos&&colon>0&&text.substr(0,colon).find_first_of(" \t")==text.npos) {
+        auto value=text.substr(colon+1);
+        const auto begin=value.find_first_not_of(" \t");
+        if (begin!=value.npos) value.remove_prefix(begin);
+        // An unquoted sentence after a prose label is not a key/value code shape.
+        std::size_t spaces=0;
+        for (std::size_t i=1;i<value.size();++i) spaces+=value[i]==' '&&value[i-1]!=' ';
+        if (value.empty()||value.front()=='\"'||value.front()=='\''||spaces<=1) return true;
+    }
+    for (std::size_t i=1;i+1<text.size();++i)
+        if (text[i]=='.'&&std::isalnum(static_cast<unsigned char>(text[i-1]))&&(std::isalpha(static_cast<unsigned char>(text[i+1]))||text[i+1]=='_')) return true;
+    return false;
+}
+struct CopyInfo {
+    Frame axes; Extent extent;
+    double width=0,height=0,wordAdvance=0;
+    std::size_t characters=0,nonspace=0,ascii=0,symbols=0;
+    bool candidate=false;
+    std::vector<double> advances;
+    std::vector<double> gaps;
+};
+// Returns an advance only when text AND independent geometric evidence agree.
+double codeAdvance(const std::vector<OcrCopyRow>& rows,const std::vector<CopyInfo>& info,
+                   std::size_t begin,std::size_t end) {
+    if (end-begin<2) return 0;
+    std::size_t nonspace=0,ascii=0,symbols=0,wordRows=0;
+    std::size_t shapes=0;
+    std::vector<double> words,lines,withoutIndent;
+    bool suppliedIndent=false;
+    std::set<std::string_view> distinct;
+    std::size_t shortRows=0,veryShortRows=0,minChars=SIZE_MAX,maxChars=0;
+    const auto axes=info[begin].axes;
+    if (!axes.valid) return 0;
+    for (auto i=begin;i<end;++i) {
+        if (!info[i].axes.valid||angle(axes,info[i].axes)>10+1e-7) return 0;
+        nonspace+=info[i].nonspace; ascii+=info[i].ascii; symbols+=info[i].symbols;
+        shapes+=codeShape(rows[i].text);
+        words.insert(words.end(),info[i].advances.begin(),info[i].advances.end());
+        wordRows+=!info[i].advances.empty();
+        if (info[i].characters) lines.push_back(info[i].width/info[i].characters);
+        const auto at=rows[i].text.find_first_not_of(' ');
+        const auto leading=at==rows[i].text.npos?0:at;
+        const auto content=info[i].characters>=leading?info[i].characters-leading:0;
+        suppliedIndent|=leading>0;
+        if (content) withoutIndent.push_back(info[i].width/content);
+        minChars=std::min(minChars,content); maxChars=std::max(maxChars,content);
+        shortRows+=content<=40; veryShortRows+=content<=12;
+        distinct.insert(rows[i].text);
+    }
+    if (!nonspace||double(ascii)/nonspace<.85||(double(symbols)/nonspace<.08&&shapes<1)) return 0;
+    double advance=0;
+    if (words.size()>=3&&wordRows>=2) {
+        if (variation(words)>.08+1e-9) return 0;
+        advance=std::accumulate(words.begin(),words.end(),0.)/words.size();
+        std::size_t gaps=0,onGrid=0;
+        for (auto i=begin;i<end;++i) for (const double gap : info[i].gaps) {
+            if (gap < -advance*.2) return 0;
+            if (gap<advance*.2) continue;
+            ++gaps; const double cells=gap/advance;
+            onGrid+=std::abs(cells-std::round(cells))<=.2;
+        }
+        if (gaps&&double(onGrid)/gaps<.9) return 0;
+    } else {
+        if (lines.size()!=end-begin) return 0;
+        const bool trimIndent=variation(lines)>.02+1e-9&&suppliedIndent&&withoutIndent.size()==lines.size();
+        if (trimIndent) lines=withoutIndent;
+        if (variation(lines)>.02+1e-9) return 0;
+        advance=median(lines,0);
+        double left=1e100;
+        for (auto i=begin;i<end;++i) left=std::min(left,info[i].extent.left);
+        std::size_t indentRows=0,onGrid=0;
+        for (auto i=begin;i<end;++i) {
+            const double cells=(info[i].extent.left-left)/advance;
+            if (cells<.5) continue;
+            ++indentRows; onGrid+=std::abs(cells-std::round(cells))<=.12;
+        }
+        const bool varied=distinct.size()>=3&&maxChars>=minChars*1.4;
+        const bool shortEvidence=lines.size()>=3&&varied&&shortRows>=2&&veryShortRows>=1;
+        const bool gridEvidence=indentRows&&onGrid==indentRows&&distinct.size()>=2;
+        if ((!shortEvidence&&!gridEvidence)||(trimIndent&&!gridEvidence)) return 0;
+    }
+    double left=1e100;
+    for (auto i=begin;i<end;++i) left=std::min(left,info[i].extent.left);
+    for (auto i=begin;i<end;++i)
+        if ((info[i].extent.left-left)/advance>4096) return 0;
+    return advance;
+}
+}
+
+OcrCopyResult ocrCopyText(const std::vector<OcrResult>& results) {
+    OcrCopyResult copy;
+    for (auto row : ocrReadingRows(results)) {
+        OcrCopyRow rendered; rendered.results=std::move(row);
         std::string_view previous;
-        for (const auto index : row) {
-            const auto& next = results[index].text;
-            text += ocrTextSeparator(previous, next);
-            text += next;
-            previous = next;
+        for (const auto index : rendered.results) {
+            const auto& text=results[index].text;
+            rendered.text+=ocrTextSeparator(previous,text); rendered.text+=text; previous=text;
+        }
+        copy.rows.push_back(std::move(rendered));
+    }
+    if (copy.rows.empty()) return copy;
+    Graphemes graphemes;
+    std::vector<CopyInfo> info(copy.rows.size());
+    std::vector<double> heights,gaps;
+    constexpr std::string_view symbols=R"(=()[]{}<>;:,. _/\"'`|&*+-#$@%~!)";
+    for (std::size_t i=0;i<copy.rows.size();++i) {
+        const auto& row=copy.rows[i]; auto& item=info[i];
+        for (const auto index : row.results) if ((item.axes=frame(results[index])).valid) break;
+        if (item.axes.valid) {
+            for (const auto index : row.results) extend(item.extent,results[index].poly,item.axes);
+            item.width=std::max(1.,item.extent.right-item.extent.left);
+            item.height=std::max(1.,item.extent.bottom-item.extent.top); heights.push_back(item.height);
+        }
+        item.characters=graphemes.count(row.text);
+        for (std::size_t at=0;at<row.text.size();) {
+            const auto c=codepoint(row.text,at);
+            if (!whitespace(c)) { ++item.nonspace; item.ascii+=c<128; item.symbols+=c<128&&symbols.find(char(c))!=symbols.npos; }
+            ++at; while (at<row.text.size()&&(static_cast<unsigned char>(row.text[at])&0xc0)==0x80) ++at;
+        }
+        item.candidate=item.nonspace&&double(item.ascii)/item.nonspace>=.85&&
+            (double(item.symbols)/item.nonspace>=.08||codeShape(row.text));
+        bool hasPrevious=false; double previousRight=0;
+        std::vector<double> boundaryAdvances;
+        for (const auto index : row.results) {
+            const auto& source=results[index];
+            if (source.level==OcrLevel::Word&&source.words.empty()) {
+                Extent extent; extend(extent,source.poly,item.axes);
+                const auto count=graphemes.count(source.text);
+                if (count&&extent.right>extent.left) boundaryAdvances.push_back((extent.right-extent.left)/count);
+            }
+            for (const auto& word : source.words) {
+                Extent extent; extend(extent,word.poly,item.axes);
+                const auto count=graphemes.count(word.text);
+                if (count&&extent.right>extent.left) boundaryAdvances.push_back((extent.right-extent.left)/count);
+                if (count>=2&&extent.right>extent.left) item.advances.push_back((extent.right-extent.left)/count);
+                if (hasPrevious) item.gaps.push_back(extent.left-previousRight);
+                previousRight=extent.right; hasPrevious=true;
+            }
+        }
+        item.wordAdvance=median(std::move(boundaryAdvances),0);
+        if (item.advances.size()>=3&&variation(item.advances)>.08) item.candidate=false;
+        if (!item.advances.empty()) {
+            const double advance=std::accumulate(item.advances.begin(),item.advances.end(),0.)/item.advances.size();
+            std::size_t measured=0,onGrid=0;
+            for (const auto gap : item.gaps) {
+                if (gap < -advance*.2) item.candidate=false;
+                if (gap<advance*.2) continue;
+                ++measured; const double cells=gap/advance;
+                onGrid+=std::abs(cells-std::round(cells))<=.2;
+            }
+            if (measured&&double(onGrid)/measured<.9) item.candidate=false;
+        }
+        if (i&&item.axes.valid&&info[i-1].axes.valid&&angle(info[i-1].axes,item.axes)<=10+1e-7) {
+            Extent extent; for (const auto index : row.results) extend(extent,results[index].poly,info[i-1].axes);
+            const double gap=extent.top-info[i-1].extent.bottom;
+            if (gap>0) gaps.push_back(gap);
         }
     }
-    return text;
+    const double height=median(heights,1),gap=median(gaps,.4*height);
+    const double paragraphGap=std::round(std::max(1.5*height,2*gap)*.5);
+    auto markCode=[&](std::size_t begin,std::size_t end,double advance) {
+        double left=1e100;
+        for (auto i=begin;i<end;++i) left=std::min(left,info[i].extent.left);
+        for (auto i=begin;i<end;++i) {
+            auto& row=copy.rows[i]; row.code=true; row.prefix.clear();
+            const auto indent=std::size_t(std::max(0.,std::round((info[i].extent.left-left)/advance)));
+            const auto existing=row.text.find_first_not_of(' ');
+            const auto spaces=existing==row.text.npos?row.text.size():existing;
+            if (indent>spaces) row.prefix.assign(indent-spaces,' ');
+        }
+    };
+    auto structuredBoundary=[&](std::size_t before) {
+        const auto after=before+1;
+        if (listMarker(copy.rows[after].text)||leadInColon(copy.rows[before].text)) return true;
+        if (!info[before].axes.valid||!info[after].axes.valid) return false;
+        const double advance=info[after].wordAdvance>0?info[after].wordAdvance:
+            info[before].wordAdvance>0?info[before].wordAdvance:
+            info[after].characters?info[after].width/info[after].characters:0;
+        if (advance<=1e-6) return false;
+        // Compare both left edges in the preceding run's u frame, not screen x.
+        Extent current;
+        for (const auto index : copy.rows[after].results) extend(current,results[index].poly,info[before].axes);
+        return std::abs(current.left-info[before].extent.left)+1e-6>=advance;
+    };
+    auto paragraph=[&](std::size_t begin,std::size_t end) {
+        const double advance=codeAdvance(copy.rows,info,begin,end);
+        if (advance) markCode(begin,end,advance);
+        else for (auto i=begin;i<end;) {
+            if (!info[i].candidate) { ++i; continue; }
+            auto next=i+1;
+            while (next<end&&info[next].candidate) ++next;
+            if (const double tokenAdvance=codeAdvance(copy.rows,info,i,next)) markCode(i,next,tokenAdvance);
+            i=next;
+        }
+        double width=1;
+        for (auto i=begin;i<end;++i) width=std::max(width,info[i].width);
+        for (auto i=begin;i+1<end;++i) {
+            auto& row=copy.rows[i];
+            row.separator=row.code||copy.rows[i+1].code||structuredBoundary(i)||info[i].width+1e-6<.92*width?"\n":wrapSeparator(row.text,copy.rows[i+1].text);
+        }
+    };
+    std::size_t begin=0;
+    for (std::size_t i=1;i<copy.rows.size();++i) {
+        const bool compatible=info[i-1].axes.valid&&info[i].axes.valid&&angle(info[i-1].axes,info[i].axes)<=10+1e-7;
+        Extent current;
+        if (compatible) for (const auto index : copy.rows[i].results) extend(current,results[index].poly,info[i-1].axes);
+        const bool newParagraph=compatible&&current.top-info[i-1].extent.bottom+1e-6>=paragraphGap;
+        if (!compatible||newParagraph) {
+            paragraph(begin,i); copy.rows[i-1].separator=newParagraph?"\n\n":"\n"; begin=i;
+        }
+    }
+    paragraph(begin,copy.rows.size());
+    // Blank lines split paragraphs, but do not reset an adjacent code block's
+    // indentation origin (including a one-row function header before a gap).
+    for (std::size_t first=0;first<copy.rows.size();) {
+        if (!copy.rows[first].code&&!info[first].candidate) { ++first; continue; }
+        auto end=first+1; bool acrossParagraph=false;
+        while (end<copy.rows.size()&&(copy.rows[end].code||info[end].candidate)) {
+            acrossParagraph|=copy.rows[end-1].separator=="\n\n"; ++end;
+        }
+        if (acrossParagraph) if (const double advance=codeAdvance(copy.rows,info,first,end)) markCode(first,end,advance);
+        first=end;
+    }
+    for (std::size_t i=0;i+1<copy.rows.size();++i)
+        if ((copy.rows[i].code||copy.rows[i+1].code)&&copy.rows[i].separator!="\n\n") copy.rows[i].separator="\n";
+    for (const auto& row : copy.rows) { copy.text+=row.prefix; copy.text+=row.text; copy.text+=row.separator; }
+    return copy;
 }
+
+std::string joinOcrText(const std::vector<OcrResult>& results) { return ocrCopyText(results).text; }
 
 } // namespace hyprcapture

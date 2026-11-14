@@ -329,9 +329,9 @@ class InPlaceEditorTest final : public QObject {
         QTest::mousePress(layer,Qt::LeftButton,Qt::NoModifier,QPoint(60,70));
         QTest::mouseMove(layer,QPoint(140,150));
         QTest::mouseRelease(layer,Qt::LeftButton,Qt::NoModifier,QPoint(140,150));
-        QCOMPARE(layer->selectedText(),QString::fromUtf8("Hello world\n中文"));
+        QCOMPARE(layer->selectedText(),QString::fromUtf8("Hello world\n\n中文"));
         QTest::keyClick(layer,Qt::Key_C,Qt::ControlModifier);
-        QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),QString::fromUtf8("Hello world\n中文").toUtf8());
+        QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),QString::fromUtf8("Hello world\n\n中文").toUtf8());
         QTest::mouseDClick(layer,Qt::LeftButton,Qt::NoModifier,QPoint(90,70));
         QCOMPARE(layer->selectedText(),QString("Hello"));
         QTest::mouseClick(layer,Qt::LeftButton,Qt::NoModifier,QPoint(90,70));
@@ -340,9 +340,9 @@ class InPlaceEditorTest final : public QObject {
         QTest::mouseMove(layer,QPoint(600,380)); QCOMPARE(layer->cursor().shape(),Qt::ArrowCursor);
         QTest::mouseClick(layer,Qt::LeftButton,Qt::NoModifier,QPoint(600,380)); QVERIFY(layer->selectedText().isEmpty());
         QTest::keyClick(layer,Qt::Key_A,Qt::ControlModifier);
-        QCOMPARE(layer->selectedText(),QString::fromUtf8("Hello world\n中文\nTilt"));
+        QCOMPARE(layer->selectedText(),QString::fromUtf8("Hello world\n\n中文\nTilt"));
         QTest::keyClick(layer,Qt::Key_C,Qt::ControlModifier);
-        QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),QString::fromUtf8("Hello world\n中文\nTilt").toUtf8());
+        QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),QString::fromUtf8("Hello world\n\n中文\nTilt").toUtf8());
         // Zoom and pan the underlying canvas; selection uses the same transform.
         const QPoint zoomAt(240,180);
         QWheelEvent wheel(zoomAt,canvas->mapToGlobal(zoomAt),{},QPoint(0,120),Qt::NoButton,Qt::ControlModifier,Qt::NoScrollPhase,false);
@@ -388,7 +388,7 @@ class InPlaceEditorTest final : public QObject {
         QTest::mousePress(&layer,Qt::LeftButton,Qt::NoModifier,QPoint(10,10));
         QTest::mouseMove(&layer,QPoint(50,70));
         QTest::mouseRelease(&layer,Qt::LeftButton,Qt::NoModifier,QPoint(50,70));
-        QCOMPARE(layer.selectedText(),QString::fromUtf8("Hello world\n中文"));
+        QCOMPARE(layer.selectedText(),QString::fromUtf8("Hello world\n\n中文"));
         const auto calls=readOcrFile(ocrFixture("ocr-count"));
         layer.turnOff(true); layer.toggle();
         QVERIFY(layer.isOn()); QVERIFY(!layer.busy());
@@ -465,7 +465,7 @@ class InPlaceEditorTest final : public QObject {
         QFile::remove(ocrFixture("ocr-notification"));
         const QImage before=editor.resultImage(); QTest::mouseClick(button,Qt::LeftButton);
         QTRY_VERIFY_WITH_TIMEOUT(!layer->busy(),5000); QVERIFY(!layer->isOn());
-        const QByteArray expected=format=="json"?QString::fromUtf8("Hello world\n中文\nTilt").toUtf8():QByteArray("Plain text\n");
+        const QByteArray expected=format=="json"?QString::fromUtf8("Hello world\n\n中文\nTilt").toUtf8():QByteArray("Plain text\n");
         QTRY_COMPARE(readOcrFile(qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD")),expected);
         QVERIFY(!feedback.isEmpty());
         if(format=="text") QCOMPARE(feedback.back()[0].toString(),QString::fromUtf8("Engine has no text positions — copied all text"));

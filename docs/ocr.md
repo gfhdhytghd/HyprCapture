@@ -104,7 +104,7 @@ Joining uses the same `ocrTextSeparator()` / CJK-boundary rules as copy-all:
 adjacent CJK words have no added space, while Latin words and CJK/Latin
 boundaries retain their existing separators. Punctuation follows these same
 rules. Copy-all text therefore matches the previous separate-word results
-(for example, `Hello world\n中文`). Word texts still match within the joined
+(for example, adjacent `中` and `文` become `中文`). Word texts still match within the joined
 line in reading order. Nonpositive word dimensions, invalid confidence, and
 malformed rows fail with the TSV line number.
 
@@ -318,13 +318,95 @@ removes a caller-owned input file.
 
 ## Reading order and API
 
-`joinOcrText()` sorts polygon area centroids top-to-bottom, then groups adjacent
-items whose vertical bounding boxes overlap by at least half the smaller height.
-Each group retains the common vertical overlap to avoid merging successive
-lines through a chain of tall words. Items in the group sort left-to-right by
-centroid. Groups join with newline; items join with a space unless existing
-boundary whitespace already separates them, or both boundary characters are
-CJK. A text-only result preserves the original stdout.
+`ocrReadingRows()` sorts polygon centroids in a common run frame, groups
+items whose v-axis extents overlap by at least half the smaller height, and
+orders items along u. Each row retains its common overlap to prevent a chain
+of tall words from merging successive lines. Different orientations (>10°)
+remain separate rows. This also supports rotated and vertical text.
+
+`ocrCopyText()` is the shared Qt-free copy formatter. It returns formatted text
+and one `OcrCopyRow` per reading row: unchanged in-row text/result indices, the
+separator after the row, a reconstructed indentation prefix, and the CODE flag.
+The final row has no separator. `joinOcrText()` returns this formatted text;
+capture, copy-all, and multi-row Live Text selections use the same decisions.
+A text-only result preserves the original stdout, including internal newlines.
+
+Paragraph handling follows `ocr_blast`'s single-region strategy:
+
+- Use the upper median row height and upper median positive v-axis gap. When
+  no positive gaps exist, use `0.4 * median_height`.
+- `para_gap = round(max(1.5 * median_height, 2 * median_gap) * 0.5)`.
+  A gap at least this large emits `\n\n`. Widths use u extents; gaps use the
+  preceding run's v axis. Different orientations (>10°) conservatively emit
+  `\n` instead of joining across incompatible frames.
+- Within a prose paragraph, a preceding row narrower than `0.92 * max_width`
+  emits `\n`. Other boundaries join soft wraps. Insert one space only if
+  neither boundary character is whitespace, ASCII/CJK punctuation, or a Han
+  character in the reference `is_cjk` ranges. Existing in-row separators and
+  text remain unchanged.
+
+Before soft-wrapping prose, also preserve these structured boundaries as `\n`:
+
+- A new row starts with a list marker: `-`, `*`, `•`, `·`, `+` followed by
+  whitespace or CJK; alphabetic markers such as `a.` / `b)` / `A.`; numeric
+  markers such as `1.` / `1)` / `(1)` / `１.`; circled numbers ①–⑳; CJK
+  enumerations such as `一、` / `（一）`; or checkboxes `[ ]` / `[x]`.
+  Leading whitespace is ignored for detection, and OCR-dropped spaces such as
+  `-背景`, `a.用` and `a.English` are accepted. In-row text is preserved.
+- The new row's left edge changes by at least one character advance, in either
+  direction. Compare both edges along the preceding run's u axis, including for
+  rotated/vertical text. Use the median word width per grapheme from the new
+  row when available, then the preceding row's word estimate, otherwise the new
+  row's width per grapheme. Single-character words and legacy `level: word`
+  records also supply advances.
+- The preceding row ends in `:` or `：`, ignoring trailing whitespace.
+
+These rules keep existing paragraph gaps (`\n\n`). A preceding `。`, `.`, `!`
+or `！` alone does not force a break. Ordinary decimals and dotted prose
+abbreviations (`1.25`, `e.g.`, `i.e.`) are not enumeration markers.
+
+### Code detection and indentation
+
+Before joining prose, classify entire paragraph blocks and maximal runs of at
+least two consecutive code-shaped rows. No font name or editor metadata enters
+the classifier: it uses OCR text and geometry only. The final thresholds are:
+
+- At least 85% of non-space characters are ASCII. At least 8% are code symbols
+  (assignment, brackets, math, quotes and shell symbols), or a row has a common code shape: assignments, calls, dotted
+  names, flags, key/value entries, or code keywords/comments. An unquoted
+  sentence after a prose label does not count as a key/value code shape.
+- With word boxes, at least three words of two or more graphemes from at least
+  two rows establish an advance. Advance CV must be <=8%. At least 90% of
+  measurable inter-word gaps must be within 0.20 cells of an integer multiple;
+  overlaps beyond 0.20 cells reject the evidence.
+- Without sufficient word boxes, per-row advance CV must be <=2%. This stricter
+  threshold rejects proportional code-shaped English that passed at 4% in the
+  rendered fixtures. Require three distinct rows, a longest/shortest character
+  count ratio >=1.4, at least two rows <=40 graphemes, and one <=12; alternatively,
+  require distinct rows and positive indentations all within
+  0.12 cells of an integer grid. If OCR retains leading spaces but its box
+  starts at the first glyph, an alternative advance excluding only those leading
+  spaces must pass this same grid check. Long prose averages alone do not prove monospace.
+- ICU supplies Unicode grapheme counts, including spaces, without Qt. Candidate
+  sub-runs with clearly inconsistent word advances are excluded. Reconstructed
+  indentation is limited to 4096 spaces per row; larger estimates decline CODE.
+
+Code symbols (whitespace excluded):
+
+```text
+= ( ) [ ] { } < > ; : , . _ / \ " ' ` | & * + - # $ @ % ~ !
+```
+
+Detected code retains every internal row boundary (`\n`), and paragraph gaps
+remain `\n\n`. Indentation is rounded from `(row_left - block_left) / advance`;
+existing leading spaces are not duplicated. Adjacent code paragraphs share
+the indentation origin across their preserved blank-line gap. CODE/prose transitions keep a hard
+break. No extra newline is appended at EOF.
+
+Live Text keeps its internal single `\n` row offsets, glyph geometry, and hit
+positions. Copying replaces only crossed row boundaries with the formatter's
+separators and adds the applicable indentation prefixes. Partial first/last
+rows retain their selected in-row text; single-row selections are unchanged.
 
 Public entry points:
 
@@ -337,6 +419,7 @@ OcrResponse parseOcrJsonLines(std::string_view);
 OcrResponse parseTesseractTsv(std::string_view);
 OcrResponse parsePaddleOcrJson(std::string_view);
 bool ocrSupportsTextLayer(const std::vector<OcrResult>&);
+OcrCopyResult ocrCopyText(const std::vector<OcrResult>&);
 std::string joinOcrText(const std::vector<OcrResult>&);
 ```
 
@@ -387,8 +470,8 @@ downloads models or invokes a real engine.
 
 ## Editor layer and PaddleOCR probe
 
-The text layout uses the same `ocrReadingRows()` and `ocrTextSeparator()` as
-`joinOcrText()`. Selection offsets are UTF-16 grapheme boundaries. Character
+The text layout uses the same reading rows and in-row separators as the copy
+formatter. Copied text uses `ocrCopyText()` for paragraph/code boundaries. Selection offsets are UTF-16 grapheme boundaries. Character
 areas interpolate along each polygon's baseline with advance weights 1.0 for
 CJK/full-width characters and 0.5 otherwise. Valid nested word boxes bound
 those estimates within each word; missing or invalid words retain the 1:2

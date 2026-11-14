@@ -83,6 +83,7 @@ After a Hyprland update, a notification offers to rebuild. `omarchy plugin updat
 - a C++23-capable compiler
 - nlohmann-json
 - OpenSSL libcrypto (OCR API SHA-256 and base64)
+- ICU (Qt-free OCR grapheme counting)
 - Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
 - OpenCV `core` and `imgproc` (CPU image registration; no neural-network runtime)
@@ -453,7 +454,9 @@ hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.open_editor)
 
 Open the annotation editor, click **Live text (O)** or press **O**, then drag over
 recognized text. Double-click selects a word; triple-click selects a line.
-**Ctrl+A** selects all text and **Ctrl+C** copies the selection. The context menu
+**Ctrl+A** selects all text and **Ctrl+C** copies the selection. Copying joins
+wrapped prose into paragraphs; list items and lead-ins retain hard breaks,
+and detected code keeps its lines and indentation. The context menu
 also offers **Copy**, **Copy all text**, and **Select all**. Press **O** or **Esc**
 to hide the text layer and return to the drawing tool. OCR reads the original
 image at physical resolution, without annotations. It never changes the image,

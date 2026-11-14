@@ -28,10 +28,13 @@ double distance(QPointF p, const QPainterPath& path) {
 }
 
 void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
-    text.clear(); runs.clear();
+    text.clear(); runs.clear(); m_copyRows.clear();
     int rowIndex = 0;
-    for (const auto& row : ocrReadingRows(results)) {
+    const auto copy = ocrCopyText(results);
+    for (const auto& copyRow : copy.rows) {
+        const auto& row = copyRow.results;
         if (!text.isEmpty()) text += '\n';
+        const int rowBegin = text.size();
         std::string_view previous;
         for (const auto index : row) {
             const auto& result = results[index];
@@ -129,8 +132,29 @@ void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
             }
             runs.push_back(std::move(run));
         }
+        m_copyRows.push_back({rowBegin, int(text.size()), QString::fromStdString(copyRow.prefix), QString::fromStdString(copyRow.separator)});
         ++rowIndex;
     }
+}
+
+QString LiveTextLayout::copiedText(int anchor, int caret) const {
+    if (anchor < 0 || caret < 0) return {};
+    const int begin=std::clamp(std::min(anchor,caret),0,int(text.size()));
+    const int end=std::clamp(std::max(anchor,caret),0,int(text.size()));
+    bool crossed=false;
+    for (std::size_t i=0;i+1<m_copyRows.size();++i) crossed|=m_copyRows[i].end>=begin&&m_copyRows[i].end<end;
+    if (!crossed) return text.mid(begin,end-begin);
+    QString out;
+    for (std::size_t i=0;i<m_copyRows.size();++i) {
+        const auto& row=m_copyRows[i];
+        const int left=std::max(begin,row.begin),right=std::min(end,row.end);
+        if (right>left) {
+            if (left==row.begin) out+=row.prefix;
+            out+=text.mid(left,right-left);
+        }
+        if (i+1<m_copyRows.size()&&row.end>=begin&&row.end<end) out+=row.separator;
+    }
+    return out;
 }
 
 int LiveTextLayout::hit(QPointF point, double tolerance, bool nearest) const {
