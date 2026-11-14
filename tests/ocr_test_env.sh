@@ -2,15 +2,17 @@
 # Keep all test mutations inside this worktree or disposable namespace tmpfs.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-mkdir -p "$root/build/full-suite-home/.nix-profile/bin" "$root/build/test-runtime"
-chmod 700 "$root/build/test-runtime"
-ln -sfn /nix/store/ocr-system/bin/ffmpeg "$root/build/full-suite-home/.nix-profile/bin/ffmpeg"
+build=${HYPRCAPTURE_TEST_BUILD_DIR:-"$root/build"}
+case "$build" in /*) ;; *) build="$root/$build" ;; esac
+mkdir -p "$build/full-suite-home/.nix-profile/bin" "$build/test-runtime"
+chmod 700 "$build/test-runtime"
+ln -sfn /nix/store/ocr-system/bin/ffmpeg "$build/full-suite-home/.nix-profile/bin/ffmpeg"
 exec env -u QT_IM_MODULE LANG=C.UTF-8 LC_ALL=C.UTF-8 capmem 8G \
  bwrap --die-with-parent --unshare-net --ro-bind / / --dev /dev --proc /proc \
  --tmpfs /tmp --tmpfs /dev/shm \
- --bind "$root/build" "$root/build" \
+ --bind "$build" "$build" \
  --tmpfs /nix --dir /nix/store --ro-bind /usr /nix/store/ocr-system \
- --bind "$root/build" /nix/store/ocr-build \
+ --bind "$build" /nix/store/ocr-build \
  --setenv PATH /nix/store/ocr-system/bin:/usr/bin:/bin \
  --setenv HYPRCAPTURE_TEST_HOME /nix/store/ocr-build \
  --setenv HOME /nix/store/ocr-build/full-suite-home \
