@@ -1737,18 +1737,7 @@ class StripToolButton final : public QToolButton {
     QString hint;
     bool dark = true;
   protected:
-    void paintEvent(QPaintEvent*) override {
-        paintStripButton(this, hint, icon(), dark, isChecked(), underMouse(), hasFocus());
-        if (property("ocrBusy").toBool() || !qFuzzyIsNull(property("ocrShake").toReal())) {
-            QPainter p(this); p.setRenderHint(QPainter::Antialiasing);
-            const qreal shake = property("ocrShake").toReal();
-            p.translate(shake, 0);
-            if (property("ocrBusy").toBool()) {
-                p.setPen(QPen(themeColors(dark).accent, 1.5));
-                p.drawArc(QRectF(width()-26, 5, 22, 22), qRound(property("ocrRotation").toReal()*16), 95*16);
-            }
-        }
-    }
+    void paintEvent(QPaintEvent*) override { paintStripButton(this, hint, icon(), dark, isChecked(), underMouse(), hasFocus()); }
 };
 
 class StripActionButton final : public QPushButton {
@@ -2229,14 +2218,11 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         ui.ocr->setCheckable(!ui.liveText->copyOnly());
         ui.ocr->setChecked(!ui.liveText->copyOnly() && ui.liveText->isOn());
         ui.ocr->setToolTip(ui.liveText->tooltip()); ui.ocr->setAccessibleName(ui.liveText->tooltip());
-        ui.ocr->setProperty("ocrBusy", ui.liveText->busy());
         ui.ocr->update(); ui.updateTools(); ui.positionToolbar();
         if (!ui.liveText->isOn()) ui.canvas->setFocus(Qt::ShortcutFocusReason);
     });
-    connect(ui.liveText, &hyprcapture::ui::LiveTextLayer::iconFrame, this, [this](qreal rotation, qreal shake, bool spinning) {
-        m_impl->ocr->setProperty("ocrRotation", rotation);
-        m_impl->ocr->setProperty("ocrShake", shake);
-        m_impl->ocr->setProperty("ocrBusy", spinning);
+    connect(ui.liveText, &hyprcapture::ui::LiveTextLayer::iconShake, this, [this](qreal offset) {
+        m_impl->ocr->setProperty("ocrShake", offset);
         m_impl->ocr->update();
     });
     const auto action = [&](const QString& key, const char* name) {

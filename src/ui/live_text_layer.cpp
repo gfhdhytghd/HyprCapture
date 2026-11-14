@@ -130,7 +130,7 @@ void LiveTextLayer::cancelJob() {
 void LiveTextLayer::turnOff(bool instant) {
     cancelJob(); m_pendingReveal = false; m_selecting = false; m_clickClock.invalidate();
     m_scanAnimation.stop(); m_phaseAnimation.stop(); m_copyAnimation.stop(); m_dimAnimation.stop();
-    emit iconFrame(0,0,false);
+    emit iconShake(0);
     if (!m_on && m_phase == Phase::Idle) return;
     m_phase = Phase::Fade;
     const qreal from = m_opacity;
@@ -146,7 +146,7 @@ void LiveTextLayer::turnOff(bool instant) {
 void LiveTextLayer::stop() {
     turnOff(true);
     m_toastAnimation.stop(); m_shakeAnimation.stop(); m_toast.clear();
-    hide(); emit iconFrame(0,0,false);
+    hide(); emit iconShake(0);
 }
 void LiveTextLayer::startJob() {
     cancelJob(); m_busy = true;
@@ -187,11 +187,11 @@ void LiveTextLayer::finishScan() {
     if (m_pendingReveal) { reveal(); return; }
     if (reducedMotion()) { repaintImage(); return; }
     animate(m_scanAnimation, timing.scan, QEasingCurve::InOutSine, [this](qreal t) {
-        m_scan = t; repaintImage(); emit iconFrame(t*360,0,true);
+        m_scan = t; repaintImage();
     }, [this] { finishScan(); });
 }
 void LiveTextLayer::reveal() {
-    m_pendingReveal = false; emit iconFrame(0,0,false);
+    m_pendingReveal = false;
     if (copyOnly()) {
         m_phase = Phase::CopyFlash;
         const QString text = QString::fromStdString(joinOcrText(m_results.results));
@@ -220,8 +220,8 @@ void LiveTextLayer::fail(const QString& error) {
 }
 void LiveTextLayer::shake() {
     animate(m_shakeAnimation, timing.shake, QEasingCurve::Linear, [this](qreal t) {
-        emit iconFrame(0, reducedMotion() ? 0 : 3*std::sin(t*4*std::numbers::pi), false);
-    }, [this] { emit iconFrame(0,0,false); });
+        emit iconShake(reducedMotion() ? 0 : 3*std::sin(t*4*std::numbers::pi));
+    }, [this] { emit iconShake(0); });
 }
 QRect LiveTextLayer::toastRect() const {
     const int width = std::min(this->width()-16, fontMetrics().horizontalAdvance(m_toast)+32);
