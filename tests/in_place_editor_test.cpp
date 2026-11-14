@@ -370,6 +370,30 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(readOcrFile(ocrFixture("ocr-count")).size(),calls.size()+1);
         for (const auto* animation : layer->findChildren<QVariantAnimation*>()) QCOMPARE(animation->state(),QAbstractAnimation::Stopped);
     }
+    void ocrHdrWorkerInput() {
+        qputenv("HYPRCAPTURE_REDUCED_MOTION","1");
+        QImage sdr(300,200,QImage::Format_ARGB32); sdr.fill(QColor(24,61,97));
+        const QImage hdr=hyprcapture::ui::sdrToHdr(sdr);
+        QVERIFY(hyprcapture::ui::isHdrImage(hdr));
+        const auto config=fakeOcr();
+        QWidget canvas; canvas.resize(sdr.size());
+        hyprcapture::ui::LiveTextLayer layer(&canvas);
+        layer.configure(config,hyprcapture::NotificationBackend::System,true);
+        layer.setSource(hdr); layer.setView({}); canvas.show(); layer.toggle();
+        QTRY_VERIFY_WITH_TIMEOUT(!layer.busy(),5000); QVERIFY(layer.isOn());
+        // The OCR worker must receive the SDR conversion of the HDR source.
+        const QImage input(ocrFixture("ocr-input.png"));
+        QCOMPARE(input.convertToFormat(QImage::Format_RGB32),
+                 hyprcapture::ui::hdrToSdr(hdr).convertToFormat(QImage::Format_RGB32));
+        QTest::mousePress(&layer,Qt::LeftButton,Qt::NoModifier,QPoint(10,10));
+        QTest::mouseMove(&layer,QPoint(50,70));
+        QTest::mouseRelease(&layer,Qt::LeftButton,Qt::NoModifier,QPoint(50,70));
+        QCOMPARE(layer.selectedText(),QString::fromUtf8("Hello world\n中文"));
+        const auto calls=readOcrFile(ocrFixture("ocr-count"));
+        layer.turnOff(true); layer.toggle();
+        QVERIFY(layer.isOn()); QVERIFY(!layer.busy());
+        QCOMPARE(readOcrFile(ocrFixture("ocr-count")),calls);
+    }
     void ocrAnimationLifecycleAndContextMenu() {
         qunsetenv("HYPRCAPTURE_REDUCED_MOTION"); qunsetenv("QT_ANIMATIONS_DISABLED");
         AnnotationEditor editor; showOcrEditor(editor,fakeOcr());

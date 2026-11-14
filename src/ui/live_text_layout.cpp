@@ -24,6 +24,7 @@ double distance(QPointF p, const QPainterPath& path) {
     }
     return best;
 }
+
 }
 
 void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
@@ -55,6 +56,7 @@ void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
             }
             const auto at = origin + left * u + top * v;
             const auto dx = (right - left) * u, dy = (bottom - top) * v;
+            if (bottom - top < 1e-6) continue;
             QTransform transform(dx.x(), dx.y(), dy.x(), dy.y(), at.x(), at.y());
             Run run{begin, int(text.size()), rowIndex, area, transform, {}};
             std::vector<std::pair<int, double>> boundaries{{0, 0}};
@@ -66,11 +68,14 @@ void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
                 total += !codepoints.empty() && wide(codepoints.front()) ? 1.0 : .55;
                 boundaries.push_back({next, total}); last = next;
             }
+            if (total > 0) for (auto& boundary : boundaries) boundary.second /= total;
             if (total > 0) for (std::size_t i = 1; i < boundaries.size(); ++i) {
-                const double x = boundaries[i - 1].second / total, end = boundaries[i].second / total;
-                QPainterPath cell; cell.addRect(QRectF(x, 0, end - x, 1));
+                const double x = boundaries[i - 1].second, end = boundaries[i].second;
+                QPainterPath cell;
+                cell.addPolygon(transform.map(QPolygonF(QRectF(x, 0, end - x, 1))));
+                cell.closeSubpath();
                 run.glyphs.push_back({begin + boundaries[i - 1].first, begin + boundaries[i].first,
-                                     transform.map(cell).intersected(area)});
+                                     cell, x, end});
             }
             runs.push_back(std::move(run));
         }
@@ -87,19 +92,14 @@ int LiveTextLayout::hit(QPointF point, double tolerance, bool nearest) const {
     }
     if (!target || (!nearest && closest > tolerance)) return -1;
     const double x = target->fromUnit.inverted().map(point).x();
-    const double width = target->fromUnit.m11() * target->fromUnit.m11() + target->fromUnit.m12() * target->fromUnit.m12();
-    // Glyph boundaries are stored geometrically, so rotated and nonuniform text
-    // use the same interpolation for painting and pointer placement.
-    double best = std::numeric_limits<double>::max();
-    int position = target->begin;
+    if (x <= 0) return target->begin;
+    if (x >= 1) return target->end;
+    // Pointer placement uses stored unit-space boundaries, never painted paths
+    // (a rotated path's bounding box is not its glyph interval).
     for (const auto& glyph : target->glyphs) {
-        const auto unit = target->fromUnit.inverted().map(glyph.area).boundingRect();
-        for (const auto& [edge, offset] : {std::pair{unit.left(), glyph.begin}, {unit.right(), glyph.end}}) {
-            const double d = std::abs(edge - x) * std::sqrt(width);
-            if (d < best) { best = d; position = offset; }
-        }
+        if (x < (glyph.x0 + glyph.x1) / 2) return glyph.begin;
     }
-    return position;
+    return target->end;
 }
 bool LiveTextLayout::contains(QPointF point) const {
     return std::ranges::any_of(runs, [&](const auto& run) { return run.area.contains(point); });
@@ -128,10 +128,22 @@ std::pair<int,int> LiveTextLayout::lineAt(int position) const {
 }
 QPainterPath LiveTextLayout::selection(int anchor, int caret) const {
     QPainterPath selected;
+    selected.setFillRule(Qt::WindingFill);
     if (anchor < 0 || caret < 0) return selected;
     const int begin = std::min(anchor, caret), end = std::max(anchor, caret);
-    for (const auto& run : runs) for (const auto& glyph : run.glyphs)
-        if (glyph.end > begin && glyph.begin < end) selected.addPath(glyph.area);
+    for (const auto& run : runs) {
+        const Glyph* first = nullptr;
+        const Glyph* last = nullptr;
+        for (const auto& glyph : run.glyphs) if (glyph.end > begin && glyph.begin < end) {
+            if (!first) first = &glyph;
+            last = &glyph;
+        }
+        // One quad per selected run also avoids fractional-pixel seams.
+        if (first) {
+            selected.addPolygon(run.fromUnit.map(QPolygonF(QRectF(first->x0, 0, last->x1 - first->x0, 1))));
+            selected.closeSubpath();
+        }
+    }
     return selected;
 }
 } // namespace hyprcapture::ui
