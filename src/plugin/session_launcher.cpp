@@ -145,6 +145,8 @@ std::vector<std::string> trustedBinDirectories() {
 #endif
     if (const char* home = std::getenv("HOME"); home && *home)
         directories.emplace_back(std::filesystem::path(home) / ".nix-profile/bin");
+    if (const auto bin = security::xdgNixProfileBinDirectory(); !bin.empty())
+        directories.emplace_back(bin);
     if (const char* user = std::getenv("USER"); user && *user)
         directories.emplace_back(std::filesystem::path("/etc/profiles/per-user") / user / "bin");
     directories.emplace_back("/run/current-system/sw/bin");

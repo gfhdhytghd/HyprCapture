@@ -50,6 +50,8 @@ QString trustedSystemProgramImpl(const QString& name) {
 #endif
     if (const QString home = QDir::homePath(); !home.isEmpty())
         directories.append(QDir(home).filePath(QStringLiteral(".nix-profile/bin")));
+    if (const auto bin = security::xdgNixProfileBinDirectory(); !bin.empty())
+        directories.append(QFile::decodeName(bin.c_str()));
     if (const QString user = qEnvironmentVariable("USER"); !user.isEmpty())
         directories.append(QDir(QStringLiteral("/etc/profiles/per-user")).filePath(user + QStringLiteral("/bin")));
     directories.append({QStringLiteral("/run/current-system/sw/bin"), QStringLiteral("/nix/var/nix/profiles/default/bin")});
@@ -387,6 +389,8 @@ QProcessEnvironment trustedProcessEnvironment() {
 #endif
     if (const QString home = QDir::homePath(); !home.isEmpty())
         directories.append(QDir(home).filePath(QStringLiteral(".nix-profile/bin")));
+    if (const auto bin = security::xdgNixProfileBinDirectory(); !bin.empty())
+        directories.append(QFile::decodeName(bin.c_str()));
     if (const QString user = qEnvironmentVariable("USER"); !user.isEmpty())
         directories.append(QDir(QStringLiteral("/etc/profiles/per-user")).filePath(user + QStringLiteral("/bin")));
     directories.append({QStringLiteral("/run/current-system/sw/bin"), QStringLiteral("/nix/var/nix/profiles/default/bin")});
