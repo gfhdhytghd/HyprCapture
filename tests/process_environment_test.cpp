@@ -20,6 +20,7 @@ int main() {
 
     require(desktopEnvironmentNameAllowed("XDG_DATA_HOME"), "XDG data home is preserved");
     require(desktopEnvironmentNameAllowed("XDG_CONFIG_HOME"), "XDG config home is preserved");
+    require(desktopEnvironmentNameAllowed("XDG_CACHE_HOME"), "OCR API cache location is preserved");
     require(desktopEnvironmentNameAllowed("XDG_DATA_DIRS"), "XDG data directories are preserved");
     require(desktopEnvironmentNameAllowed("DESKTOP_SESSION"), "desktop session is preserved");
     require(desktopEnvironmentNameAllowed("LC_ALL"), "locale variables are preserved");

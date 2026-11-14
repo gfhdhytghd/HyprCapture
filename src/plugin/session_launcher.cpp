@@ -1,5 +1,7 @@
 #include "plugin/session_launcher.hpp"
 #include "shared/thumbnail_config.hpp"
+#include "shared/shot_channel.hpp"
+#include "shared/shot_options.hpp"
 
 #include "plugin/artifact_capture.hpp"
 #include "plugin/session_lock.hpp"
@@ -37,6 +39,16 @@ extern char** environ;
 namespace hyprcapture {
 namespace {
 std::vector<std::unique_ptr<SessionStartupChannel>> captureControlChannels;
+std::string activeShotSocket;
+SessionStartupChannel* activeShotChannel = nullptr;
+
+void pruneCaptureChannels() {
+    std::erase_if(captureControlChannels, [](const auto& channel) {
+        if (!channel->peerClosed()) return false;
+        if (channel.get() == activeShotChannel) { activeShotChannel = nullptr; activeShotSocket.clear(); }
+        return true;
+    });
+}
 
 constexpr int EXEC_FAILURE_PIPE_TIMEOUT_MS = 2000;
 
@@ -315,11 +327,23 @@ std::optional<std::string> recordingHelperPath(const CaptureDefaults& defaults) 
 
 LaunchResult launchHelper(const LaunchRequest& request) {
     if (sessionLocked()) return {.success = false, .error = "session locked"};
+    pruneCaptureChannels();
+    if ((!request.shotSocket.empty() && !captureControlChannels.empty()) || activeShotChannel)
+        return {.success = false, .error = "another capture session already active"};
+    struct ResultConnection {
+        int fd = -1;
+        ~ResultConnection() { if (fd >= 0) close(fd); }
+    } resultConnection;
+    if (!request.shotSocket.empty()) {
+        resultConnection.fd = shot::connectResult(request.shotSocket);
+        if (resultConnection.fd < 0) return {.success = false, .error = "invalid or unavailable shot result socket"};
+    }
     const auto helper = firstRunnableHelper(request.defaults.helper);
     if (!helper)
         return {.success = false, .error = "no trusted hyprcapture-ui helper found"};
 
     CaptureDefaults captureDefaults = request.defaults;
+    if (!request.shotSocket.empty()) shot::applyOverrides(captureDefaults);
     captureDefaults.mode = request.requestedMode;
     captureDefaults.thumbnailMonitor = resolvedThumbnailMonitor(captureDefaults.thumbnailMonitor);
     ScopedTiming launchTiming("startup.launch");
@@ -444,6 +468,14 @@ LaunchResult launchHelper(const LaunchRequest& request) {
         args.push_back("--record");
     if (request.recordActive)
         args.push_back("--record-active");
+    if (resultConnection.fd >= 0) args.push_back("--shot-result-stdout");
+    args.insert(args.end(), {"--ocr-mode", request.defaults.ocr.mode,
+                             "--ocr-engine", request.defaults.ocr.engine,
+                             "--ocr-languages", request.defaults.ocr.languages,
+                             "--ocr-command", request.defaults.ocr.command,
+                             "--ocr-output", request.defaults.ocr.output,
+                             "--ocr-timeout", std::to_string(request.defaults.ocr.timeout)});
+    // API URL/key travel only in the owner-only session JSON, never argv.
     args.push_back("--session-json-stdin");
 
     std::vector<char*> argv;
@@ -475,6 +507,10 @@ LaunchResult launchHelper(const LaunchRequest& request) {
     if (startupFdError != 0) {
         return {.success = false, .error = std::string("startup fd setup failed: ") + std::strerror(startupFdError)};
     }
+    if (resultConnection.fd >= 0) {
+        const int error = posix_spawn_file_actions_adddup2(&fileActions.value, resultConnection.fd, STDOUT_FILENO);
+        if (error) return {.success = false, .error = "shot result fd setup failed"};
+    }
     if (const auto error = configureSpawnFileDescriptorPolicy(fileActions, attrs)) {
         return {.success = false, .error = std::string("spawn setup failed: ") + std::strerror(*error)};
     }
@@ -499,13 +535,24 @@ LaunchResult launchHelper(const LaunchRequest& request) {
         return {.success = false, .error = "failed to deliver bounded session metadata"};
     }
     traceTiming("startup.session_published");
-    std::erase_if(captureControlChannels, [](const auto& channel) { return channel->peerClosed(); });
+    pruneCaptureChannels();
+    if (!request.shotSocket.empty()) {
+        activeShotSocket = request.shotSocket;
+        activeShotChannel = startup.get();
+    }
     captureControlChannels.push_back(std::move(startup));
     return {.success = true};
 }
 
+LaunchResult cancelShotHelper(const std::string& socket) {
+    pruneCaptureChannels();
+    if (!activeShotChannel || socket != activeShotSocket) return {.success = true};
+    const bool sent = activeShotChannel->cancel();
+    return {.success = sent, .error = sent ? "" : "could not cancel shot helper"};
+}
+
 LaunchResult cancelCaptureHelpers() {
-    std::erase_if(captureControlChannels, [](const auto& channel) { return channel->peerClosed(); });
+    pruneCaptureChannels();
     bool delivered = true;
     for (const auto& channel : captureControlChannels) delivered = channel->cancel() && delivered;
     return {.success = delivered, .error = delivered ? "" : "could not cancel capture helper"};

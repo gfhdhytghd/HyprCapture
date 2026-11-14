@@ -8,6 +8,7 @@
   pipewire,
   fftw,
   cmake,
+  curl,
   glib,
   hyprland,
   hyprlandPlugins,
@@ -17,6 +18,8 @@
   libheif,
   ffmpeg,
   nlohmann_json,
+  openssl,
+  icu,
   opencv,
   pkg-config,
   python3,
@@ -59,6 +62,8 @@ in hyprlandPlugins.mkHyprlandPlugin {
     libpulseaudio
     hdrCodec
     nlohmann_json
+    openssl
+    icu
     opencv
   ];
 
@@ -68,9 +73,14 @@ in hyprlandPlugins.mkHyprlandPlugin {
     "-DHYPRCAPTURE_AEC_MODEL_DIR=${aecModels}"
     "-DHYPRCAPTURE_TFLITE_LIBRARY=${aecRuntime}/lib/libtensorflowlite_c.so"
     "-DHYPRCAPTURE_DEFAULT_HELPER_PATH=${builtins.placeholder "out"}/bin/hyprcapture-ui"
-    "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ffmpeg ]}"
+    "-DHYPRCAPTURE_TRUSTED_BIN_DIRS=${lib.makeBinPath [ hyprland ffmpeg curl ]}"
   ];
 
+  # CMake installs hyprcapture-shot and hyprcapture-ocr into $out/bin alongside the Qt helper.
+  postInstall = ''
+    test -x "$out/bin/hyprcapture-shot"
+    test -x "$out/bin/hyprcapture-ocr"
+  '';
   doCheck = false;
   preCheck = ''
     # Nix defaults HOME to an unwritable /homeless-shelter. Tests need a

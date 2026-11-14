@@ -19,7 +19,24 @@ enum class RecordWindowBackend { Auto, Compositor, GsrVisible };
 enum class NotificationBackend { Hyprland, System };
 enum class WatermarkPosition { UpLeft, UpMiddle, UpRight, LeftMiddle, Central, RightMiddle, DownLeft, DownMiddle, DownRight };
 
+struct OcrConfig {
+    std::string mode = "off";
+    std::string engine = "tesseract";
+    std::string languages = "eng+chi_sim";
+    std::string command;
+    std::string output = "text";
+    std::string apiUrl;
+    std::string apiKey;
+    std::int64_t timeout = 30; // seconds, 1..86400
+};
+
+// Empty means valid. Configuration strings never undergo shell expansion.
+std::string validateOcrConfig(const OcrConfig& config);
+// Parses one of the eight ocr_* keys; leaves config unchanged on error.
+bool setOcrConfigValue(OcrConfig& config, std::string_view key, std::string_view value, std::string& error);
+
 struct CaptureDefaults {
+    OcrConfig        ocr;
     CaptureMode      mode = CaptureMode::Region;
     FullscreenScope  fullscreenScope = FullscreenScope::All;
     OverlayScope     overlayScope = OverlayScope::Fix;

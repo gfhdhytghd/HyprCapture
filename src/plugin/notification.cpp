@@ -26,10 +26,12 @@ NotificationBackend configuredBackend() {
     const auto type = std::type_index(*value.type);
     if (type == typeid(Config::STRING))
         return parseNotificationBackend(**reinterpret_cast<Config::STRING* const*>(value.dataptr));
+#ifdef HYPRLANG_VERSION
     if (type == typeid(Hyprlang::STRING)) {
         const auto raw = *reinterpret_cast<Hyprlang::STRING const*>(value.dataptr);
         return parseNotificationBackend(raw ? raw : "");
     }
+#endif
     return NotificationBackend::System;
 }
 

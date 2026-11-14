@@ -36,6 +36,7 @@ The screenshot annotation interface is inspired by [Omarchy Screenshot](https://
 - Optional window border and shadow removal
 - Optional image watermarks from PNG, JPG/JPEG, or built-in presets
 - Optional in-place screenshot editing with annotations and desktop pinning
+- [OCR](#ocr): select recognized text in the editor like a document, or copy it all with one click (Tesseract, PaddleOCR CLI/HTTP API, or any command)
 - UI translations for English, Simplified and Traditional Chinese, Japanese, German, French, Spanish, and Korean
 - Save-to-file and clipboard output
 - Stable Wayland clipboard writes through `wl-copy` when available, with Qt clipboard fallback
@@ -82,6 +83,9 @@ After a Hyprland update, a notification offers to rebuild. `omarchy plugin updat
 - `pkg-config`
 - a C++23-capable compiler
 - nlohmann-json
+- OpenSSL libcrypto (OCR API SHA-256 and base64)
+- ICU (Qt-free OCR grapheme counting)
+- `curl` (runtime, for the PaddleOCR HTTP API)
 - Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
 - OpenCV `core` and `imgproc` (CPU image registration; no neural-network runtime)
@@ -126,7 +130,7 @@ Perform a full system upgrade while installing the build tools and libraries:
 
 ```sh
 sudo pacman -Syu --needed base-devel cmake git cpio \
-    hyprland nlohmann-json lua glib2 \
+    hyprland nlohmann-json openssl icu curl lua glib2 \
     qt6-base qt6-svg qt6-wayland layer-shell-qt opencv vtk hdf5 \
     pipewire libpipewire fftw libpulse ffmpeg wl-clipboard
 ```
@@ -338,6 +342,50 @@ Build outputs:
 
 ## Usage
 
+### Shell pipelines
+
+```sh
+hyprcapture-shot [region|fullscreen|window] [-o PATH|-o -] [--editor] [--timeout SEC]
+```
+
+`hyprcapture-shot` opens the normal target selection overlay and blocks until the
+capture finishes. The mode defaults to `region`; output defaults to stdout.
+`--editor` opens the annotation toolbar after selection and exports the final
+annotated image. Output is exactly one SDR PNG, including in HDR sessions.
+
+```sh
+hyprcapture-shot > shot.png
+hyprcapture-shot -o "$tmp" && ocr --image "$tmp"
+hyprcapture-shot | wl-copy -t image/png
+hyprcapture-shot window | swappy -f -
+```
+
+`-o PATH` writes a private temporary file in the destination directory and renames
+it atomically after success. Cancellation or errors preserve an existing PATH.
+Stdout carries only PNG bytes; diagnostics use stderr. Writing PNG to a terminal
+is refused. `--timeout SEC` accepts positive seconds (including fractions) and
+bounds the wait; the default has no timeout. Timeout and SIGINT/SIGTERM request
+cancellation of this capture and remove the command's temporary files and socket.
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | One complete PNG delivered. |
+| `1` | User cancelled (Esc, right-click, or normal Cancel), or SIGINT. No image output. |
+| `2` | Plugin unavailable, helper failure, locked session, active capture, timeout, SIGTERM, or I/O error. One-line reason on stderr. |
+| `64` | Usage error, including stdout being a terminal. |
+
+This invocation suppresses save_dir output, clipboard writes, thumbnails,
+screenshot notifications, and confirm-before-capture prompts. It does not read
+or write remembered interactive settings. Cursor, window decorations, shadow,
+scale, and other capture settings still apply. The capture toolbar's recording
+button is hidden for this screenshot-only command.
+
+On the pinned official Hyprland v0.57.2, the command uses `hyprctl eval` and the
+Lua actions below. That release has only the Lua config manager; legacy plugin
+dispatchers are unavailable. Its owner-only result socket lives in a unique
+directory under the existing `hyprcapture-$UID` private runtime root. The command never
+cancels another invocation's capture.
+
 ### Lua actions and key bindings
 
 ```lua
@@ -357,6 +405,8 @@ end)
 | --- | --- |
 | `hl.plugin.hyprcapture.open()` | Select a screenshot target using `default_mode`, then capture without the annotation toolbar. |
 | `hl.plugin.hyprcapture.open(mode)` | Select a target in `region`, `fullscreen`, or `window` mode, then capture without the annotation toolbar. |
+| `hl.plugin.hyprcapture.shot(socket_path, mode, editor)` | Internal shell command entry: pass the private result socket, capture mode, and editor boolean. Prefer `hyprcapture-shot` in scripts. |
+| `hl.plugin.hyprcapture.shot_cancel(socket_path)` | Cancel only the shot associated with this result socket. |
 | `hl.plugin.hyprcapture.open_editor()` | Select a screenshot target using `default_mode`, then open the annotation toolbar before output. |
 | `hl.plugin.hyprcapture.open_editor(mode)` | Select a target in `region`, `fullscreen`, or `window` mode, then open the annotation toolbar before output. |
 | `hl.plugin.hyprcapture.quick()` | Capture immediately using `default_mode`; disabled unless `allow_quick = true`. |
@@ -364,7 +414,7 @@ end)
 | `hl.plugin.hyprcapture.export_pipe(fifo)` | Export fullscreen compositor RGBA frames to a trusted private FIFO client. Intended for tools such as screenland. |
 | `hl.plugin.hyprcapture.cancel()` | Reserved action; currently returns successfully without changing an active helper. |
 
-Available Lua functions are `open`, `open_editor`, `quick`, `record`, `record_toggle`, `record_stop`, `record_start`, `window_capture`, `export_pipe`, `cancel`, and `dispatch`.
+Available Lua functions are `open`, `open_editor`, `shot`, `shot_cancel`, `quick`, `record`, `record_toggle`, `record_stop`, `record_start`, `window_capture`, `export_pipe`, `cancel`, and `dispatch`.
 `dispatch` accepts the dispatcher name plus an optional argument, for example `hl.plugin.hyprcapture.dispatch("open", "fullscreen")`.
 Use `hl.plugin.hyprcapture.dispatch("open_editor", "fullscreen")` for the editor flow.
 
@@ -631,6 +681,14 @@ remain subject to `window_background`; no margin is added around its content.
 | `notification_backend` | string | `system` | Backend for screenshot notifications plus non-error recording status and warnings. `hyprland` uses Hyprland's overlay; `system` uses the desktop notification service through `notify-send` (libnotify), includes the saved screenshot as its image/icon hint, and falls back to the Hyprland overlay when the command cannot be launched. Errors always use the Hyprland overlay so missing external notification infrastructure cannot hide failures. |
 | `include_cursor` | bool | `false` | Include the cursor visible when the capture session starts in fullscreen, region, and window screenshots. The interactive overlay cursor is not baked into the output. |
 | `language` | string | `auto` | UI language: `auto`, `en`, `zh_CN`, `zh_TW`, `ja`, `de`, `fr`, `es`, or `ko`. `auto` uses `HYPRCAPTURE_LANGUAGE` when set, then the system locale. Explicit language values take precedence; missing translations fall back to English. |
+| `ocr_mode` | string | `off` | Editor OCR tool: `off`, `capture` (copy all), `text_layer` (select text), or `both`. See [OCR](#ocr). |
+| `ocr_engine` | string | `tesseract` | External adapter: `tesseract`, `paddleocr`, or `command`. See [Engines](#engines). |
+| `ocr_languages` | string | `eng+chi_sim` | Tesseract language expression. PaddleOCR uses its installed default model; use `command` for explicit model/language arguments. See [Engines](#engines). |
+| `ocr_command` | string | empty | For `ocr_engine=command`. Quoted argv with `{image}` substitution; no shell evaluation. See [Custom command](#custom-command-json-lines). |
+| `ocr_output` | string | `text` | For `ocr_engine=command`. `text` copies all text; `json` supplies polygons (and optional word boxes) for selectable text. See [Custom command](#custom-command-json-lines). |
+| `ocr_api_url` | string | empty | Full PaddleOCR HTTP endpoint; empty uses the local CLI. Other engines ignore it. See [PaddleOCR HTTP API](#paddleocr-http-api). |
+| `ocr_api_key` | string | empty | Optional HTTP API key; stored in plain text in the Hyprland config. See [PaddleOCR HTTP API](#paddleocr-http-api). |
+| `ocr_timeout` | integer | `30` | Deadline in seconds, `1..86400`; timeout kills the engine process group. See [OCR](#ocr). |
 | `remember_settings` | bool | `false` | Restore only dropdown choices: fullscreen scope, window background, recording format/codec/FPS/duration/backend and sound mode/devices/mix preset. Capture mode and volume sliders are not saved or restored. Saves on capture or cancel (including Esc) to `$XDG_CONFIG_HOME/hyprcapture/last-settings.ini` (default `~/.config/hyprcapture/last-settings.ini`). Quick capture and the stop-recording UI bypass this state. The open/record dispatcher still determines screenshot versus recording. Saved choices override configured defaults while enabled; disabling this option uses the configured defaults again. |
 | `allow_quick` | bool | `false` | Enable no-confirmation `hl.plugin.hyprcapture.quick()` calls. Leave disabled unless your Hyprland IPC policy already restricts untrusted same-user clients. |
 | `confirm_before_capture` | bool | `false` | For `hl.plugin.hyprcapture.open()`, require an explicit confirmation after choosing a fullscreen, region, or window target. Region targets can be moved or resized; window targets can be switched before confirming. `quick()` and direct `record()` calls keep their existing no-extra-confirmation behavior. |
@@ -756,6 +814,141 @@ The compositor recording path uses synchronous compositor readback. To avoid mak
 | `watermark_position` | string | `central` | Supports `up-left`, `up-middle`, `up-right`, `left-middle`, `central`, `right-middle`, `down-left`, `down-middle`, and `down-right`. Common aliases like `center`, `top-center`, and `right-meddle` are accepted. |
 | `watermark_width` | string | `20%` | Watermark width. Use pixels like `320` / `320px`, or screenshot-width percent like `18%`. |
 | `watermark_offset` | string | `0 0` | X/Y offset from the selected position. Vec2-like values such as `12 -8`, `2% -4%`, or `12px, -8px` are accepted. Percent X is relative to screenshot width; percent Y is relative to screenshot height. |
+
+## OCR
+
+HyprCapture can recognize text in a screenshot and let you select it like a
+document (macOS Live Text style) or copy all of it with one click. Recognition
+runs in an external engine: HyprCapture never links an OCR library and keeps
+working when no engine is installed. OCR is off by default.
+
+### Quick start
+
+```lua
+hl.config({ plugin = { hyprcapture = {
+    ocr_mode = "text_layer",    -- or "capture", "both", "off"
+    ocr_engine = "tesseract",   -- or "paddleocr", "command"
+    ocr_languages = "eng+chi_sim",
+} } })
+hl.bind("SUPER + CTRL + s", hl.plugin.hyprcapture.open_editor)
+```
+
+Take a screenshot into the annotation editor and click **Live text (O)** or press
+**O**. While the engine runs, a light sweeps across the image; recognized text is
+then outlined.
+
+| `ocr_mode` | Editor button |
+| --- | --- |
+| `off` (default) | Hidden. |
+| `capture` | One click recognizes the whole image and copies all text. |
+| `text_layer` | Toggles the selectable text layer. |
+| `both` | Same as `text_layer`. |
+
+In the text layer, drag to select, double-click for a word, triple-click for a
+line, **Ctrl+A** selects all and **Ctrl+C** copies. The context menu offers
+**Copy**, **Copy all text** and **Select all**. **O** or **Esc** returns to the
+drawing tools. OCR reads the original image at physical resolution without
+annotations, never changes the image, history or saved output, and caches the
+result until the image changes. The tool is hidden in blocking
+`hyprcapture-shot` sessions.
+
+### Engines
+
+| Engine | Setup | Text positions |
+| --- | --- | --- |
+| Tesseract | Install `tesseract` and the tessdata packages for `ocr_languages`, e.g. `tesseract-data-eng`, `tesseract-data-chi_sim`. | Lines and words |
+| PaddleOCR CLI | Install PaddleOCR 3.x on `PATH`. Its installed model sets the language. The model loads on every run, so raise `ocr_timeout` if needed. | Lines and words |
+| PaddleOCR HTTP API | Set `ocr_api_url` (and `ocr_api_key` if the service needs one). Needs `curl`. | Lines, plus words when the service returns them |
+| Command | `ocr_engine = "command"`, `ocr_command` with `{image}`; `ocr_output = "text"` or `"json"`. No shell is evaluated. | Only with `json` |
+
+#### PaddleOCR HTTP API
+
+A resident service avoids reloading the model for every click:
+
+```lua
+hl.config({ plugin = { hyprcapture = {
+    ocr_engine = "paddleocr",
+    ocr_api_url = "http://ocr.example.lan:8008/ocr",
+    ocr_api_key = "",   -- optional; stored in the config in plain text
+} } })
+```
+
+Two wire formats are detected automatically, with no extra setting:
+
+- **Simple PP-OCR servers**: multipart field `file`; response
+  `results[{text, confidence, box}]`, optionally with per-line `words`.
+- **Official PaddleX / AI Studio serving**: base64 JSON request; response
+  `result.ocrResults[].prunedResult` with `rec_texts`/`rec_polys` and, when
+  available, `text_word`/`text_word_boxes`.
+
+HyprCapture always asks for word boxes (`return_word_box=true` or
+`returnWordBox: true`). A service that rejects the parameter is retried once
+without it and used with line boxes only. The URL, key and request body are
+passed to `curl` on stdin, never on the command line, and are redacted from
+errors.
+
+#### Custom command (JSON Lines)
+
+With `ocr_output = "json"`, the command prints one JSON object per line. `words`
+is optional; each word takes `poly` or `box` (`[x1,y1,x2,y2]`):
+
+```json
+{"text":"中文 OCR","poly":[[10,70],[200,70],[200,95],[10,95]],"conf":0.98,"words":[{"text":"中","box":[10,70,40,95]},{"text":"文","box":[40,70,70,95]},{"text":"OCR","box":[90,70,200,95]}]}
+```
+
+Coordinates are physical image pixels. Lines whose words do not match their text
+keep the line and drop only its word boxes. `ocr_output = "text"` copies plain
+stdout; the text layer then falls back to copy-all and says so once.
+
+### Selection accuracy
+
+With word or character boxes, selection edges follow the real glyph positions.
+Without them (line boxes only), characters are placed proportionally inside the
+line, counting a Latin character as half the width of a CJK character. Each
+line falls back independently, so mixed responses work.
+
+### Copied text
+
+Copied text is reflowed for reading rather than copied one row per line:
+
+- A larger vertical gap between rows starts a new paragraph (blank line).
+- Inside a paragraph, wrapped rows are joined (a space only between Latin
+  words); a row that is clearly shorter than the paragraph keeps its line break.
+- List items (`-`, `•`, `1.`, `a.`, `(1)`, `①`, `一、`, `[ ]`), indentation
+  changes and rows after a trailing colon always start a new line.
+- Monospace, symbol-rich text is treated as code: every line and its
+  indentation are kept.
+
+### Cache and probe
+
+The detected API format and "this service does not return word boxes" are
+cached per URL in `~/.cache/hyprcapture/ocr-api-format.json` (only a hash of the
+URL is stored). The word-box decision expires after 24 hours, so an upgraded
+service is picked up automatically. To re-test immediately:
+
+```sh
+hyprcapture-ocr probe                 # endpoint, key and timeout from hyprctl
+hyprcapture-ocr cache show
+hyprcapture-ocr cache clear [--url URL]
+```
+
+`probe` runs a built-in sample against the configured service and prints the
+format, whether word boxes are returned, line and word counts and latency, then
+refreshes the cache. A key can be given with `--key-file` (an owner-only file);
+keys are never printed.
+
+### Pipelines
+
+`hyprcapture-shot` prints a screenshot as PNG, so any OCR tool can be chained
+without the editor (see [Shell pipelines](#shell-pipelines)):
+
+```sh
+hyprcapture-shot | tesseract stdin stdout -l eng+chi_sim | wl-copy
+```
+
+Set `HYPRCAPTURE_REDUCED_MOTION=1` or `QT_ANIMATIONS_DISABLED=1` to make the OCR
+animations instant. Full format details and limits are in
+[docs/ocr.md](docs/ocr.md).
 
 ## Development
 

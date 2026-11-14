@@ -33,6 +33,7 @@ extern "C" {
 #include "plugin/session_lock.hpp"
 #include "plugin/timing.hpp"
 #include "shared/thumbnail_config.hpp"
+#include "shared/ocr_warning.hpp"
 
 inline HANDLE g_pluginHandle = nullptr;
 
@@ -43,6 +44,8 @@ constexpr auto        kMinDispatchInterval = std::chrono::milliseconds(750);
 constexpr std::array  kLuaFunctionNames = {
     "open",
     "open_editor",
+    "shot",
+    "shot_cancel",
     "quick",
     "record",
     "record_toggle",
@@ -83,10 +86,12 @@ std::string configString(const std::string& suffix, const std::string& fallback)
     if (type == typeid(Config::STRING))
         return **reinterpret_cast<Config::STRING* const*>(value.dataptr);
 
+#ifdef HYPRLANG_VERSION
     if (type == typeid(Hyprlang::STRING)) {
         const auto raw = *reinterpret_cast<Hyprlang::STRING const*>(value.dataptr);
         return raw ? std::string(raw) : fallback;
     }
+#endif
 
     return fallback;
 }
@@ -216,6 +221,14 @@ void registerConfigValues() {
     addStringConfig("thumbnail_position", "Result thumbnail position", "bottom_right");
     addStringConfig("thumbnail_border_color", "Result thumbnail border color", "");
     addBoolConfig("thumbnail_animation", "Animate result thumbnail swipe reset and dismissal", true);
+    addStringConfig("ocr_mode", "OCR editor tool: off, capture, text_layer, both", "off");
+    addStringConfig("ocr_engine", "External OCR engine: tesseract, paddleocr, command", "tesseract");
+    addStringConfig("ocr_languages", "Tesseract language expression", "eng+chi_sim");
+    addStringConfig("ocr_command", "OCR argv command with {image} substitution", "");
+    addStringConfig("ocr_output", "Custom OCR output: text or json", "text");
+    addIntConfig("ocr_timeout", "OCR deadline in seconds", 30);
+    addStringConfig("ocr_api_url", "PaddleOCR HTTP endpoint URL", "");
+    addStringConfig("ocr_api_key", "Optional PaddleOCR HTTP API key", "");
     addStringConfig("helper", "Optional helper executable override", "");
     addStringConfig("watermark", "Watermark path or built-in name", "");
     addStringConfig("watermark_position", "Watermark position", "central");
@@ -231,6 +244,14 @@ SDispatchResult dispatchResult(const hyprcapture::LaunchResult& result) {
 
 hyprcapture::CaptureDefaults readDefaults() {
     hyprcapture::CaptureDefaults defaults;
+    defaults.ocr.mode = configString("ocr_mode", defaults.ocr.mode);
+    defaults.ocr.engine = configString("ocr_engine", defaults.ocr.engine);
+    defaults.ocr.languages = configString("ocr_languages", defaults.ocr.languages);
+    defaults.ocr.command = configString("ocr_command", defaults.ocr.command);
+    defaults.ocr.output = configString("ocr_output", defaults.ocr.output);
+    defaults.ocr.timeout = configInt("ocr_timeout", defaults.ocr.timeout);
+    defaults.ocr.apiUrl = configString("ocr_api_url", defaults.ocr.apiUrl);
+    defaults.ocr.apiKey = configString("ocr_api_key", defaults.ocr.apiKey);
     defaults.mode = hyprcapture::parseCaptureMode(configString("default_mode", hyprcapture::toString(defaults.mode)), defaults.mode);
     defaults.fullscreenScope =
         hyprcapture::parseFullscreenScope(configString("fullscreen_scope", hyprcapture::toString(defaults.fullscreenScope)), defaults.fullscreenScope);
@@ -504,6 +525,35 @@ int luaOpenEditor(lua_State* L) {
     return luaCapture(L, false, true);
 }
 
+// Socket is positional; mode/editor follow, so no shell quoting or request files are needed.
+int luaShot(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
+    if (hyprcapture::isRecordingActive()) return luaL_error(L, "another capture session already active");
+    const char* socket = luaL_checkstring(L, 1);
+    const char* mode = luaL_optstring(L, 2, "region");
+    const bool editor = lua_toboolean(L, 3);
+    bool failed = false;
+    {
+        auto defaults = readDefaults();
+        if (std::string_view(mode) != "region" && std::string_view(mode) != "fullscreen" && std::string_view(mode) != "window") {
+            lua_pushliteral(L, "invalid shot mode");
+            failed = true;
+        } else {
+            defaults.inPlaceEditToolbar = editor;
+            installOverlayLayerRule();
+            const auto result = hyprcapture::launchHelper({.defaults = defaults,
+                .requestedMode = hyprcapture::parseCaptureMode(mode, hyprcapture::CaptureMode::Region), .shotSocket = socket});
+            if (!result.success) { lua_pushstring(L, result.error.c_str()); failed = true; }
+        }
+    }
+    return failed ? lua_error(L) : 0;
+}
+
+int luaShotCancel(lua_State* L) {
+    if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
+    return luaDispatchResult(L, dispatchResult(hyprcapture::cancelShotHelper(luaOptionalString(L, 1))));
+}
+
 int luaQuick(lua_State* L) {
     if (hyprcapture::sessionLocked()) return luaL_error(L, "session locked");
     return luaCapture(L, true, false);
@@ -621,6 +671,8 @@ void registerLuaFunctions() {
 
         registerLuaFunction("open", luaOpen);
         registerLuaFunction("open_editor", luaOpenEditor);
+        registerLuaFunction("shot", luaShot);
+        registerLuaFunction("shot_cancel", luaShotCancel);
         registerLuaFunction("quick", luaQuick);
         registerLuaFunction("record", luaRecord);
         registerLuaFunction("record_toggle", luaRecordToggle);
@@ -636,6 +688,15 @@ void registerLuaFunctions() {
         registerLuaFunction("cancel", luaCancel);
         registerLuaFunction("dispatch", luaDispatch);
     }
+}
+
+hyprcapture::OcrFallbackWarning g_ocrFallbackWarning;
+hyprcapture::OcrApiWarning g_ocrApiWarning;
+void warnOcrFallback() {
+    if (g_ocrApiWarning.update(readDefaults().ocr))
+        hyprcapture::notifyUser(hyprcapture::OcrApiWarning::message, hyprcapture::NotificationLevel::Warning, 8000);
+    if (g_ocrFallbackWarning.update(readDefaults().ocr))
+        hyprcapture::notifyUser(hyprcapture::OcrFallbackWarning::message, hyprcapture::NotificationLevel::Warning, 8000);
 }
 
 void restoreConfigRegistrations() {
@@ -662,7 +723,11 @@ void unregisterLuaFunctions() {
 void requireMatchingABI() {
     const auto abiPrefix = [](std::string version) { return version.substr(0, version.find_last_of('.')); };
     const std::string client = std::string(GIT_COMMIT_HASH) + "_aq_" + abiPrefix(AQUAMARINE_VERSION) + "_hu_" + abiPrefix(HYPRUTILS_VERSION) + "_hg_" +
-        abiPrefix(HYPRGRAPHICS_VERSION) + "_hc_" + abiPrefix(HYPRCURSOR_VERSION) + "_hlg_" + abiPrefix(HYPRLANG_VERSION);
+        abiPrefix(HYPRGRAPHICS_VERSION) + "_hc_" + abiPrefix(HYPRCURSOR_VERSION)
+#ifdef HYPRLANG_VERSION
+        + "_hlg_" + abiPrefix(HYPRLANG_VERSION)
+#endif
+        ;
     const std::string runtime = __hyprland_api_get_hash();
     if (runtime != client)
         throw std::runtime_error("[HyprCapture] Hyprland header/runtime ABI mismatch: runtime=" + runtime + "; client=" + client);
@@ -689,9 +754,11 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
     installOverlayLayerRule();
 
     refreshTimingConfig();
+    warnOcrFallback();
     g_configReloadListeners.listen(Event::bus()->m_events.config, restoreConfigRegistrations, [] {
         installOverlayLayerRule();
         refreshTimingConfig();
+        warnOcrFallback();
     });
     g_timingTickListener = Event::bus()->m_events.tick.listen([] {
         if (std::chrono::steady_clock::now() >= g_nextTimingRefresh)

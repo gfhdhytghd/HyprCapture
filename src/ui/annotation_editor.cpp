@@ -1,4 +1,5 @@
 #include "ui/annotation_editor.hpp"
+#include "ui/live_text_layer.hpp"
 #include "ui/hdr_image.hpp"
 #include "ui/hdr_backdrop.hpp"
 #include "ui/color_mix.hpp"
@@ -746,7 +747,9 @@ class AnnotationCanvas final : public QWidget {
         setCursor(Qt::CrossCursor);
     }
 
+    QTransform viewTransform() const { return imageTransform(); }
     QImage base;
+    bool textLayerOn = false;
     bool externalImagePresentation = false;
     bool externalAnnotationPresentation = false;
     bool hdrEnabled = false;
@@ -1193,7 +1196,7 @@ class AnnotationCanvas final : public QWidget {
             if (!externalAnnotationPresentation && i != m_editingTextIndex) drawMappedAnnotation(painter, base, m_annotations[i],displayLayout,liveScroll);
         if (m_draft && !externalAnnotationPresentation)
             drawMappedAnnotation(painter, base, *m_draft,displayLayout,liveScroll);
-        if (m_selected >= 0 && m_selected != m_editingTextIndex && m_selected < static_cast<int>(m_annotations.size())) {
+        if (!textLayerOn && m_selected >= 0 && m_selected != m_editingTextIndex && m_selected < static_cast<int>(m_annotations.size())) {
             QPainterPath selectedPath;
             const auto& selected=m_annotations[m_selected];
             if(displayLayout && selected.scrollAnchored) {
@@ -1225,6 +1228,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void mousePressEvent(QMouseEvent* event) override {
+        if (textLayerOn && event->button() != Qt::MiddleButton && !(m_spaceDown && event->button() == Qt::LeftButton)) { event->accept(); return; }
         inputTiming();
         if(liveScroll && !annotationsReady) { event->accept(); return; }
         if (pressed) pressed();
@@ -1321,6 +1325,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void mouseMoveEvent(QMouseEvent* event) override {
+        if (textLayerOn && !m_panning) { event->accept(); return; }
         inputTiming();
         if (m_resizeEdges) {
             updateResize(event->position());
@@ -1366,6 +1371,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void mouseReleaseEvent(QMouseEvent* event) override {
+        if (textLayerOn && !m_panning) { event->accept(); return; }
         inputTiming();
         if (m_resizeEdges && event->button() == Qt::LeftButton) {
             updateResize(event->position());
@@ -1428,12 +1434,14 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void mouseDoubleClickEvent(QMouseEvent* event) override {
+        if (textLayerOn) { event->accept(); return; }
         if ((tool == Tool::Select || tool == Tool::Text) && event->button() == Qt::LeftButton &&
             editTextAt(imagePoint(event->position()))) event->accept();
         else event->ignore();
     }
 
     void wheelEvent(QWheelEvent* event) override {
+        if (textLayerOn && !(event->modifiers() & Qt::ControlModifier)) { event->accept(); return; }
         if (base.isNull() || !displayRect().contains(event->position().toPoint())) {
             event->ignore();
             return;
@@ -1459,6 +1467,7 @@ class AnnotationCanvas final : public QWidget {
     }
 
     void keyPressEvent(QKeyEvent* event) override {
+        if (textLayerOn && event->key() != Qt::Key_Space) { event->accept(); return; }
         if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
             m_spaceDown = true;
             setCursor(Qt::OpenHandCursor);
@@ -1706,7 +1715,10 @@ void paintStripButton(QWidget* widget, const QString& hint, const QIcon& icon, b
         painter.setPen(colors.ink);
         painter.drawText(QRect(left, (widget->height() - 20) / 2, labelWidth, 20), Qt::AlignCenter, hint + ":");
     }
+    painter.save();
+    painter.translate(widget->property("ocrShake").toReal(), 0);
     icon.paint(&painter, QRect(left + labelWidth + (labelWidth ? 2 : 0), (widget->height() - 22) / 2, 22, 22), Qt::AlignCenter, QIcon::Normal);
+    painter.restore();
     if (widget->property("annotationAccent").isValid()) {
         const QRectF swatch(left + labelWidth + (labelWidth ? 2 : 0) + 2, widget->height() - 5, 18, 3);
         painter.setPen(QPen(colors.border, 0.5));
@@ -1822,6 +1834,8 @@ struct AnnotationEditor::Impl {
     explicit Impl(AnnotationEditor* owner) : owner(owner) {}
     AnnotationEditor* owner;
     AnnotationCanvas* canvas = nullptr;
+    hyprcapture::ui::LiveTextLayer* liveText = nullptr;
+    StripToolButton* ocr = nullptr;
     ToolbarFrame* toolbar = nullptr;
     ToolbarFrame* variantPanel = nullptr;
     ToolbarFrame* colorPanel = nullptr;
@@ -1918,7 +1932,8 @@ struct AnnotationEditor::Impl {
         morePanel->hide();
         openGroup = -1;
     }
-    void prepareOutput() { finishTextEditing(true); canvas->finishEditing(); closePanels(); }
+    void syncOcrView() { liveText->setSource(canvas->base); liveText->setView(canvas->viewTransform()); }
+    void prepareOutput() { liveText->stop(); finishTextEditing(true); canvas->finishEditing(); closePanels(); }
     void updateTools() {
         const int selectedGroup = groupFor(canvas->tool);
         for (int id : {0, 1, 2, 3, 5, 7, 8, 9}) {
@@ -1927,20 +1942,22 @@ struct AnnotationEditor::Impl {
             const Tool displayed = group ? remembered[id].first : static_cast<Tool>(id);
             const Variant variant = group ? remembered[id].second : Variant::Outline;
             button->dark = dark;
+            button->setEnabled(!liveText->isOn());
             button->setIcon(toolIcon(displayed, variant, dark, canvas->color));
-            button->setChecked(group ? selectedGroup == id : canvas->tool == displayed);
+            button->setChecked(!liveText->isOn() && (group ? selectedGroup == id : canvas->tool == displayed));
             button->setAccessibleName(toolName(displayed));
             button->setToolTip(toolName(displayed) + " (" + button->hint + ")");
         }
         for (auto& choice : choices) {
             choice.button->dark = dark;
             choice.button->setIcon(toolIcon(choice.tool, choice.variant, dark, canvas->color));
-            choice.button->setChecked(choice.tool == canvas->tool && choice.variant == canvas->variant);
+            choice.button->setChecked(!liveText->isOn() && choice.tool == canvas->tool && choice.variant == canvas->variant);
             choice.button->setAccessibleName(choiceLabel(choice));
             choice.button->setToolTip(choiceLabel(choice));
         }
     }
     void activateTool(Tool tool, Variant variant, bool remember = true) {
+        if (liveText->isOn()) { updateTools(); return; }
         canvas->selectTool(tool);
         canvas->variant = variant;
         const int group = groupFor(tool);
@@ -2025,6 +2042,8 @@ struct AnnotationEditor::Impl {
         themeLight->setChecked(!dark);
         themeDark->setIcon(actionIcon("dark", dark, canvas->color));
         themeLight->setIcon(actionIcon("light", dark, canvas->color));
+        ocr->dark = dark;
+        ocr->setIcon(hyprcapture::ui::materialIcon("document_scanner", colors.ink));
         updateColor();
         positionToolbar();
     }
@@ -2116,6 +2135,8 @@ struct AnnotationEditor::Impl {
             button->setAccessibleName(label);
             button->setToolTip(key.isEmpty() ? label : label + " (" + key + ")");
         };
+        ocr->setToolTip(liveText->tooltip());
+        ocr->setAccessibleName(liveText->tooltip());
         actionLabel(color, owner->tr("Color"), "Q");
         actionLabel(customColor, owner->tr("Color"), {});
         actionLabel(undo, owner->tr("Undo"), "Z");
@@ -2145,6 +2166,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     setAttribute(Qt::WA_TranslucentBackground);
     auto& ui = *m_impl;
     ui.canvas = new AnnotationCanvas(this);
+    ui.liveText = new hyprcapture::ui::LiveTextLayer(ui.canvas);
     ui.settings = new QSettings(QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation) + "/hyprcapture/editor.ini", QSettings::IniFormat, this);
     const QColor savedColor(ui.settings->value("color", "#ff5252").toString());
     if (savedColor.isValid())
@@ -2180,6 +2202,29 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
                 m_impl->activateTool(static_cast<Tool>(id), Variant::Outline);
         });
     }
+    ui.ocr = new StripToolButton("O", ui.toolbar);
+    ui.ocr->setObjectName("annotationLiveText");
+    ui.ocr->setCheckable(true);
+    ui.ocr->hide();
+    ui.strip.push_back(ui.ocr);
+    connect(ui.ocr, &QToolButton::clicked, this, [this] {
+        m_impl->closePanels(); m_impl->syncOcrView(); m_impl->liveText->toggle();
+    });
+    connect(ui.liveText, &hyprcapture::ui::LiveTextLayer::stateChanged, this, [this] {
+        auto& ui = *m_impl;
+        ui.canvas->textLayerOn = ui.liveText->isOn();
+        ui.canvas->QWidget::update();
+        ui.ocr->setVisible(ui.liveText->available());
+        ui.ocr->setCheckable(!ui.liveText->copyOnly());
+        ui.ocr->setChecked(!ui.liveText->copyOnly() && ui.liveText->isOn());
+        ui.ocr->setToolTip(ui.liveText->tooltip()); ui.ocr->setAccessibleName(ui.liveText->tooltip());
+        ui.ocr->update(); ui.updateTools(); ui.positionToolbar();
+        if (!ui.liveText->isOn()) ui.canvas->setFocus(Qt::ShortcutFocusReason);
+    });
+    connect(ui.liveText, &hyprcapture::ui::LiveTextLayer::iconShake, this, [this](qreal offset) {
+        m_impl->ocr->setProperty("ocrShake", offset);
+        m_impl->ocr->update();
+    });
     const auto action = [&](const QString& key, const char* name) {
         auto* button = new StripActionButton(key, ui.toolbar);
         button->setObjectName(name);
@@ -2315,11 +2360,12 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
         m_impl->undo->setEnabled(m_impl->canvas->canUndo());
         m_impl->redo->setEnabled(m_impl->canvas->canRedo());
         m_impl->clear->setEnabled(m_impl->canvas->hasAnnotations());
+        m_impl->syncOcrView();
         m_impl->positionToolbar();
         emit annotationsChanged();
     };
     ui.canvas->scrollRequested = [this](QPointF p,double d,int discrete,bool finger,bool inverted) { emit scrollRequested(p,d,discrete,finger,inverted); };
-    ui.canvas->viewChanged = [this] { m_impl->positionToolbar(); emit imageDisplayGeometryChanged(); };
+    ui.canvas->viewChanged = [this] { m_impl->syncOcrView(); m_impl->positionToolbar(); emit imageDisplayGeometryChanged(); };
     ui.canvas->captureRectChanged = [this](const QRect& rect) { emit captureRectChangeRequested(rect); };
     ui.canvas->pressed = [this] { m_impl->closePanels(); };
     ui.canvas->requestText = [this](const Annotation& existing, const QTransform& transform, std::function<void(std::optional<Annotation>, bool)> completed) {
@@ -2588,7 +2634,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     connect(ui.fit, &QPushButton::clicked, this, [this] { m_impl->closePanels(); fitImage(); });
     connect(ui.save, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit saveRequested(); });
     connect(ui.confirm, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit confirmRequested(); });
-    connect(ui.cancel, &QPushButton::clicked, this, [this] { m_impl->closePanels(); emit cancelRequested(); });
+    connect(ui.cancel, &QPushButton::clicked, this, [this] { m_impl->liveText->stop(); m_impl->closePanels(); emit cancelRequested(); });
     connect(ui.pin, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit pinRequested(); });
     connect(ui.reselect, &QPushButton::clicked, this, [this] { m_impl->prepareOutput(); emit reselectRequested(); });
 
@@ -2602,6 +2648,7 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
             callback();
         });
     };
+    shortcut(QKeySequence("O"), [this] { if (m_impl->liveText->available()) m_impl->ocr->click(); });
     shortcut(QKeySequence::Undo, [this] { undo(); });
     shortcut(QKeySequence("Ctrl+Shift+Z"), [this] { redo(); });
     shortcut(QKeySequence("Ctrl+Y"), [this] { redo(); });
@@ -2614,7 +2661,8 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     shortcut(QKeySequence(Qt::Key_Return), [this] { m_impl->confirm->click(); });
     shortcut(QKeySequence(Qt::Key_Enter), [this] { m_impl->confirm->click(); });
     shortcut(QKeySequence(Qt::Key_Escape), [this] {
-        if (m_impl->variantPanel->isVisible() || m_impl->colorPanel->isVisible() || m_impl->morePanel->isVisible())
+        if (m_impl->liveText->isOn()) m_impl->liveText->turnOff();
+        else if (m_impl->variantPanel->isVisible() || m_impl->colorPanel->isVisible() || m_impl->morePanel->isVisible())
             m_impl->closePanels();
         else
             m_impl->cancel->click();
@@ -2643,7 +2691,11 @@ AnnotationEditor::AnnotationEditor(QWidget* parent) : QWidget(parent), m_impl(st
     ui.clear->setEnabled(false);
 }
 
-AnnotationEditor::~AnnotationEditor() = default;
+AnnotationEditor::~AnnotationEditor() { m_impl->liveText->stop(); }
+void AnnotationEditor::setOcrConfig(const hyprcapture::OcrConfig& config, hyprcapture::NotificationBackend backend, bool allowed) {
+    m_impl->liveText->configure(config, backend, allowed);
+    m_impl->syncOcrView();
+}
 bool AnnotationEditor::eventFilter(QObject* object, QEvent* event) {
     if (event->type() == QEvent::MouseButtonPress && m_impl->textPanel) {
         const QPoint global = static_cast<QMouseEvent*>(event)->globalPosition().toPoint();
@@ -2690,17 +2742,19 @@ void AnnotationEditor::setCaptureToolbarSize(const QSize& size) {
     m_impl->positionToolbar();
 }
 QRect AnnotationEditor::captureToolbarGeometry() const { return m_impl->captureGeometry; }
-void AnnotationEditor::undo() { m_impl->canvas->undo(); }
-void AnnotationEditor::redo() { m_impl->canvas->redo(); }
-void AnnotationEditor::clearAnnotations() { m_impl->canvas->clearAnnotations(); }
+void AnnotationEditor::undo() { if (!m_impl->liveText->isOn()) m_impl->canvas->undo(); }
+void AnnotationEditor::redo() { if (!m_impl->liveText->isOn()) m_impl->canvas->redo(); }
+void AnnotationEditor::clearAnnotations() { if (!m_impl->liveText->isOn()) m_impl->canvas->clearAnnotations(); }
 void AnnotationEditor::fitImage() { m_impl->canvas->fitViewport(); }
 void AnnotationEditor::setImageDisplayRect(const QRect& rect) { m_impl->canvas->setDisplayRect(rect); }
 void AnnotationEditor::resizeEvent(QResizeEvent* event) {
     QWidget::resizeEvent(event);
     m_impl->canvas->setGeometry(rect());
+    m_impl->syncOcrView();
     m_impl->positionToolbar();
 }
 void AnnotationEditor::hideEvent(QHideEvent* event) {
+    m_impl->liveText->stop();
     m_impl->closePanels();
     QWidget::hideEvent(event);
 }
