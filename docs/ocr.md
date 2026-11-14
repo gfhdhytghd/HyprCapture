@@ -148,9 +148,8 @@ ocr_api_url = "http://ocr.example.lan:8008/ocr",
 ocr_api_key = "",   -- optional
 ```
 
-Use these entries in your HyprCapture plugin configuration table, or assign
-`hl.plugin.hyprcapture.ocr_engine`, `hl.plugin.hyprcapture.ocr_api_url`, and
-`hl.plugin.hyprcapture.ocr_api_key` individually. The URL is a full endpoint.
+Set these entries in the `plugin.hyprcapture` table passed to `hl.config`.
+The URL is a full endpoint.
 An empty URL retains the existing local CLI behavior. Other engines ignore both
 API settings and warn once per configuration change when the URL is nonempty.
 The key is stored in the Hyprland config in plain text. API settings accept up to

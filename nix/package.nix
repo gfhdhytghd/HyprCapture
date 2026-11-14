@@ -78,6 +78,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
 
   # CMake installs hyprcapture-shot and hyprcapture-ocr into $out/bin alongside the Qt helper.
   postInstall = ''
+    test -x "$out/bin/hyprcapture-shot"
     test -x "$out/bin/hyprcapture-ocr"
   '';
   doCheck = false;
