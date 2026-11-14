@@ -380,7 +380,7 @@ or write remembered interactive settings. Cursor, window decorations, shadow,
 scale, and other capture settings still apply. The capture toolbar's recording
 button is hidden for this screenshot-only command.
 
-On the pinned official Hyprland v0.57.2, the command uses `hyprctl eval` and the
+On the pinned official Hyprland v0.57.0, the command uses `hyprctl eval` and the
 Lua actions below. That release has only the Lua config manager; legacy plugin
 dispatchers are unavailable. Its owner-only result socket lives in a unique
 directory under the existing `hyprcapture-$UID` private runtime root. The command never
