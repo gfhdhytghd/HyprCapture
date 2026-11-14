@@ -36,7 +36,7 @@ class LiveTextLayer final : public QWidget {
 
   signals:
     void stateChanged();
-    void iconFrame(qreal rotation, qreal shake, bool spinning);
+    void iconShake(qreal offset);
     void recognized();
     void feedback(const QString& message, bool error);
 
