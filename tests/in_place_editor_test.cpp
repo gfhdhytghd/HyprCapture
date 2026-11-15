@@ -296,6 +296,33 @@ class InPlaceEditorTest final : public QObject {
         QVERIFY(overlay.m_editor);
         QVERIFY(overlay.m_editor->findChild<QToolButton*>("annotationLiveText")->isHidden());
     }
+    void ocrWorkerRefinesBeforeSelection() {
+        qputenv("HYPRCAPTURE_REDUCED_MOTION","1");
+        for (const bool native : {false,true}) {
+            const QByteArray words=native?R"(,"words":[{"text":"中","box":[0,0,26,12],"conf":0.8},{"text":"文","box":[20,0,44,12],"conf":0.7}])":"";
+            const auto config=fakeOcr(QByteArray(R"({"text":"中文","poly":[[0,0],[44,0],[44,12],[0,12]])")+words+"}\n");
+            QWidget canvas; canvas.resize(100,60); canvas.show();
+            hyprcapture::ui::LiveTextLayer layer(&canvas);
+            layer.configure(config,hyprcapture::NotificationBackend::System,true);
+            QImage base(44,12,QImage::Format_RGBA8888); base.fill(Qt::white);
+            { QPainter painter(&base); painter.fillRect(QRect(5,2,13,8),Qt::black); painter.fillRect(QRect(25,2,13,8),Qt::black); }
+            layer.setSource(base); layer.setView(QTransform());
+            QSignalSpy recognized(&layer,&hyprcapture::ui::LiveTextLayer::recognized);
+            layer.toggle();
+            QTRY_COMPARE_WITH_TIMEOUT(recognized.count(),1,5000);
+            QVERIFY(layer.isOn()); QVERIFY(!layer.busy());
+            // Refinement moves the native first glyph center from 13 to 11.5.
+            // The layout test separately checks both sources' selected quads.
+            QTest::mousePress(&layer,Qt::LeftButton,Qt::NoModifier,QPoint(1,6));
+            QTest::mouseMove(&layer,QPoint(12,6));
+            QTest::mouseRelease(&layer,Qt::LeftButton,Qt::NoModifier,QPoint(12,6));
+            QCOMPARE(layer.selectedText(),QString::fromUtf8("中"));
+            const QImage input(ocrFixture("ocr-input.png"));
+            QCOMPARE(input.convertToFormat(QImage::Format_RGBA8888),base);
+            QVERIFY(!QFile::exists(QString::fromUtf8(readOcrFile(ocrFixture("ocr-png")))));
+            layer.stop();
+        }
+    }
     void ocrLayerSelectionAndCache() {
         qputenv("HYPRCAPTURE_REDUCED_MOTION","1");
         QFile::remove(ocrFixture("ocr-count"));

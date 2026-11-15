@@ -1,6 +1,7 @@
 #include "ui/live_text_layer.hpp"
 #include <QDebug>
 #include "shared/ocr_engine.hpp"
+#include "shared/ocr_refine.hpp"
 #include "ui/clipboard_utils.hpp"
 #include "ui/hdr_image.hpp"
 #include "ui/i18n.hpp"
@@ -159,7 +160,14 @@ void LiveTextLayer::startJob() {
         if (stop.stop_requested()) return;
         const QImage sdr = isHdrImage(base) ? hdrToSdr(base) : base;
         if (path.isEmpty() || !savePrivatePng(sdr, path)) response.error = "Could not write OCR image";
-        else response = runOcrEngine(QFile::encodeName(path).toStdString(), config, stop);
+        else {
+            response = runOcrEngine(QFile::encodeName(path).toStdString(), config, stop);
+            if (!stop.stop_requested() && response) {
+                const QImage pixels = sdr.convertToFormat(QImage::Format_RGBA8888);
+                refineOcrWordBoxes({pixels.constBits(), pixels.width(), pixels.height(),
+                                   std::size_t(pixels.bytesPerLine()), OcrPixelFormat::Rgba8}, response);
+            }
+        }
         // Delete before publishing, including on cancellation and parser failure.
         if (!path.isEmpty()) QFile::remove(path);
         if (stop.stop_requested()) return;

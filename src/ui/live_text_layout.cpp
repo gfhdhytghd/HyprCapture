@@ -1,4 +1,5 @@
 #include "ui/live_text_layout.hpp"
+#include "shared/ocr_refine.hpp"
 #include <QPolygonF>
 #include <QTextBoundaryFinder>
 #include <algorithm>
@@ -7,11 +8,6 @@
 
 namespace hyprcapture::ui {
 namespace {
-bool wide(char32_t c) {
-    return (c >= 0x1100 && c <= 0x11ff) || (c >= 0x2e80 && c <= 0xa4cf) ||
-           (c >= 0xac00 && c <= 0xd7af) || (c >= 0xf900 && c <= 0xfaff) ||
-           (c >= 0xfe10 && c <= 0xfe6f) || (c >= 0xff01 && c <= 0xff60) || c >= 0x1f000;
-}
 double distance(QPointF p, const QPainterPath& path) {
     if (path.contains(p)) return 0;
     double best = std::numeric_limits<double>::max();
@@ -61,6 +57,12 @@ void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
             const auto dx = (right - left) * u, dy = (bottom - top) * v;
             if (bottom - top < 1e-6) continue;
             QTransform transform(dx.x(), dx.y(), dy.x(), dy.y(), at.x(), at.y());
+            if (const auto quad = ocrReadingQuad(result.poly)) {
+                QPolygonF reading;
+                for (const auto p : *quad) reading << QPointF(p.x, p.y);
+                const QPolygonF unit{QPointF(0,0), QPointF(1,0), QPointF(1,1), QPointF(0,1)};
+                if (!QTransform::quadToQuad(unit, reading, transform)) continue;
+            }
             Run run{begin, int(text.size()), rowIndex, area, transform, {}};
             std::vector<std::pair<int, double>> boundaries{{0, 0}};
             QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, value);
@@ -68,7 +70,7 @@ void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
             int last = 0;
             for (int next = finder.toNextBoundary(); next >= 0; next = finder.toNextBoundary()) {
                 const auto codepoints = value.mid(last, next - last).toUcs4();
-                total += !codepoints.empty() && wide(codepoints.front()) ? 1.0 : .5;
+                total += !codepoints.empty() && ocrWideCharacter(codepoints.front()) ? 1.0 : .5;
                 boundaries.push_back({next, total}); last = next;
             }
             if (total > 0) for (auto& boundary : boundaries) boundary.second /= total;

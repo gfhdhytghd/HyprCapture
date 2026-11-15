@@ -70,6 +70,8 @@ With `ocr_engine=command` and `ocr_output=json`, stdout is JSON Lines:
   selection uses proportional estimates with that same 1:2 ratio; copying still
   uses the line text. A response can mix lines with valid words, missing words,
   and invalid words. Each line independently uses its valid words or estimates.
+  In the editor, successful pixel refinement materializes words from estimates;
+  failed refinement leaves the proportional fallback intact.
 - Unknown fields are ignored. JSON nesting is limited to 32 levels.
 
 The input limit is 8 MiB and at most 65536 results. Up to 262144 word entries
@@ -84,6 +86,41 @@ returns no partial results and an error naming the line number.
 as one `OcrResult` with an empty polygon. This representation is permitted only
 for that adapter mode. `ocrSupportsTextLayer()` rejects such results. Text
 layer callers must check this predicate before using geometry.
+
+## Word box refinement
+
+The editor refines pixel-domain word boxes locally, after recognition and before
+Live Text layout, on the same cancellable worker. It reads the exact physical
+SDR image sent to the engine. This applies equally to HTTP PaddleOCR, local
+PaddleOCR, Tesseract and custom JSON results. The OCR service stays unchanged.
+Text, line polygons, confidences and existing word-to-text ranges stay unchanged.
+
+Each valid line quad is rectified at native resolution. Otsu luminance
+thresholding selects the minority class as ink, supporting dark or light text.
+Starting at adjacent box gap/overlap midpoints, boundaries snap to nearby blank
+column runs (within 0.45 times the smaller neighbour width, at least 2 pixels),
+or to a minimum-ink column. Each token then tightens to its first and last ink
+column; outer tokens can search to the line edges. The full line height remains.
+Quads map back through the perspective transform. Tall detector crops read
+from top to bottom; selection uses the same projective reading frame.
+
+Without native words, ICU graphemes supply the existing 1:2 narrow/wide estimate.
+A bounded monotonic alignment of projected ink runs corrects proportional-font
+spacing before tightening. The same recovery handles native narrow punctuation
+when local snapping leaves an empty token or captures a much wider neighbour.
+Alignment uses generic width, component-count and internal-gap costs; it has no
+engine, font or string-specific offsets. No configuration key is required.
+
+Blank or ambiguous crops (minority ink at most 1% or at least 49%), invalid
+geometry, unmatched word metadata and failed
+alignment keep that line's original boxes. Non-quad lines and `level: word`
+records keep their geometry. Rectification is limited to 32 million sampled
+pixels and 8 million alignment transitions per response, with at most 1024
+tokens, 4096 ink runs and one million alignment states per recovered line. Projection
+cannot reliably separate touching glyphs without a useful ink valley, recover
+ink outside the detected line, recognize missing characters, or guarantee exact
+edges on textured backgrounds. Existing good boxes can move by raster rounding
+and thresholding. Cached editor results retain the refined geometry.
 
 ## External adapters
 
