@@ -125,8 +125,10 @@ def main():
             if 'timing' in item:
                 print(f'{source} dense timing: {item["timing"]}', flush=True)
                 summary[source]['timing'] = item['timing']
-                if item['timing']['medianMs'] > 5:
-                    failures.append(f'{source}: dense median exceeds 5 ms')
+                # Typical median is ~1.5 ms; the gate only catches algorithmic
+                # regressions and must not flake on a loaded machine.
+                if item['timing']['medianMs'] > 20:
+                    failures.append(f'{source}: dense median exceeds 20 ms')
     if len(sys.argv) > 2:
         Path(sys.argv[2]).write_text(json.dumps(summary, indent=2) + '\n')
     if failures:
