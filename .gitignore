@@ -17,3 +17,6 @@ CMakeUserPresets.json
 .idea/
 .vscode/
 __pycache__/
+
+# Read-only OCR references can contain private paths.
+.ref/
