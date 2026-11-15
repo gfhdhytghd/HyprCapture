@@ -1,4 +1,5 @@
 #include "ui/live_text_layout.hpp"
+#include "shared/ocr_refine.hpp"
 #include <QImage>
 #include <QPainter>
 #include <QTest>
@@ -21,6 +22,32 @@ std::vector<hyprcapture::OcrResult> tiltedFixture() {
 class LiveTextLayoutTest final : public QObject {
     Q_OBJECT
   private slots:
+    void refinedSelectionGeometry() {
+        std::vector<std::uint8_t> pixels(44*12,255);
+        for (int y=2;y<10;++y) for (int x=0;x<44;++x)
+            if ((x>=5&&x<18)||(x>=25&&x<38)) pixels[y*44+x]=0;
+        for (bool native : {false,true}) {
+            auto response=hyprcapture::parseOcrApiJson(R"({"results":[{"text":"中文","box":[[0,0],[44,0],[44,12],[0,12]],"text_word":["中","文"],"text_word_boxes":[[0,0,26,12],[20,0,44,12]]}]})");
+            if (!native) response.results[0].words.clear();
+            hyprcapture::refineOcrWordBoxes({pixels.data(),44,12,44},response);
+            LiveTextLayout layout; layout.setResults(response.results);
+            QCOMPARE(layout.selection(0,1).boundingRect(),QRectF(5,0,13,12));
+            QCOMPARE(layout.selection(1,2).boundingRect(),QRectF(25,0,13,12));
+            QCOMPARE(layout.hit(QPointF(12,6)),1);
+            QCOMPARE(layout.copiedText(0,2),QString::fromUtf8("中文"));
+        }
+    }
+    void perspectiveAndTallSelection() {
+        auto response=hyprcapture::parseOcrApiJson(R"({"results":[{"text":"中文","box":[[10,10],[90,12],[75,35],[12,30]],"words":[{"text":"中","box":[[10,10],[50,11],[43.5,32.5],[12,30]]},{"text":"文","box":[[50,11],[90,12],[75,35],[43.5,32.5]]}]}]})");
+        LiveTextLayout layout; layout.setResults(response.results);
+        QVERIFY(layout.selection(0,2).contains(QPointF(40,20)));
+        QVERIFY(!layout.selection(0,2).contains(QPointF(89,32)));
+        response=hyprcapture::parseOcrApiJson(R"({"results":[{"text":"中文","box":[[0,0],[12,0],[12,44],[0,44]],"words":[{"text":"中","box":[0,5,12,18]},{"text":"文","box":[0,25,12,38]}]}]})");
+        layout.setResults(response.results);
+        QCOMPARE(layout.selection(0,1).boundingRect(),QRectF(0,5,12,13));
+        QCOMPARE(layout.selection(1,2).boundingRect(),QRectF(0,25,12,13));
+        QCOMPARE(layout.hit(QPointF(6,12)),1);
+    }
     void nonEmptyGlyphs() {
         LiveTextLayout layout; layout.setResults(tiltedFixture());
         QCOMPARE(layout.runs.size(),std::size_t(6));

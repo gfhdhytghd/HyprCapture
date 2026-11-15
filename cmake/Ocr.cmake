@@ -6,6 +6,7 @@ add_library(hyprcapture-ocr STATIC
   ${CMAKE_CURRENT_LIST_DIR}/../src/shared/ocr_api.cpp
   ${CMAKE_CURRENT_LIST_DIR}/../src/shared/ocr_engine.cpp
   ${CMAKE_CURRENT_LIST_DIR}/../src/shared/ocr_result.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/../src/shared/ocr_refine.cpp
   ${CMAKE_CURRENT_LIST_DIR}/../src/shared/config.cpp
   ${CMAKE_CURRENT_LIST_DIR}/../src/shared/process_environment.cpp
   ${CMAKE_CURRENT_LIST_DIR}/../src/shared/supervised_process.cpp
@@ -19,6 +20,15 @@ target_link_libraries(hyprcapture-ocr-cli PRIVATE hyprcapture-ocr)
 include(GNUInstallDirs)
 install(TARGETS hyprcapture-ocr-cli RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 if(BUILD_TESTING)
+  add_executable(hyprcapture-ocr-refine-test ${CMAKE_CURRENT_LIST_DIR}/../tests/ocr_refine_test.cpp)
+  set_target_properties(hyprcapture-ocr-refine-test PROPERTIES AUTOMOC OFF)
+  target_link_libraries(hyprcapture-ocr-refine-test PRIVATE hyprcapture-ocr)
+  target_compile_options(hyprcapture-ocr-refine-test PRIVATE -UNDEBUG)
+  add_test(NAME ocr-refine COMMAND hyprcapture-ocr-refine-test)
+  find_package(PNG REQUIRED)
+  add_executable(hyprcapture-ocr-refine-driver ${CMAKE_CURRENT_LIST_DIR}/../tests/ocr_refine_driver.cpp)
+  set_target_properties(hyprcapture-ocr-refine-driver PROPERTIES AUTOMOC OFF)
+  target_link_libraries(hyprcapture-ocr-refine-driver PRIVATE hyprcapture-ocr PNG::PNG)
   add_executable(hyprcapture-ocr-test ${CMAKE_CURRENT_LIST_DIR}/../tests/ocr_test.cpp
     ${CMAKE_CURRENT_LIST_DIR}/../src/shared/protocol.cpp)
   set_target_properties(hyprcapture-ocr-test PROPERTIES AUTOMOC OFF)
@@ -49,6 +59,9 @@ if(BUILD_TESTING)
   set_target_properties(hyprcapture-ocr-api-driver PROPERTIES AUTOMOC OFF)
   target_link_libraries(hyprcapture-ocr-api-driver PRIVATE hyprcapture-ocr)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
+  add_test(NAME ocr-refine-accuracy COMMAND ${Python3_EXECUTABLE} -I
+    ${CMAKE_CURRENT_LIST_DIR}/../tests/ocr_refine_accuracy_test.py $<TARGET_FILE:hyprcapture-ocr-refine-driver>)
+  set_tests_properties(ocr-refine-accuracy PROPERTIES TIMEOUT 30)
   if(HYPRCAPTURE_OCR_BWRAP)
     find_program(HYPRCAPTURE_OCR_SYSTEM_PYTHON NAMES python3 PATHS /usr/bin NO_DEFAULT_PATH REQUIRED)
     add_test(NAME ocr-api-http COMMAND ${HYPRCAPTURE_OCR_BWRAP}

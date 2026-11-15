@@ -821,6 +821,12 @@ document (macOS Live Text style) or copy all of it with one click. Recognition
 runs in an external engine: HyprCapture never links an OCR library and keeps
 working when no engine is installed. OCR is off by default.
 
+The editor locally tightens word boxes to visible ink for every positioned OCR
+engine, including lines with estimated character widths. It preserves recognized
+text and confidence, supports perspective and vertical lines, and keeps input
+boxes when the pixels are ambiguous. See [Word box refinement](docs/ocr.md#word-box-refinement)
+for the method and limits. The OCR service requires no changes.
+
 ### Quick start
 
 ```lua
