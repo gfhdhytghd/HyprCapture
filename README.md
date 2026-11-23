@@ -88,7 +88,7 @@ After a Hyprland update, a notification offers to rebuild. `omarchy plugin updat
 - `curl` (runtime, for the PaddleOCR HTTP API)
 - Qt 6 Core, Gui, Widgets, Svg, DBus, and Network
 - LayerShellQt `layer-shell-qt`
-- OpenCV `core` and `imgproc` (CPU image registration; no neural-network runtime)
+- OpenCV CPU image registration, built from pinned sources and statically linked by default
 - libpipewire-0.3 development headers (`libpipewire` on Arch, `libpipewire-0.3-dev` on Debian/Ubuntu)
 - PipeWire development files, FFTW3 and FFmpeg libswresample/libavutil for the native DTLN-AEC candidate
 - Optional TensorFlow Lite 2.14.0 runtime (installed by `hyprcapture-install-aec`); OpenVINO is only needed for experimental NPU
@@ -131,13 +131,13 @@ Perform a full system upgrade while installing the build tools and libraries:
 ```sh
 sudo pacman -Syu --needed base-devel cmake git cpio \
     hyprland nlohmann-json openssl icu curl lua glib2 \
-    qt6-base qt6-svg qt6-wayland layer-shell-qt opencv vtk hdf5 \
+    qt6-base qt6-svg qt6-wayland layer-shell-qt \
     pipewire libpipewire fftw libpulse ffmpeg wl-clipboard
 ```
 
 `base-devel` supplies GCC, Make, and `pkgconf` (the `pkg-config` command), but not CMake. [Qt SVG](https://archlinux.org/packages/extra/x86_64/qt6-svg/) is a separate package; `qt6-wayland` supplies the helper's native Wayland support. `libpipewire` supplies the PipeWire development files, and `ffmpeg` supplies both the recording tools and the required FFmpeg libraries. `git` and `cpio` are used by `hyprpm` when preparing sources and headers.
 
-`opencv` supplies the OpenCV headers, libraries, and CMake package configuration required by the build. [Arch lists `vtk` and `hdf5` as optional OpenCV dependencies](https://archlinux.org/packages/extra/x86_64/opencv/); the command includes them because installing this package set resolved the build failure reported in [issue #42](https://github.com/gfhdhytghd/HyprCapture/issues/42#issuecomment-6526089875). HyprCapture itself requests only OpenCV's `core` and `imgproc` components, not VTK or HDF5 directly.
+The default build downloads and statically links the OpenCV modules used for scrolling screenshots. The helper keeps working when a system OpenCV upgrade changes its shared-library SONAME. Package maintainers who manage the OpenCV runtime together with HyprCapture can set `-DHYPRCAPTURE_USE_SYSTEM_OPENCV=ON`. For an offline default build, point `FETCHCONTENT_SOURCE_DIR_HYPRCAPTURE_OPENCV` to the matching OpenCV source tree.
 
 For sound recording, use a running PulseAudio server or PipeWire's PulseAudio compatibility service. If your desktop uses PipeWire, install the service and session manager if missing:
 
@@ -188,7 +188,7 @@ Read the first CMake or compiler error after `Building hyprcapture`. The summary
 
 CMake checks required system libraries before downloading the private HEIC dependencies. If any are missing, it prints a `HyprCapture: missing required build dependencies` summary with the missing names and an Arch Linux installation command. Installers on other distributions should install the matching development packages. `hyprpm` hides build output unless `-v` is enabled, so use `hyprpm update -v` to see this summary. Optional HDR and inference capabilities are checked separately.
 
-For example, the verbose logs in [issue #42](https://github.com/gfhdhytghd/HyprCapture/issues/42) stopped at `find_package(OpenCV)` because CMake could not find `OpenCVConfig.cmake` or `opencv-config.cmake`. On Arch Linux, install the packages above, including `opencv vtk hdf5`, then retry `hyprpm update -v`. Missing `Makefile`, helper binaries, or plugin output after a failed CMake configuration are follow-on errors; fix the configuration error first.
+With `HYPRCAPTURE_USE_SYSTEM_OPENCV=ON`, CMake requires the OpenCV development package. If CMake cannot find it, set `OpenCV_DIR` to the directory containing `OpenCVConfig.cmake`.
 
 After the rebuild succeeds, run `hyprpm reload`. If it still fails, include `hyprctl version` and the first CMake or compiler error, with the surrounding lines, in your report.
 

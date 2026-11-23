@@ -12,6 +12,9 @@ include(GNUInstallDirs)
 set(HYPRCAPTURE_DEFAULT_HELPER_PATH "" CACHE FILEPATH "Optional trusted default path to hyprcapture-ui")
 set(HYPRCAPTURE_TRUSTED_BIN_DIRS "" CACHE STRING "Colon-separated extra trusted program directories")
 
+include(cmake/Dependencies.cmake)
+include(cmake/OpenCV.cmake)
+
 add_compile_definitions(WLR_USE_UNSTABLE)
 if(HYPRCAPTURE_DEFAULT_HELPER_PATH)
   add_compile_definitions(HYPRCAPTURE_DEFAULT_HELPER_PATH="${HYPRCAPTURE_DEFAULT_HELPER_PATH}")
@@ -36,7 +39,6 @@ set_target_properties(hyprcapture-shot PROPERTIES AUTOMOC OFF)
 target_include_directories(hyprcapture-shot PRIVATE src)
 install(TARGETS hyprcapture-shot RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-include(cmake/Dependencies.cmake)
 include(cmake/Ocr.cmake)
 # Native HDR presentation is independent of the SDR Qt raster backing store.
 add_library(hyprcapture-hdr-backdrop STATIC src/ui/hdr_backdrop.cpp src/ui/hdr_gpu.cpp src/ui/hdr_shm.cpp
