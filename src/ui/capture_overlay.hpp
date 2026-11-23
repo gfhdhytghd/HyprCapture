@@ -203,7 +203,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
                    hyprcapture::FilenameMetadata filenameMetadata);
     QImage renderResultImage(bool hdr = false);
     QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect, bool hdr = false) const;
-    void paintDesktop(QPainter& painter, const QRect& target, bool preserveClip = false) const;
+    void paintDesktop(QPainter& painter, const QRect& target) const;
     static void paintCursorSnapshot(QPainter& painter, const QRect& outputRect, const QRect& globalRect, bool hdr,
                                     const std::vector<MonitorArtifact>& monitors, bool includeCursor);
     static QImage renderDesktopSnapshot(const QRect& globalRect, bool hdr, const std::vector<MonitorArtifact>& monitors,
