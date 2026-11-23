@@ -69,6 +69,7 @@ in hyprlandPlugins.mkHyprlandPlugin {
 
   cmakeFlags = [
     "-DBUILD_TESTING=OFF"
+    "-DHYPRCAPTURE_USE_SYSTEM_OPENCV=ON"
     "-DHYPRCAPTURE_USE_SYSTEM_ULTRAHDR=ON"
     "-DHYPRCAPTURE_AEC_MODEL_DIR=${aecModels}"
     "-DHYPRCAPTURE_TFLITE_LIBRARY=${aecRuntime}/lib/libtensorflowlite_c.so"
