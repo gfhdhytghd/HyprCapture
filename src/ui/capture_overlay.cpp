@@ -3308,7 +3308,7 @@ void CaptureOverlay::updateHdrEditBackdrop() {
     }));
 }
 
-void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target, bool preserveClip) const {
+void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target) const {
     if (!target.isValid())
         return;
 
@@ -3317,7 +3317,7 @@ void CaptureOverlay::paintDesktop(QPainter& painter, const QRect& target, bool p
         QRegion rasterRegion(target);
         for(const auto& artifact:m_monitorArtifacts)
             if(hasHdrBackdrop(artifact)) rasterRegion-=QRegion(globalToLocalRect(artifact.logicalGeometry));
-        painter.setClipRegion(rasterRegion, preserveClip ? Qt::IntersectClip : Qt::ReplaceClip);
+        painter.setClipRegion(rasterRegion, Qt::IntersectClip);
         painter.fillRect(target, QColor(30, 34, 38));
 
         const QRect globalTarget = localToDesktopLogicalRect(target);
@@ -3526,7 +3526,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
             painter.setClipPath(roundedWindowFramePath(highlight.target, highlight.radius, window->roundingPower), Qt::IntersectClip);
             if (highlight.clip.isValid())
                 painter.setClipRect(highlight.clip, Qt::IntersectClip);
-            paintDesktop(painter, highlight.target, hasOverviewSelectionGeometry(*window));
+            paintDesktop(painter, highlight.target);
             painter.restore();
         }
         for (const auto& candidate : m_windowArtifacts) {

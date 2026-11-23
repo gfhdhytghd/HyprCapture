@@ -1079,6 +1079,28 @@ class InPlaceEditorTest final : public QObject {
         }
     }
 
+    void windowHighlightKeepsCornersDimmed() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        QVERIFY(!overlay.m_windowArtifacts.empty());
+        auto& window = overlay.m_windowArtifacts.front();
+        window.rounding = 24;
+        overlay.m_overlayOpacity = 1.0;
+        overlay.m_toolbar->hide();
+        QVERIFY(overlay.hoveredWindow() == &window);
+
+        QImage pixels(overlay.size(), QImage::Format_ARGB32_Premultiplied);
+        pixels.fill(Qt::transparent);
+        overlay.render(&pixels);
+
+        const QRect frame = overlay.globalToLocalRect(window.visibleGeometry);
+        QCOMPARE(pixels.pixelColor(frame.center()), QColor(17, 29, 53));
+        const QColor dimmed = pixels.pixelColor(frame.topLeft() - QPoint(10, 10));
+        QVERIFY(dimmed.blue() < 53);
+        QCOMPARE(pixels.pixelColor(frame.topLeft() + QPoint(2, 2)), dimmed);
+    }
+
     void hdrStartupWaitsForAllBackdropsAndRecoversAfterTimeout_data() {
         QTest::addColumn<bool>("timeout");
         QTest::newRow("all-ready-before-deadline") << false;
