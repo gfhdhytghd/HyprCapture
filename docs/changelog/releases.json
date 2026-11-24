@@ -4,6 +4,47 @@
   "site_url": "https://gfhdhytghd.github.io/HyprCapture/",
   "releases": [
     {
+      "tag": "v0.7.0-v0.57.2",
+      "version": "0.7.0",
+      "hyprland": "0.57.2",
+      "published_at": "2026-11-24T15:20:32Z",
+      "headline": "Live Text OCR, scriptable screenshots, and more reliable recording",
+      "sections": [
+        {
+          "title": "New",
+          "items": [
+            "Use Live Text in the annotation editor to select and copy text from a screenshot, including Chinese and rotated lines. The OCR toolbar button can also copy all recognized text at once.",
+            "Choose Tesseract, local PaddleOCR, a PaddleOCR HTTP service, or a custom OCR command. HyprCapture detects the PaddleOCR service format automatically. Use `hyprcapture-ocr probe` to test the endpoint or inspect and clear its format cache.",
+            "Text selection uses native word boxes when available and refines their placement against the image. Double-click selects a word, with a fallback that selects contiguous Chinese text. Copied text joins wrapped paragraphs and preserves list breaks and code indentation.",
+            "Use `hyprcapture-shot` to select a region, fullscreen area or window and write an SDR PNG to a file or stdout. It waits for the result, can open the editor, and leaves your clipboard and interactive capture settings alone.",
+            "Choose the result thumbnail's size, corner, margin, opacity, animation, image border and rounded corners (#46). Rounded corners work with native HDR previews, and copying the image keeps its original pixels. The action menus use a square, borderless style.",
+            "Pan a zoomed image with the editor's Select tool. Zooming in keeps the image in view when it fits on the canvas.",
+            "Choose whether to record the pointer for each recording. The live cursor appears in compositor recordings with window shadows enabled (#39)."
+          ]
+        },
+        {
+          "title": "Fixed",
+          "items": [
+            "Compositor recording probes hardware encoders in the background and remembers a working choice for the same encoder, device and size. Congested encoder pipes can wait without stalling the compositor, and plugin unload can cancel the worker.",
+            "Stopping a recording gives the encoder time to finish. External recordings can finish merging audio and still show a result. MP4 and MOV save playable fragments before remuxing to a fast-start file. If finalization is interrupted, HyprCapture keeps the recoverable file and reports its path. During MP4/MOV finalization, the fragments and the finished file temporarily occupy disk space at the same time.",
+            "Rotated and mirrored HDR screenshots keep their orientation, highlights and transparency. Captures across monitors of different scales align at the seams, and `fullscreen_scope=per-monitor` saves a separate image for each monitor.",
+            "Recordings use the selected area on rotated outputs. If a monitor fails to provide a frame, HyprCapture skips the incomplete frame. APNG files appear at their final path only after conversion finishes, including on filesystems without hard links.",
+            "Scrolling capture stays responsive during fast gestures, recovers tracking, and keeps text sharp. It retains the order of early touchpad events (#38), handles blank margins better, and keeps the crop and preview aligned on transformed displays.",
+            "Window selection highlights respect rounded corners. Cancelling a capture or closing the overlay no longer races background saving.",
+            "Deleting a result restores the previous clipboard when the capture is still there, even with a clipboard manager. New clipboard content stays intact. HyprCapture also finds clipboard helpers installed in XDG Nix profiles (#52).",
+            "The `grim` fallback cancels when the session locks. HyprCapture removes temporary artifacts when the helper disconnects and checks who can send recording state updates.",
+            "The standard screenshot helper bundles its OpenCV code so system OpenCV upgrades do not break it. Nix builds use OpenCV from their package set."
+          ]
+        },
+        {
+          "title": "Compatibility",
+          "items": [
+            "This release targets official Hyprland v0.57.2. Build against the Hyprland version you run. If you use Hyprland’s development main, use the `hyprland-master` branch."
+          ]
+        }
+      ]
+    },
+    {
       "tag": "v0.6.0-v0.57.0",
       "version": "0.6.0",
       "hyprland": "0.57.0",
@@ -460,43 +501,5 @@
         }
       ]
     }
-  ],
-  "unreleased": {
-    "since": "v0.6.0-v0.57.0",
-    "summary": "Live Text OCR, scriptable screenshots, and more reliable recording",
-    "sections": [
-      {
-        "title": "New",
-        "items": [
-          "Use Live Text in the annotation editor to select and copy text from a screenshot, including Chinese and rotated lines. The OCR toolbar button can also copy all recognized text at once.",
-          "Choose Tesseract, local PaddleOCR, a PaddleOCR HTTP service, or a custom OCR command. HyprCapture detects the PaddleOCR service format automatically. Use `hyprcapture-ocr probe` to test the endpoint or inspect and clear its format cache.",
-          "Text selection uses native word boxes when available and refines their placement against the image. Double-click selects a word, with a fallback that selects contiguous Chinese text. Copied text joins wrapped paragraphs and preserves list breaks and code indentation.",
-          "Use `hyprcapture-shot` to select a region, fullscreen area or window and write an SDR PNG to a file or stdout. It waits for the result, can open the editor, and leaves your clipboard and interactive capture settings alone.",
-          "Choose the result thumbnail's size, corner, margin, opacity, animation, image border and rounded corners (#46). Rounded corners work with native HDR previews, and copying the image keeps its original pixels. The action menus use a square, borderless style.",
-          "Pan a zoomed image with the editor's Select tool. Zooming in keeps the image in view when it fits on the canvas.",
-          "Choose whether to record the pointer for each recording. The live cursor appears in compositor recordings with window shadows enabled (#39)."
-        ]
-      },
-      {
-        "title": "Fixed",
-        "items": [
-          "Compositor recording probes hardware encoders in the background and remembers a working choice for the same encoder, device and size. Congested encoder pipes can wait without stalling the compositor, and plugin unload can cancel the worker.",
-          "Stopping a recording gives the encoder time to finish. External recordings can finish merging audio and still show a result. MP4 and MOV save playable fragments before remuxing to a fast-start file. If finalization is interrupted, HyprCapture keeps the recoverable file and reports its path. During MP4/MOV finalization, the fragments and the finished file temporarily occupy disk space at the same time.",
-          "Rotated and mirrored HDR screenshots keep their orientation, highlights and transparency. Captures across monitors of different scales align at the seams, and `fullscreen_scope=per-monitor` saves a separate image for each monitor.",
-          "Recordings use the selected area on rotated outputs. If a monitor fails to provide a frame, HyprCapture skips the incomplete frame. APNG files appear at their final path only after conversion finishes, including on filesystems without hard links.",
-          "Scrolling capture stays responsive during fast gestures, recovers tracking, and keeps text sharp. It retains the order of early touchpad events (#38), handles blank margins better, and keeps the crop and preview aligned on transformed displays.",
-          "Window selection highlights respect rounded corners. Cancelling a capture or closing the overlay no longer races background saving.",
-          "Deleting a result restores the previous clipboard when the capture is still there, even with a clipboard manager. New clipboard content stays intact. HyprCapture also finds clipboard helpers installed in XDG Nix profiles (#52).",
-          "The `grim` fallback cancels when the session locks. HyprCapture removes temporary artifacts when the helper disconnects and checks who can send recording state updates.",
-          "The standard screenshot helper bundles its OpenCV code so system OpenCV upgrades do not break it. Nix builds use OpenCV from their package set."
-        ]
-      },
-      {
-        "title": "Compatibility",
-        "items": [
-          "This release targets official Hyprland v0.57.2. Build against the Hyprland version you run. If you use Hyprland’s development main, use the `hyprland-master` branch."
-        ]
-      }
-    ]
-  }
+  ]
 }
