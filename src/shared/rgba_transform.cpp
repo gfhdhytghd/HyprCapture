@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -102,6 +103,15 @@ RgbaFrame flipHorizontal(const RgbaFrame& source) {
 bool rgbaFrameHasExpectedSize(const RgbaFrame& frame) {
     std::size_t bytes = 0;
     return checkedRgbaByteSize(frame.width, frame.height, bytes, frame.bytesPerPixel) && frame.pixels.size() == bytes;
+}
+
+RgbaCrop roundedRgbaCrop(const Rect& part, const Rect& origin, double scale) {
+    const auto pixel = [scale](double position) {
+        return static_cast<int>(std::round(position * scale));
+    };
+    const int x = pixel(part.x - origin.x);
+    const int y = pixel(part.y - origin.y);
+    return {x, y, pixel(part.x + part.width - origin.x) - x, pixel(part.y + part.height - origin.y) - y};
 }
 
 int inverseRgbaTransform(int transform) {

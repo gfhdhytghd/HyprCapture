@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.19)
-project(HyprCapture VERSION "0.6.0")
+project(HyprCapture VERSION "0.7.0")
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -302,6 +302,9 @@ if(BUILD_TESTING)
   set_target_properties(hyprcapture-scroll-live-test PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/test-ui")
   target_include_directories(hyprcapture-scroll-live-test PRIVATE src ${GIO_INCLUDE_DIRS})
   target_link_libraries(hyprcapture-scroll-live-test PRIVATE ${OpenCV_LIBS} Qt6::Test Qt6::Widgets Qt6::Svg Qt6::DBus Qt6::Network LayerShellQt::Interface nlohmann_json::nlohmann_json ${GIO_LIBRARIES} PkgConfig::PULSE PkgConfig::PIPEWIRE)
+  # Run audio_echo_live_test.py, audio_application_live_test.py,
+  # aec_pipewire_test.py and fullscreen_window_live_test.py manually in
+  # a suitable Hyprland/PipeWire session. They act on the live desktop.
   add_test(NAME scroll-live COMMAND hyprcapture-scroll-live-test)
   set_tests_properties(scroll-live PROPERTIES TIMEOUT 60 SKIP_RETURN_CODE 77)
   # Optional receiver for the isolated GTK touchpad regression; not a UI runtime dependency.

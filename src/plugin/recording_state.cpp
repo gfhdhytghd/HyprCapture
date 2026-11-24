@@ -382,6 +382,12 @@ void RecordingStateServer::run() {
                     continue;
                 break;
             }
+            ucred credentials{};
+            socklen_t size = sizeof(credentials);
+            if (getsockopt(client, SOL_SOCKET, SO_PEERCRED, &credentials, &size) != 0 || credentials.uid != geteuid()) {
+                close(client);
+                continue;
+            }
             const auto response = snapshotJson() + "\n";
             std::size_t sent = 0;
             while (sent < response.size()) {

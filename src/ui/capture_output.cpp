@@ -100,21 +100,22 @@ CaptureOutputResult writeCaptureOutput(const QImage& image,
     result.clipboardRequested = defaults.clipboard;
     if (defaults.clipboard) {
         if (hdr && defaults.hdrClipboardFormat == "heic") {
-            QString path = result.savedPath;
-            const bool temporary = path.isEmpty();
-            if (temporary) {
-                path = hyprcapture::ui::runtimeFile("clipboard-hdr", ".heic");
+            result.clipboardPath = result.savedPath;
+            if (result.clipboardPath.isEmpty()) {
+                const auto path = hyprcapture::ui::runtimeFile("clipboard-hdr", ".heic");
                 if (!hyprcapture::ui::saveHdrHeic(hdrImage, path, &result.saveError, image)) return result;
+                result.clipboardPath = path;
+                result.temporaryClipboardFile = true;
             }
-            result.clipboardCopied = hyprcapture::ui::copyImageFileToClipboardDetached(path, QStringLiteral("image/heic"), temporary);
-            if (temporary && !result.clipboardCopied) QFile::remove(path);
+        } else if (!hdr && !result.savedPath.isEmpty()) {
+            result.clipboardPath = result.savedPath;
         } else {
-            result.clipboardCopied = !hdr && !result.savedPath.isEmpty()
-                ? hyprcapture::ui::copyImageFileToClipboardDetached(result.savedPath)
-                : hyprcapture::ui::copyImageToClipboardDetached(image);
+            const auto path = hyprcapture::ui::runtimeFile("clipboard-copy", ".png");
+            if (hyprcapture::ui::savePrivatePng(image, path)) {
+                result.clipboardPath = path;
+                result.temporaryClipboardFile = true;
+            }
         }
-        if (!result.clipboardCopied && hdr && defaults.hdrClipboardFormat == "heic")
-            result.saveError = QStringLiteral("Could not copy HDR HEIC to the clipboard. Check that wl-copy is installed.");
     }
 
     return result;

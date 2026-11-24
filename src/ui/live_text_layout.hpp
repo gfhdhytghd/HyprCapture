@@ -18,6 +18,8 @@ class LiveTextLayout {
         QPainterPath area;
         QTransform fromUnit;
         std::vector<Glyph> glyphs;
+        struct Word { int begin, end; double x0, x1; };
+        std::vector<Word> words;
     };
     QString copiedText(int anchor, int caret) const;
     QString text;
@@ -25,7 +27,7 @@ class LiveTextLayout {
     void setResults(const std::vector<OcrResult>& results);
     int hit(QPointF point, double tolerance = 0, bool nearest = false) const;
     bool contains(QPointF point) const;
-    std::pair<int, int> wordAt(int position) const;
+    std::pair<int, int> wordAt(QPointF point) const;
     std::pair<int, int> lineAt(int position) const;
     QPainterPath selection(int anchor, int caret) const;
   private:

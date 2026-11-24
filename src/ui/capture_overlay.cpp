@@ -67,6 +67,8 @@
 #include <QPainterPath>
 #include <QPixmap>
 #include <QPointer>
+#include <QDeadlineTimer>
+#include <QScopeGuard>
 #include <QProcess>
 #include <QPropertyAnimation>
 #include <QPushButton>
@@ -928,7 +930,7 @@ QImage rotateMonitorArtifactToLogicalOrientation(const QImage& image, int transf
     auto logical = image.transformed(imageTransform, Qt::FastTransformation);
     if (transform >= 4 && transform <= 7)
         logical = logical.flipped(Qt::Horizontal);
-    return logical.convertToFormat(QImage::Format_RGBA8888);
+    return logical.convertToFormat(image.format());
 }
 
 QImage normalizeMonitorArtifactImage(const QImage& image, int transform, const QRect& logicalGeometry) {
@@ -1432,7 +1434,8 @@ void InlineSelect::choose(const QString& text) {
         m_onChanged();
 }
 
-CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick, bool record, bool recordActive, QString sessionJson, QWidget* parent)
+CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick, bool record, bool recordActive, QString sessionJson, QWidget* parent,
+                               hyprcapture::ui::SessionLockGuard* lockGuard)
     : QMainWindow(parent), m_defaults(std::move(defaults)), m_mode(m_defaults.mode), m_quick(quick), m_record(record), m_recordActive(recordActive) {
     QElapsedTimer constructorTimer;
     constructorTimer.start();
@@ -1456,7 +1459,8 @@ CaptureOverlay::CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick
 
     QElapsedTimer preCaptureTimer;
     preCaptureTimer.start();
-    captureScreensBeforeOverlay();
+    captureScreensBeforeOverlay(lockGuard);
+    if (lockGuard && lockGuard->cancelled()) return;
     traceTiming(QStringLiteral("prepare_desktop"), preCaptureTimer.elapsed());
 
     if (!m_quick && m_hasHdrScreen && std::ranges::any_of(m_monitorArtifacts, [](const auto& artifact) { return !artifact.hdrImage.isNull(); })) {
@@ -1566,6 +1570,7 @@ void CaptureOverlay::saveRememberedSettings() {
 }
 
 CaptureOverlay::~CaptureOverlay() {
+    if (m_saveWorker) m_saveWorker->wait();
     invalidateHdrEditBase();
     // QProcess destruction may emit finished after the toolbar children are gone.
     for (auto* process : findChildren<QProcess*>())
@@ -1575,6 +1580,7 @@ CaptureOverlay::~CaptureOverlay() {
 }
 
 void CaptureOverlay::abortForSessionLock() {
+    m_captureAborted = true;
     invalidateHdrEditBase();
     m_finishing = true;
     clearPendingConfirm();
@@ -1796,7 +1802,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
     cleanupArtifactFiles(artifactFiles);
 }
 
-void CaptureOverlay::captureScreensBeforeOverlay() {
+void CaptureOverlay::captureScreensBeforeOverlay(hyprcapture::ui::SessionLockGuard* lockGuard) {
     if (!m_desktopGeometry.isValid())
         for (const auto* screen : QGuiApplication::screens())
             m_desktopGeometry = m_desktopGeometry.united(screen->geometry());
@@ -1809,22 +1815,42 @@ void CaptureOverlay::captureScreensBeforeOverlay() {
     if (!m_monitorArtifacts.empty())
         return;
 
+    if (lockGuard && lockGuard->cancelled()) return;
     const QString grimProgram = hyprcapture::ui::trustedSystemProgram(QStringLiteral("grim"));
     QProcess      grim;
+    const auto terminateGrim = [&] {
+        if (grim.state() == QProcess::NotRunning) return;
+        grim.kill();
+        grim.waitForFinished(100);
+    };
+    const auto cleanupGrim = qScopeGuard(terminateGrim);
     if (!grimProgram.isEmpty()) {
         grim.setProcessEnvironment(hyprcapture::ui::trustedProcessEnvironment());
         grim.start(grimProgram, {"-t", "png", "-"});
     }
-    if (grim.waitForFinished(1500) && grim.exitStatus() == QProcess::NormalExit && grim.exitCode() == 0) {
+    bool finished = false;
+    if (!grimProgram.isEmpty()) {
+        QDeadlineTimer deadline(1500);
+        // The helper is still constructing the overlay. Poll the lock fd
+        // directly while waiting, without pumping unrelated widget events.
+        while (!deadline.hasExpired() && grim.state() != QProcess::NotRunning) {
+            if (lockGuard && lockGuard->cancelled()) return;
+            finished = grim.waitForFinished(std::min<qint64>(20, deadline.remainingTime()));
+        }
+    }
+    if (lockGuard && lockGuard->cancelled()) return;
+    if (finished && grim.exitStatus() == QProcess::NormalExit && grim.exitCode() == 0) {
         QImage grimImage;
         if (grimImage.loadFromData(grim.readAllStandardOutput(), "PNG") && !grimImage.isNull()) {
             const QImage converted = grimImage.convertToFormat(QImage::Format_RGBA8888);
+            if (lockGuard && lockGuard->cancelled()) return;
             if (imageSizeWithinBounds(converted.size())) {
                 m_desktopImage = converted;
                 return;
             }
         }
     }
+    terminateGrim();
 
     const double scale = maxScreenDevicePixelRatio();
     const QSize imageSize = boundedScaledSize(m_desktopGeometry.width(), m_desktopGeometry.height(), scale, scale);
@@ -1836,7 +1862,9 @@ void CaptureOverlay::captureScreensBeforeOverlay() {
     QPainter painter(&m_desktopImage);
     const auto screens = QGuiApplication::screens();
     for (auto* screen : screens) {
+        if (lockGuard && lockGuard->cancelled()) return;
         const QPixmap pixmap = screen->grabWindow(0);
+        if (lockGuard && lockGuard->cancelled()) return;
         if (pixmap.isNull())
             continue;
         const QRect target = logicalRectToOutputRect(screen->geometry(), m_desktopGeometry, scale, scale).intersected(m_desktopImage.rect());
@@ -2692,10 +2720,7 @@ void CaptureOverlay::updateToolbarControlsForMode() {
 }
 
 int CaptureOverlay::monitorCount() const {
-    const int qtScreens = QGuiApplication::screens().size();
-    if (qtScreens > 0)
-        return qtScreens;
-    return m_sessionMonitorCount;
+    return std::max(m_sessionMonitorCount, static_cast<int>(QGuiApplication::screens().size()));
 }
 
 bool CaptureOverlay::hasMultipleMonitors() const {
@@ -3424,6 +3449,18 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     QPainterPath dim;
     dim.addRect(rect());
     QPainterPath undimmed;
+    std::vector<QRect> fullscreenPreview;
+    if (m_mode == hyprcapture::CaptureMode::Fullscreen) {
+        if (perMonitorScreenshot() && m_defaults.save) {
+            for (const auto& artifact : m_monitorArtifacts)
+                fullscreenPreview.push_back(globalToLocalRect(artifact.logicalGeometry));
+            if (fullscreenPreview.empty())
+                for (const auto* screen : QGuiApplication::screens())
+                    fullscreenPreview.push_back(globalToLocalRect(screen->geometry()));
+        } else {
+            fullscreenPreview.push_back(fullscreenCaptureRect());
+        }
+    }
     // The mask follows the selection, independently of asynchronous HDR upload.
     if (m_editing && m_editor) {
         undimmed.addRect(m_editor->canvasGeometry());
@@ -3447,8 +3484,10 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
             }
         }
     }
-    else if (m_mode == hyprcapture::CaptureMode::Fullscreen)
-        undimmed.addRect(fullscreenCaptureRect());
+    else if (m_mode == hyprcapture::CaptureMode::Fullscreen) {
+        undimmed.setFillRule(Qt::WindingFill);
+        for (const auto& preview : fullscreenPreview) undimmed.addRect(preview);
+    }
     else if ((m_mode==hyprcapture::CaptureMode::Region || m_defaults.fushionMode) && normalizedSelection().width()>4 && normalizedSelection().height()>4)
         undimmed.addRect(normalizedSelection().intersected(regionCaptureBounds()));
     else if (m_mode==hyprcapture::CaptureMode::Window || m_defaults.fushionMode) {
@@ -3508,8 +3547,8 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
                 painter.drawRect(QRect(point - QPoint(half, half), QSize(kSelectionHandlePaintSize, kSelectionHandlePaintSize)));
         }
     } else if (pendingConfirmActive() && m_mode == hyprcapture::CaptureMode::Fullscreen) {
-        const QRect cap = fullscreenCaptureRect();
-        if (cap.isValid()) {
+        for (const auto& cap : fullscreenPreview) {
+            if (!cap.isValid()) continue;
             paintDesktop(painter, cap);
             drawFullscreenPreview(cap);
         }
@@ -3982,7 +4021,33 @@ QRect CaptureOverlay::captureRectForMode() const {
     return fullscreenCaptureRect();
 }
 
+bool CaptureOverlay::perMonitorScreenshot() const {
+    return !m_record && m_mode == hyprcapture::CaptureMode::Fullscreen &&
+           currentFullscreenScope() == hyprcapture::FullscreenScope::PerMonitor;
+}
+
+const CaptureOverlay::MonitorArtifact* CaptureOverlay::fullscreenMonitorArtifact(const QRect& geometry) const {
+    const MonitorArtifact* found = nullptr;
+    for (const auto& artifact : m_monitorArtifacts) {
+        if (artifact.logicalGeometry != geometry) continue;
+        if (!found || artifact.focused) found = &artifact;
+    }
+    return found;
+}
+
 QRect CaptureOverlay::fullscreenCaptureRect() const {
+    if (perMonitorScreenshot()) {
+        if (m_perMonitorGeometry.isValid())
+            return globalToLocalRect(m_perMonitorGeometry);
+        const auto cursor = cursorLogicalPosition();
+        for (const auto& artifact : m_monitorArtifacts)
+            if (artifact.logicalGeometry.contains(cursor)) return globalToLocalRect(artifact.logicalGeometry);
+        if (const auto* screen = QGuiApplication::screenAt(cursor))
+            return globalToLocalRect(screen->geometry());
+        if (!m_monitorArtifacts.empty()) return globalToLocalRect(m_monitorArtifacts.front().logicalGeometry);
+        if (const auto* screen = QGuiApplication::primaryScreen())
+            return globalToLocalRect(screen->geometry());
+    }
     if (currentFullscreenScope() == hyprcapture::FullscreenScope::Current)
         return localScreenRectAt(globalToLocalRect(QRect(cursorLogicalPosition(), QSize(1, 1))).topLeft());
     if (m_desktopGeometry.isValid())
@@ -4606,10 +4671,14 @@ void CaptureOverlay::relayoutToolbar() {
 }
 
 QImage CaptureOverlay::renderDesktopRectAtDisplayResolution(const QRect& globalRect, bool hdr) const {
+    if (perMonitorScreenshot()) {
+        if (const auto* artifact = fullscreenMonitorArtifact(globalRect))
+            return renderDesktopSnapshot(globalRect, hdr, std::span(artifact, 1), m_hasHdrScreen, m_defaults.includeCursor);
+    }
     return renderDesktopSnapshot(globalRect, hdr, m_monitorArtifacts, m_hasHdrScreen, m_defaults.includeCursor);
 }
 
-QImage CaptureOverlay::renderDesktopSnapshot(const QRect& globalRect, bool hdr, const std::vector<MonitorArtifact>& monitors,
+QImage CaptureOverlay::renderDesktopSnapshot(const QRect& globalRect, bool hdr, std::span<const MonitorArtifact> monitors,
                                            bool hasHdrScreen, bool includeCursor) {
     ScopedUiTiming timing(QStringLiteral("overlay.render.desktop hdr=%1").arg(hdr));
     if (!globalRect.isValid() || monitors.empty())
@@ -4631,54 +4700,6 @@ QImage CaptureOverlay::renderDesktopSnapshot(const QRect& globalRect, bool hdr, 
         const int imageSize = horizontal ? artifact.image.width() : artifact.image.height();
         return logicalSize > 0 ? static_cast<double>(imageSize) / logicalSize : 0.0;
     };
-    const auto nativeAxisOffsetForLogicalPosition = [&monitors, &artifactAxisScale](int axisStart, int logicalPosition, bool horizontal) {
-        if (logicalPosition <= axisStart)
-            return 0;
-
-        std::vector<int> points{axisStart, logicalPosition};
-        for (const auto& artifact : monitors) {
-            if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
-                continue;
-            const int start = horizontal ? artifact.logicalGeometry.left() : artifact.logicalGeometry.top();
-            const int end = horizontal ? artifact.logicalGeometry.right() + 1 : artifact.logicalGeometry.bottom() + 1;
-            if (start > axisStart && start < logicalPosition)
-                points.push_back(start);
-            if (end > axisStart && end < logicalPosition)
-                points.push_back(end);
-        }
-
-        std::sort(points.begin(), points.end());
-        points.erase(std::unique(points.begin(), points.end()), points.end());
-
-        double offset = 0.0;
-        for (std::size_t i = 0; i + 1 < points.size(); ++i) {
-            const int begin = points[i];
-            const int end = points[i + 1];
-            if (end <= begin)
-                continue;
-
-            const double midpoint = (static_cast<double>(begin) + static_cast<double>(end)) / 2.0;
-            double scale = 1.0;
-            bool covered = false;
-            for (const auto& artifact : monitors) {
-                if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
-                    continue;
-                const int artifactStart = horizontal ? artifact.logicalGeometry.left() : artifact.logicalGeometry.top();
-                const int artifactEnd = horizontal ? artifact.logicalGeometry.right() + 1 : artifact.logicalGeometry.bottom() + 1;
-                if (midpoint < artifactStart || midpoint >= artifactEnd)
-                    continue;
-
-                const double axisScale = artifactAxisScale(artifact, horizontal);
-                if (axisScale <= 0.0)
-                    continue;
-                scale = covered ? std::max(scale, axisScale) : axisScale;
-                covered = true;
-            }
-            offset += static_cast<double>(end - begin) * scale;
-        }
-
-        return static_cast<int>(std::floor(offset));
-    };
     for (const auto& artifact : monitors) {
         if (artifact.image.isNull() || !artifact.logicalGeometry.isValid())
             continue;
@@ -4691,15 +4712,34 @@ QImage CaptureOverlay::renderDesktopSnapshot(const QRect& globalRect, bool hdr, 
         if (!source.isValid())
             continue;
 
-        const QPoint targetTopLeft(nativeAxisOffsetForLogicalPosition(globalRect.left(), logicalPart.left(), true),
-                                   nativeAxisOffsetForLogicalPosition(globalRect.top(), logicalPart.top(), false));
-        const QRect target(targetTopLeft, source.size());
-        outputBounds = outputBounds.isValid() ? outputBounds.united(target) : target;
-        drawParts.push_back({.artifact = &artifact, .logical = logicalPart, .source = source, .target = target});
+        drawParts.push_back({.artifact = &artifact, .logical = logicalPart, .source = source});
     }
     if (hdr && !hasHdrScreen && std::ranges::none_of(drawParts, [](const auto& part) { return !part.artifact->hdrImage.isNull(); })) return {};
-    if (!outputBounds.isValid() || drawParts.empty())
+    if (drawParts.empty())
         return {};
+
+    if (drawParts.size() == 1) {
+        drawParts.front().target = QRect(QPoint(), drawParts.front().source.size());
+    } else {
+        double scale = 0.0;
+        QRect logicalBounds;
+        for (const auto& part : drawParts) {
+            scale = std::max({scale, artifactAxisScale(*part.artifact, true), artifactAxisScale(*part.artifact, false)});
+            logicalBounds = logicalBounds.united(part.logical);
+        }
+        if (boundedScaledSize(logicalBounds.width(), logicalBounds.height(), scale, scale).isEmpty())
+            return {};
+        const auto edge = [scale](int v) { return qRound(v * scale); };
+        for (auto& part : drawParts) {
+            const int x = part.logical.x() - logicalBounds.x(), y = part.logical.y() - logicalBounds.y();
+            const QPoint first(edge(x), edge(y));
+            const QPoint end(edge(x + part.logical.width()), edge(y + part.logical.height()));
+            part.target = QRect(first, QSize(end.x() - first.x(), end.y() - first.y()));
+        }
+    }
+    for (const auto& part : drawParts)
+        outputBounds = outputBounds.united(part.target);
+    if (!outputBounds.isValid()) return {};
 
     QImage image = boundedImage(outputBounds.size(), hdr ? QImage::Format_RGBA16FPx4_Premultiplied : QImage::Format_ARGB32_Premultiplied);
     if (image.isNull())
@@ -4834,9 +4874,28 @@ std::function<QImage()> CaptureOverlay::hdrResultRenderer() const {
         };
     }
     const auto geometry = localToDesktopLogicalRect(captureRectForMode());
+    if (perMonitorScreenshot()) {
+        if (const auto* artifact = fullscreenMonitorArtifact(geometry)) {
+            return [geometry, monitor = *artifact, hasHdr = m_hasHdrScreen, cursor = m_defaults.includeCursor] {
+                return renderDesktopSnapshot(geometry, true, std::span(&monitor, 1), hasHdr, cursor);
+            };
+        }
+    }
     return [geometry, monitors = m_monitorArtifacts, hasHdr = m_hasHdrScreen, cursor = m_defaults.includeCursor] {
         return renderDesktopSnapshot(geometry, true, monitors, hasHdr, cursor);
     };
+}
+
+QImage CaptureOverlay::renderFallbackMonitor(const QScreen* screen) const {
+    if (!screen) return {};
+    const auto geometry = screen->geometry();
+    const auto source = desktopSourceRectForGlobalRect(geometry);
+    if (!source.isValid()) return {};
+    const auto scale = screen->devicePixelRatio();
+    const auto size = boundedScaledSize(geometry.width(), geometry.height(), scale, scale);
+    if (size.isEmpty()) return {};
+    const auto image = m_desktopImage.copy(source);
+    return image.size() == size ? image : image.scaled(size, Qt::IgnoreAspectRatio, Qt::FastTransformation);
 }
 
 QImage CaptureOverlay::renderResultImage(bool hdr) {
@@ -4868,6 +4927,11 @@ QImage CaptureOverlay::renderResultImage(bool hdr) {
 
     if (hdr) return {}; // No HDR synthesis from an SDR/grim fallback.
     ensureDesktopImage();
+    if (perMonitorScreenshot() && m_monitorArtifacts.empty()) {
+        const auto geometry = localToDesktopLogicalRect(cap);
+        const auto image = renderFallbackMonitor(QGuiApplication::screenAt(geometry.center()));
+        if (!image.isNull()) return image;
+    }
     const QRect desktopSource = localToDesktopSourceRect(cap);
     const QSize outputSize = desktopSource.isValid() ? desktopSource.size() : cap.size();
     QImage image = boundedImage(outputSize.expandedTo(QSize(1, 1)), hdr ? QImage::Format_RGBA16FPx4_Premultiplied : QImage::Format_ARGB32_Premultiplied);
@@ -5232,11 +5296,14 @@ void CaptureOverlay::beginInPlaceEdit(const QImage& capturedImage) {
     ScopedUiTiming timing("overlay.begin_edit");
     if (m_editing || m_record || m_recordActive)
         return;
+    if (perMonitorScreenshot())
+        m_perMonitorGeometry = localToDesktopLogicalRect(fullscreenCaptureRect());
     // Once a window is chosen, toolbar pointer movement must not retarget it.
     if (m_mode == hyprcapture::CaptureMode::Window && !selectedWindow())
         m_selectedWindowIndex = hoveredWindowIndex();
     auto image = capturedImage.isNull() ? renderResultImage() : capturedImage;
     if (image.isNull()) {
+        m_perMonitorGeometry = {};
         m_recordError = tr("Could not capture the selected target");
         updateStatus();
         return;
@@ -5371,6 +5438,7 @@ void CaptureOverlay::leaveInPlaceEdit() {
     if (!m_editing)
         return;
     m_editing = false;
+    m_perMonitorGeometry = {};
     invalidateHdrEditBase();
     m_scrollResult = false;
     m_scrollOriginal = {}; m_scrollFirstFrame = {};
@@ -5571,6 +5639,8 @@ void CaptureOverlay::finishCapture() {
 }
 
 void CaptureOverlay::renderAndSaveCapture() {
+    if (perMonitorScreenshot() && !m_perMonitorGeometry.isValid())
+        m_perMonitorGeometry = localToDesktopLogicalRect(fullscreenCaptureRect());
     QElapsedTimer renderTimer;
     renderTimer.start();
     const bool edited = !m_editedOutput.isNull();
@@ -5674,56 +5744,110 @@ void CaptureOverlay::saveImage(const QImage& image,
                                hyprcapture::FilenameMetadata filenameMetadata) {
     const auto defaults = m_defaults;
     const bool edited = !m_editedOutput.isNull();
-    auto*      worker = QThread::create([this,
-                                         image,
-                                         hdrImage,
-                                         defaults,
-                                         edited,
-                                         outputPath,
-                                         restoreClipboardPath,
-                                         thumbnailStarted,
-                                         mode,
-                                         filenameMetadata,
-                                         clipboardSnapshot = std::move(clipboardSnapshot)] {
+    std::vector<std::pair<QImage, QImage>> otherScreens;
+    if (defaults.save && perMonitorScreenshot()) {
+        const QRect mainScreen = localToDesktopLogicalRect(fullscreenCaptureRect());
+        const auto append = [&](QImage sdr, QImage hdr) {
+            hyprcapture::ui::applyWatermark(sdr, defaults);
+            if (!hdr.isNull()) applyHdrWatermark(hdr, defaults);
+            otherScreens.emplace_back(std::move(sdr), std::move(hdr));
+        };
+        if (m_monitorArtifacts.empty()) {
+            const auto* primary = QGuiApplication::screenAt(mainScreen.center());
+            for (const auto* screen : QGuiApplication::screens())
+                if (screen != primary) append(renderFallbackMonitor(screen), {});
+        } else {
+            const auto* primary = fullscreenMonitorArtifact(mainScreen);
+            for (const auto& artifact : m_monitorArtifacts) {
+                if (&artifact == primary) continue;
+                const auto render = [&](bool hdr) {
+                    return renderDesktopSnapshot(artifact.logicalGeometry, hdr, std::span(&artifact, 1),
+                                                 m_hasHdrScreen, defaults.includeCursor);
+                };
+                append(render(false), defaults.screenshotFormat == "heic" ? render(true) : QImage{});
+            }
+        }
+    }
+
+    QPointer<CaptureOverlay> overlay(this);
+    auto* app = qApp; // The overlay joins the worker before the application is destroyed.
+    m_saveWorker.reset(QThread::create([overlay, app, image, hdrImage, defaults, edited, outputPath, restoreClipboardPath,
+                                       thumbnailStarted, mode, filenameMetadata, otherScreens = std::move(otherScreens),
+                                       clipboardSnapshot = std::move(clipboardSnapshot)] {
         QElapsedTimer totalTimer;
         totalTimer.start();
-        const CaptureOutputResult result = writeCaptureOutput(image, hdrImage, defaults, clipboardSnapshot, outputPath, restoreClipboardPath);
+        auto result = std::shared_ptr<CaptureOutputResult>(new CaptureOutputResult(
+            writeCaptureOutput(image, hdrImage, defaults, clipboardSnapshot, outputPath, restoreClipboardPath)),
+            [](CaptureOutputResult* result) {
+                if (result->temporaryClipboardFile) QFile::remove(result->clipboardPath);
+                hyprcapture::ui::discardClipboardSnapshot(result->restoreClipboardPath);
+                delete result;
+            });
+        QStringList savedScreens;
+        bool extraScreenFailed = false;
+        if (!result->savedPath.isEmpty() && result->saveError.isEmpty()) {
+            auto additional = defaults;
+            additional.clipboard = false;
+            additional.showThumbnail = false;
+            for (const auto& [sdr, hdr] : otherScreens) {
+                const QString path = plannedCaptureOutputPath(additional, qString(filenameMetadata.windowClass), qString(filenameMetadata.windowTitle));
+                auto saved = writeCaptureOutput(sdr, hdr, additional, {}, path, {});
+                if (!saved.savedPath.isEmpty()) savedScreens << saved.savedPath;
+                else extraScreenFailed = true;
+            }
+        }
         traceTiming(QStringLiteral("output_worker_total"), totalTimer.elapsed());
-        QMetaObject::invokeMethod(
-            this,
-            [this, image, hdrImage, result, thumbnailStarted, defaults, mode, filenameMetadata, edited, outputPath] {
-                traceTiming(QStringLiteral("output_ready"));
-                if ((defaults.save && result.savedPath != outputPath) || !result.saveError.isEmpty()) {
-                    m_finishing = false;
-                    if (m_editor) m_editor->setEnabled(true);
-                    if (m_toolbar) m_toolbar->setEnabled(true);
-                    m_recordError = result.saveError.isEmpty() ? tr("Could not save the image. Check the output directory and try again.") : result.saveError;
-                    show(); updateStatus();
-                    return;
-                }
-                const auto complete = [this, image, hdrImage, result, thumbnailStarted, defaults, mode, filenameMetadata] {
-                    endHymissionCaptureInputSuppression();
-                    if (result.clipboardRequested && !result.clipboardCopied &&
-                        !(defaults.screenshotFormat == "heic" && defaults.hdrClipboardFormat == "heic"))
-                        hyprcapture::ui::copyImageToClipboard(image);
-                    if (defaults.save)
-                        hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result.savedPath);
-                    if (result.showThumbnail && !thumbnailStarted)
-                        showThumbnail(defaults.screenshotFormat == "heic" ? saveThumbnailPreview(image, m_defaults) : result.savedPath, result.savedPath,
-                                      result.restoreClipboardPath, hdrImage, image);
-                    qApp->quit();
-                };
-                if (edited) {
-                    emit finishingStarted();
-                    fadeOutThen(complete);
-                } else {
-                    complete();
-                }
-            },
-            Qt::QueuedConnection);
-    });
-    connect(worker, &QThread::finished, worker, &QObject::deleteLater);
-    worker->start();
+        QMetaObject::invokeMethod(app, [overlay, image, hdrImage, result, thumbnailStarted, defaults, mode,
+                                       filenameMetadata, edited, outputPath, savedScreens, extraScreenFailed] {
+            if (!overlay || overlay->m_captureAborted) return;
+            overlay->m_saveWorker->wait();
+            overlay->m_saveWorker.reset();
+            traceTiming(QStringLiteral("output_ready"));
+            const bool heic = defaults.screenshotFormat == "heic" && defaults.hdrClipboardFormat == "heic";
+            if (result->saveError.isEmpty() && result->clipboardRequested) {
+                const bool copied = hyprcapture::ui::copyImageFileToClipboardDetached(
+                    result->clipboardPath, heic ? QStringLiteral("image/heic") : QStringLiteral("image/png"),
+                    result->temporaryClipboardFile, result->restoreClipboardPath);
+                if (!copied && heic)
+                    result->saveError = QStringLiteral("Could not copy HDR HEIC to the clipboard. Check that wl-copy is installed.");
+                else if (!copied)
+                    hyprcapture::ui::copyImageToClipboard(image);
+            }
+            if ((defaults.save && result->savedPath != outputPath) || !result->saveError.isEmpty()) {
+                overlay->m_finishing = false;
+                if (!edited) overlay->m_perMonitorGeometry = {};
+                if (overlay->m_editor) overlay->m_editor->setEnabled(true);
+                if (overlay->m_toolbar) overlay->m_toolbar->setEnabled(true);
+                overlay->m_recordError = result->saveError.isEmpty()
+                    ? tr("Could not save the image. Check the output directory and try again.") : result->saveError;
+                overlay->show();
+                overlay->updateStatus();
+                return;
+            }
+            const auto complete = [self = overlay.data(), image, hdrImage, result, thumbnailStarted, defaults, mode,
+                                   filenameMetadata, savedScreens, extraScreenFailed] {
+                self->endHymissionCaptureInputSuppression();
+                if (defaults.save)
+                    hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, result->savedPath);
+                for (const auto& path : savedScreens)
+                    hyprcapture::ui::showScreenshotNotification(defaults, mode, filenameMetadata, path);
+                if (extraScreenFailed)
+                    hyprcapture::ui::showNotification(defaults.notificationBackend, tr("HyprCapture"), tr("Could not save one or more monitor images."));
+                if (result->showThumbnail && !thumbnailStarted)
+                    self->showThumbnail(defaults.screenshotFormat == "heic" ? saveThumbnailPreview(image, self->m_defaults) : result->savedPath,
+                                        result->savedPath, result->restoreClipboardPath, hdrImage, image);
+                result->restoreClipboardPath.clear(); // The thumbnail now owns the snapshot.
+                qApp->quit();
+            };
+            if (edited) {
+                emit overlay->finishingStarted();
+                overlay->fadeOutThen(complete);
+            } else {
+                complete();
+            }
+        }, Qt::QueuedConnection);
+    }));
+    m_saveWorker->start();
 }
 
 void CaptureOverlay::showThumbnail(const QString& previewPath, const QString& targetPath, const QString& restoreClipboardPath, const QImage& hdrPreview, const QImage& fullImage) {

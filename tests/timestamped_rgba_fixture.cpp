@@ -2,6 +2,10 @@
 #include "shared/sdr_video.hpp"
 #include <algorithm>
 #include <csignal>
+#include <cerrno>
+#include <chrono>
+#include <thread>
+#include <fcntl.h>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -11,6 +15,31 @@
 int main(int argc, char** argv) {
     using namespace hyprcapture;
     signal(SIGPIPE, SIG_IGN);
+    if (argc > 1 && std::string(argv[1]) == "--blocked-pipe") {
+        int fds[2];
+        if (pipe2(fds, O_NONBLOCK | O_CLOEXEC) != 0) return 1;
+        const unsigned char frame = 1;
+        while (::write(fds[1], &frame, 1) == 1) {}
+        if (errno != EAGAIN) return 2;
+        std::jthread reader([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            unsigned char bytes[4096];
+            read(fds[0], bytes, sizeof(bytes));
+        });
+        const int resumed = writeRecordingBytes(fds[1], {&frame, 1}, {});
+        reader.join();
+        while (::write(fds[1], &frame, 1) == 1) {}
+        std::stop_source stop;
+        std::jthread cancel([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            stop.request_stop();
+        });
+        const int cancelled = writeRecordingBytes(fds[1], {&frame, 1}, stop.get_token());
+        close(fds[0]);
+        const int disconnected = writeRecordingBytes(fds[1], {&frame, 1}, {});
+        close(fds[1]);
+        return resumed == 0 && cancelled == -ECANCELED && disconnected == -EPIPE ? 0 : 3;
+    }
     if (argc > 1 && std::string(argv[1]) == "--sdr-filter") {
         std::cout << sdrVideoFilter; return 0;
     }

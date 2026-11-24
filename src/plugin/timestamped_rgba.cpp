@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <limits>
+#include <poll.h>
 #include <unistd.h>
 extern "C" {
 #include <libavcodec/codec_id.h>
@@ -10,17 +11,31 @@ extern "C" {
 }
 
 namespace hyprcapture {
-namespace {
-int writePacket(void* opaque, const unsigned char* bytes, int count) {
-    const int fd = *static_cast<int*>(opaque);
-    int written = 0;
-    while (written < count) {
-        const auto n = ::write(fd, bytes + written, count - written);
-        if (n < 0 && errno == EINTR) continue;
-        if (n <= 0) return AVERROR(n < 0 ? errno : EIO);
-        written += static_cast<int>(n);
+int writeRecordingBytes(int fd, std::span<const unsigned char> bytes, std::stop_token stop) {
+    while (!bytes.empty()) {
+        if (stop.stop_requested()) return AVERROR(ECANCELED);
+        const auto n = ::write(fd, bytes.data(), bytes.size());
+        if (n > 0) {
+            bytes = bytes.subspan(n);
+        } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            pollfd descriptor{fd, POLLOUT, 0};
+            if (poll(&descriptor, 1, 50) < 0 && errno != EINTR) return AVERROR(errno);
+        } else if (n == 0 || errno != EINTR) {
+            return AVERROR(n < 0 ? errno : EIO);
+        }
     }
-    return count;
+    return 0;
+}
+
+namespace {
+struct RecordingPipe {
+    int fd = -1;
+    std::stop_token stop;
+};
+int writePacket(void* opaque, const unsigned char* bytes, int count) {
+    const auto& pipe = *static_cast<RecordingPipe*>(opaque);
+    const int error = writeRecordingBytes(pipe.fd, {bytes, static_cast<std::size_t>(count)}, pipe.stop);
+    return error < 0 ? error : count;
 }
 // FFmpeg before 7 used a non-const write callback.
 [[maybe_unused]] int writePacket(void* opaque, unsigned char* bytes, int count) {
@@ -29,7 +44,8 @@ int writePacket(void* opaque, const unsigned char* bytes, int count) {
 constexpr AVRational MICROSECONDS{1, 1'000'000};
 }
 struct TimestampedRgbaWriter::Impl {
-    int fd = -1, fps = 60;
+    RecordingPipe pipe;
+    int fps = 60;
     std::size_t frameBytes = 0;
     std::int64_t lastPts = -1;
     AVFormatContext* mux = nullptr;
@@ -50,15 +66,15 @@ struct TimestampedRgbaWriter::Impl {
 };
 TimestampedRgbaWriter::TimestampedRgbaWriter() : m_impl(std::make_unique<Impl>()) {}
 TimestampedRgbaWriter::~TimestampedRgbaWriter() = default;
-bool TimestampedRgbaWriter::open(int fd, int width, int height, int fps) {
+bool TimestampedRgbaWriter::open(int fd, int width, int height, int fps, std::stop_token stop) {
     auto& s = *m_impl;
     const auto bytes = static_cast<std::uint64_t>(std::max(0, width)) * std::max(0, height) * 4;
     if (s.mux || fd < 0 || !bytes || bytes > std::numeric_limits<int>::max() || fps <= 0) return s.check(AVERROR(EINVAL));
-    s.fd = fd; s.fps = fps; s.frameBytes = bytes;
+    s.pipe = {fd, stop}; s.fps = fps; s.frameBytes = bytes;
     if (!s.check(avformat_alloc_output_context2(&s.mux, nullptr, "nut", nullptr))) return false;
     auto* buffer = static_cast<unsigned char*>(av_malloc(65536));
     if (!buffer) return s.check(AVERROR(ENOMEM));
-    s.io = avio_alloc_context(buffer, 65536, 1, &s.fd, nullptr, writePacket, nullptr);
+    s.io = avio_alloc_context(buffer, 65536, 1, &s.pipe, nullptr, writePacket, nullptr);
     if (!s.io) { av_free(buffer); return s.check(AVERROR(ENOMEM)); }
     s.mux->pb = s.io; s.mux->flags |= AVFMT_FLAG_CUSTOM_IO;
     s.stream = avformat_new_stream(s.mux, nullptr);

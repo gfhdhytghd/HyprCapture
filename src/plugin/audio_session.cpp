@@ -1,6 +1,7 @@
 #include "plugin/audio_session.hpp"
 #include <nlohmann/json.hpp>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fcntl.h>
 #include <unistd.h>
@@ -8,6 +9,7 @@
 namespace hyprcapture {
 AudioSession::~AudioSession() {
     abandon();
+    m_worker.request_stop();
     if (m_worker.joinable()) m_worker.join();
     if (m_reader >= 0) close(m_reader);
     if (m_writer >= 0) close(m_writer);
@@ -23,7 +25,7 @@ SupervisedProcess AudioSession::spawn(const std::vector<std::string>& args, int 
     std::vector<char*> env;
     for (auto& entry : m_environment) env.push_back(entry.data());
     env.push_back(nullptr);
-    auto child = spawnSupervisedProcess(m_shell, args, env.data(), actions);
+    auto child = spawnSupervisedProcess(m_shell, args, env.data(), actions, true);
     posix_spawn_file_actions_destroy(&actions);
     return child;
 }
@@ -42,8 +44,15 @@ bool AudioSession::start(const CaptureDefaults& defaults, const std::filesystem:
                           std::to_string(defaults.recordAudioSystemGain), std::to_string(defaults.recordAudioMicGain), std::to_string(defaults.recordAudioEchoCancellation), defaults.recordAudioEchoBackend}, control[0]);
     close(control[0]);
     if (process.spawnError) { error = strerror(process.spawnError); return false; }
-    m_worker = std::thread([this, process]() mutable {
-        (void)waitSupervisedProcess(process);
+    m_worker = std::jthread([this, process](std::stop_token stop) mutable {
+        using Clock = std::chrono::steady_clock;
+        auto deadline = Clock::time_point::max();
+        (void)waitSupervisedProcess(process, [&] {
+            const auto now = Clock::now();
+            if (m_stopped.load() && deadline == Clock::time_point::max())
+                deadline = now + std::chrono::seconds(5);
+            return stop.stop_requested() || now >= deadline;
+        });
         m_captureExited.store(true);
         {
             std::unique_lock lock(m_mutex);
@@ -52,7 +61,7 @@ bool AudioSession::start(const CaptureDefaults& defaults, const std::filesystem:
         }
         auto mux = spawn({m_helper, "--sound-finalize", m_directory.string(), m_video.string(),
                           std::to_string(m_firstFrameUs), m_format}, -1);
-        m_success.store(mux.spawnError == 0 && waitSupervisedProcess(mux) == 0);
+        m_success.store(mux.spawnError == 0 && waitSupervisedProcess(mux, [&] { return stop.stop_requested(); }) == 0);
         m_finished.store(true);
     });
     return true;

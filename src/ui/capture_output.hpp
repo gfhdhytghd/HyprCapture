@@ -12,7 +12,8 @@ struct CaptureOutputResult {
     QString restoreClipboardPath;
     bool    showThumbnail = false;
     bool    clipboardRequested = false;
-    bool    clipboardCopied = false;
+    QString clipboardPath;
+    bool    temporaryClipboardFile = false;
 };
 
 QString plannedCaptureOutputPath(const CaptureDefaults&, const QString& windowClass, const QString& windowTitle);
