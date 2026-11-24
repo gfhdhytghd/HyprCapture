@@ -37,6 +37,21 @@ class LiveTextLayoutTest final : public QObject {
             QCOMPARE(layout.copiedText(0,2),QString::fromUtf8("中文"));
         }
     }
+    void doubleClickUsesOcrWordBoxAndNotNearestCaret() {
+        const auto response = hyprcapture::parseOcrApiJson(
+            R"({"results":[{"text":"北京上海","box":[[0,0],[80,0],[80,20],[0,20]],"words":[{"text":"北京","box":[0,0,40,20]},{"text":"上海","box":[40,0,80,20]}]},{"text":"hello world","box":[[0,30],[110,30],[110,50],[0,50]]}]})");
+        QVERIFY(response);
+        LiveTextLayout layout;
+        layout.setResults(response.results);
+        const auto selected = [&](QPointF point) {
+            const auto [begin, end] = layout.wordAt(point);
+            return layout.copiedText(begin, end);
+        };
+        QCOMPARE(selected({39, 10}), QStringLiteral("北京"));
+        QCOMPARE(selected({40, 10}), QStringLiteral("上海"));
+        QCOMPARE(selected({79, 10}), QStringLiteral("上海"));
+        QCOMPARE(selected({93, 40}), QStringLiteral("world"));
+    }
     void perspectiveAndTallSelection() {
         auto response=hyprcapture::parseOcrApiJson(R"({"results":[{"text":"中文","box":[[10,10],[90,12],[75,35],[12,30]],"words":[{"text":"中","box":[[10,10],[50,11],[43.5,32.5],[12,30]]},{"text":"文","box":[[50,11],[90,12],[75,35],[43.5,32.5]]}]}]})");
         LiveTextLayout layout; layout.setResults(response.results);

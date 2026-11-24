@@ -45,10 +45,15 @@
 #include <QProcess>
 #include <QScreen>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QWidget>
 
 #include <algorithm>
 #include <cmath>
+#include <cerrno>
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/syscall.h>
 #include <cstring>
 #include <memory>
 #include <utility>
@@ -395,9 +400,6 @@ bool isTrustedRecordingOutputPath(const QString& path, const hyprcapture::Captur
     const QFileInfo info(path);
     if (path.isEmpty() || !info.isAbsolute() || info.fileName().isEmpty() || info.fileName() == QLatin1String(".") || info.fileName() == QLatin1String(".."))
         return false;
-    if (info.exists())
-        return false;
-
     const QString recordRoot = QString::fromStdString(hyprcapture::expandUserPath(defaults.recordSaveDir).string());
     if (!trustedDirectory(recordRoot))
         return false;
@@ -408,10 +410,21 @@ bool isTrustedRecordingOutputPath(const QString& path, const hyprcapture::Captur
         (parentCanonical == rootCanonical || parentCanonical.startsWith(rootCanonical + QLatin1Char('/')));
 }
 
-void setOwnerOnlyPermissions(const QString& path) {
-    const QByteArray native = QFile::encodeName(path);
-    if (!native.isEmpty())
-        chmod(native.constData(), 0600);
+QString publishApng(const QString& staging, const QString& requested) {
+    const QByteArray source = QFile::encodeName(staging);
+    if (chmod(source.constData(), 0600) != 0) return {};
+    const QFileInfo target(requested);
+    for (int attempt = 0; attempt < 1000; ++attempt) {
+        const QString path = attempt == 0 ? requested : target.dir().filePath(
+            QStringLiteral("%1-%2.%3").arg(target.completeBaseName()).arg(attempt).arg(target.suffix()));
+        const QByteArray dest = QFile::encodeName(path);
+        int status = syscall(SYS_renameat2, AT_FDCWD, source.constData(), AT_FDCWD, dest.constData(), RENAME_NOREPLACE);
+        if (status < 0 && (errno == ENOSYS || errno == EINVAL || errno == EOPNOTSUPP))
+            status = link(source.constData(), dest.constData());
+        if (status == 0) return path;
+        if (errno != EEXIST) break;
+    }
+    return {};
 }
 
 QPixmap recordingThumbnailPixmap(bool showPlayButton, const hyprcapture::CaptureDefaults &defaults) {
@@ -480,6 +493,11 @@ class ResultThumbnailCollection {
     void show() {
         for (const auto& thumbnail : m_thumbnails)
             thumbnail->show();
+    }
+
+    void setOutputPath(const QString& path) {
+        for (const auto& thumbnail : m_thumbnails)
+            thumbnail->setOutputPath(path);
     }
 
     void setImagePixmap(const QPixmap& pixmap) {
@@ -628,7 +646,7 @@ int showRecordingResult(const hyprcapture::CaptureDefaults& defaults, const QStr
         restoreClipboardPath = hyprcapture::ui::saveClipboardSnapshot();
 
     if (defaults.clipboard)
-        hyprcapture::ui::copyFileUrlToClipboard(canonicalPath);
+        hyprcapture::ui::copyFileUrlToClipboard(canonicalPath, restoreClipboardPath);
 
     if (!defaults.showThumbnail) {
         hyprcapture::ui::discardClipboardSnapshot(restoreClipboardPath);
@@ -657,6 +675,7 @@ void reportTranscodeFailure(const hyprcapture::CaptureDefaults& defaults, const 
 }
 
 struct TranscodeState {
+    std::unique_ptr<QTemporaryDir> staging;
     QProcess* process = nullptr;
     std::unique_ptr<ResultThumbnailCollection> thumbnails;
     QByteArray stdoutBuffer;
@@ -718,6 +737,12 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
     auto state = std::make_shared<TranscodeState>();
     state->inputPath = canonicalInput;
     state->outputPath = cleanOutput;
+    state->staging = std::make_unique<QTemporaryDir>(QFileInfo(cleanOutput).dir().filePath(QStringLiteral(".hyprcapture-apng-XXXXXX")));
+    if (!state->staging->isValid()) {
+        reportTranscodeFailure(defaults, canonicalInput, QStringLiteral("could not create a private transcode directory"));
+        return 1;
+    }
+    const auto stagingOutput = state->staging->filePath(QStringLiteral("output.apng"));
     state->defaults = defaults;
     state->durationMs = std::max(1, durationMs);
 
@@ -754,7 +779,7 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
                                   QStringLiteral("0"),
                                   QStringLiteral("-r"),
                                   QString::number(APNG_TRANSCODE_FPS),
-                                  cleanOutput});
+                                  stagingOutput});
     state->process->setProcessEnvironment(hyprcapture::ui::trustedProcessEnvironment());
     state->process->setProcessChannelMode(QProcess::SeparateChannels);
 
@@ -767,17 +792,20 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
         if (state->stderrBuffer.size() > maxErrorBytes)
             state->stderrBuffer = state->stderrBuffer.right(maxErrorBytes);
     });
-    QObject::connect(state->process, &QProcess::finished, qApp, [state](int exitCode, QProcess::ExitStatus exitStatus) {
+    QObject::connect(state->process, &QProcess::finished, qApp, [state, stagingOutput](int exitCode, QProcess::ExitStatus exitStatus) {
         updateTranscodeProgress(state);
-        const QFileInfo output(state->outputPath);
-        const bool success = exitStatus == QProcess::NormalExit && exitCode == 0 && output.isFile() && output.size() > 0;
+        const QFileInfo output(stagingOutput);
+        const bool encoded = exitStatus == QProcess::NormalExit && exitCode == 0 && output.isFile() && output.size() > 0;
+        const auto published = encoded ? publishApng(stagingOutput, state->outputPath) : QString{};
+        state->staging.reset();
 
-        if (success) {
+        if (!published.isEmpty()) {
+            state->outputPath = published;
             QFile::remove(state->inputPath);
-            setOwnerOnlyPermissions(state->outputPath);
             if (state->defaults.clipboard)
-                hyprcapture::ui::copyFileUrlToClipboard(state->outputPath);
+                hyprcapture::ui::copyFileUrlToClipboard(state->outputPath, state->restoreClipboardPath);
             if (state->thumbnails) {
+                state->thumbnails->setOutputPath(published);
                 state->thumbnails->setTranscodeProgress(1.0);
                 loadRecordingFirstFrame(state->outputPath, qApp, state->defaults, [state](const QPixmap &frame) {
                     state->thumbnails->setImagePixmap(frame.isNull() ? recordingThumbnailPixmap(true, state->defaults) : frame);
@@ -789,8 +817,8 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
             return;
         }
 
-        QFile::remove(state->outputPath);
-        reportTranscodeFailure(state->defaults, state->inputPath, QStringLiteral("ffmpeg did not produce a complete output"));
+        reportTranscodeFailure(state->defaults, state->inputPath, encoded ? QStringLiteral("could not publish the converted recording")
+                                                                             : QStringLiteral("ffmpeg did not produce a complete output"));
         if (state->thumbnails) {
             state->thumbnails->finishTranscodeProgress(false, state->defaults.thumbnailTimeoutMs > 0 ? static_cast<int>(state->defaults.thumbnailTimeoutMs) : 5000);
         } else {
@@ -801,7 +829,7 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
 
     state->process->start();
     if (!state->process->waitForStarted(1000)) {
-        QFile::remove(cleanOutput);
+        state->staging.reset();
         reportTranscodeFailure(defaults, canonicalInput, state->process->errorString());
         hyprcapture::ui::discardClipboardSnapshot(state->restoreClipboardPath);
         if (state->thumbnails)
@@ -1204,8 +1232,8 @@ int main(int argc, char** argv) {
     hyprcapture::ui::traceTiming(QStringLiteral("ui.session_loaded"));
 
     const bool quick = parser.isSet("quick");
-    CaptureOverlay overlay(defaults, quick, parser.isSet("record"), parser.isSet("record-active"), sessionJson);
-    if (shotCancelled()) return 0;
+    CaptureOverlay overlay(defaults, quick, parser.isSet("record"), parser.isSet("record-active"), sessionJson, nullptr, &sessionLock);
+    if (shotCancelled() || sessionLock.cancelled()) return 0;
     const auto     overlayScope = overlay.overlayScope();
 
     std::vector<std::unique_ptr<CaptureOverlay>> extraOverlays;

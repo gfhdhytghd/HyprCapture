@@ -31,10 +31,10 @@ private:
     std::vector<std::string> m_environment;
     int m_input = -1, m_reader = -1, m_writer = -1;
     std::int64_t m_firstFrameUs = 0;
-    std::thread m_worker;
+    std::jthread m_worker;
     std::mutex m_mutex;
     std::condition_variable m_cv;
-    bool m_finalize = false, m_abandon = false, m_stopped = false, m_reportedExit = false, m_ready = false;
-    std::atomic_bool m_captureExited = false, m_finished = false, m_success = false;
+    bool m_finalize = false, m_abandon = false, m_reportedExit = false, m_ready = false;
+    std::atomic_bool m_stopped = false, m_captureExited = false, m_finished = false, m_success = false;
 };
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "shared/protocol.hpp"
 #include <vector>
 
 namespace hyprcapture {
@@ -14,6 +15,9 @@ struct RgbaFrame {
 struct RgbaCrop {
     int x = 0, y = 0, width = 0, height = 0;
 };
+
+// Round both edges on the same half-open pixel grid.
+RgbaCrop roundedRgbaCrop(const Rect& part, const Rect& origin, double scale);
 
 // Map a logical, top-down crop into the physical framebuffer before readback.
 RgbaCrop logicalRgbaCropToFramebuffer(RgbaCrop crop, int framebufferWidth, int framebufferHeight, int transform);

@@ -1430,13 +1430,14 @@ GLuint framebufferId(CFramebuffer& framebuffer) {
 SP<CFramebuffer> resolveSdrFramebuffer(CFramebuffer& source, const PHLMONITOR& monitor);
 
 RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int cropTopY, int cropWidth, int cropHeight, bool directGlY = false, bool asyncPbo = false,
-                                      std::int64_t captureUs = 0, std::optional<RecordingCursorImage> cursorImage = {}) {
+                                      std::int64_t captureUs = 0, std::optional<RecordingCursorImage> cursorImage = {}, bool strict = false) {
     const int framebufferWidth = positiveRoundedIntFromDouble(framebuffer.m_size.x);
     const int framebufferHeight = positiveRoundedIntFromDouble(framebuffer.m_size.y);
     RgbaReadbackRegion region;
     if (!prepareRgbaReadbackRegion(framebufferWidth, framebufferHeight, cropX, cropTopY, cropWidth, cropHeight, region))
         return {};
 
+    if (strict && (region.srcWidth <= 0 || region.srcHeight <= 0)) return {};
     if (!captureUs) captureUs = audio::monotonicUs();
     RgbaReadback readback;
     readback.captureMonotonicUs = captureUs;
@@ -1477,6 +1478,7 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
             const int readY = directGlY ? region.srcTopY : framebufferHeight - region.srcTopY - region.srcHeight;
             glReadPixels(region.srcX, readY, region.srcWidth, region.srcHeight, GL_RGBA, GL_HALF_FLOAT, canReadDirectly ? readback.linear.data() : source.data());
             glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+            if (strict && glGetError() != GL_NO_ERROR) return {};
             if (!canReadDirectly) for (int y = 0; y < region.srcHeight; ++y) {
                 const auto* src = source.data() + std::size_t(y) * region.srcWidth * 4;
                 auto* dst = readback.linear.data() + (std::size_t(region.dstY + y) * region.outputWidth + region.dstX) * 4;
@@ -1519,6 +1521,7 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
             glReadPixels(region.srcX, readY, region.srcWidth, region.srcHeight, GL_RGBA, GL_UNSIGNED_BYTE, target);
         }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, previousReadFramebuffer);
+        if (strict && glGetError() != GL_NO_ERROR) return {};
 
         if (!canReadDirectly) {
             for (int y = 0; y < region.srcHeight; ++y) {
@@ -1707,6 +1710,7 @@ RenderTextureWithBlurInternalFn  g_renderTextureWithBlurInternalOriginal = nullp
 CFunctionHook*                   g_realBackgroundRenderTextureInternalHook = nullptr;
 CFunctionHook*                   g_realBackgroundRenderTextureWithBlurInternalHook = nullptr;
 std::optional<RealBackgroundRecordingCache> g_realBackgroundRecordingCache;
+std::vector<std::pair<PHLMONITORREF, SP<CFramebuffer>>> g_regionRecordingFramebuffers;
 
 PHLWINDOW currentRenderWindow(Render::CRenderContext& ctx) {
     if (!g_pHyprOpenGL)
@@ -2307,7 +2311,7 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
                                    int cropWidth,
                                    int cropHeight,
                                    ArtifactBudget* budget = nullptr, SP<CFramebuffer>* persistent = nullptr, bool skipReadback = false,
-                                   bool includeCursor = false) {
+                                   bool includeCursor = false, bool logicalCrop = false) {
     LinearMonitorScope linearMonitor(monitor);
     if (!monitor || !monitor->m_activeWorkspace || !g_pHyprRenderer || !g_pHyprOpenGL)
         return {};
@@ -2321,11 +2325,9 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
         return {};
 
     auto framebuffer = persistent ? *persistent : SP<CFramebuffer>{};
-    if(!framebuffer || framebuffer->m_size != Vector2D(width,height))
-        framebuffer = createFramebuffer("hyprcapture-monitor", width, height, monitor->m_output->state->state().drmFormat);
-    if(persistent) *persistent=framebuffer;
-    if (!framebuffer)
+    if (!ensureFramebuffer(framebuffer, "hyprcapture-monitor", width, height))
         return {};
+    if (persistent) *persistent = framebuffer;
 
     CaptureColorScope captureColor(monitor);
     const bool previousBlockFeedback = renderContext().m_blockSurfaceFeedback;
@@ -2369,7 +2371,8 @@ RgbaReadback renderMonitorReadback(const PHLMONITOR& monitor,
     restoreRendererState();
 
     if(skipReadback) return {};
-    auto readback = readPhysicalMonitorFramebufferRegion(*framebuffer, static_cast<int>(monitor->m_transform), cropX, cropTopY, cropWidth, cropHeight);
+    auto readback = logicalCrop ? readRgbaFramebufferRegion(*framebuffer, cropX, cropTopY, cropWidth, cropHeight, true, false, 0, {}, true)
+                               : readPhysicalMonitorFramebufferRegion(*framebuffer, static_cast<int>(monitor->m_transform), cropX, cropTopY, cropWidth, cropHeight);
     if (budget && !readback.pixels.empty() && !budget->consume(readback.linear.empty() ? readback.pixels.size() : readback.linear.size() * 2))
         return {};
     return readback;
@@ -3799,6 +3802,10 @@ std::optional<RecordingFrame> captureDesktopRegionRecordingFrame(const Rect& tar
     frame.rgba.assign(outputBytes, 0);
 
     const auto now = Time::steadyNow();
+    std::erase_if(g_regionRecordingFramebuffers, [&](const auto& entry) {
+        return std::ranges::find(intersecting, entry.first.lock()) == intersecting.end();
+    });
+    bool captured = false;
     for (const auto& monitor : intersecting) {
         const Rect monRect = monitorRect(monitor);
         const Rect logicalPart = intersection(targetGeometry, monRect);
@@ -3806,32 +3813,31 @@ std::optional<RecordingFrame> captureDesktopRegionRecordingFrame(const Rect& tar
             continue;
 
         const double monitorScale = monitor->m_scale <= 0.0 ? 1.0 : monitor->m_scale;
-        const int cropX = clampedIntFromDouble((logicalPart.x - monRect.x) * monitorScale);
-        const int cropY = clampedIntFromDouble((logicalPart.y - monRect.y) * monitorScale);
-        const int cropWidth = positiveRoundedIntFromDouble(logicalPart.width * monitorScale);
-        const int cropHeight = positiveRoundedIntFromDouble(logicalPart.height * monitorScale);
-        RgbaReadback readback;
-        const int    transform = std::clamp(static_cast<int>(monitor->m_transform), 0, 7);
-        if (transform == 0) {
-            readback = renderMonitorReadback(monitor, now, cropX, cropY, cropWidth, cropHeight, nullptr, nullptr, false, includeCursor);
-        } else {
-            const int monitorPixelWidth = positiveRoundedIntFromDouble(monitor->m_pixelSize.x);
-            const int monitorPixelHeight = positiveRoundedIntFromDouble(monitor->m_pixelSize.y);
-            readback = renderMonitorReadback(monitor, now, 0, 0, monitorPixelWidth, monitorPixelHeight, nullptr, nullptr, false, includeCursor);
-            readback = normalizeMonitorReadbackToLogicalOrientation(std::move(readback), transform);
-            readback = cropReadbackToBounds(readback, PixelBounds{.x = cropX, .y = cropY, .width = cropWidth, .height = cropHeight});
-        }
-        if (readback.pixels.empty())
+        const auto source = roundedRgbaCrop(logicalPart, monRect, monitorScale);
+        const auto dest = roundedRgbaCrop(logicalPart, targetGeometry, outputScale);
+        if (dest.width <= 0 || dest.height <= 0)
             continue;
 
-        const int dstX = clampedIntFromDouble((logicalPart.x - targetGeometry.x) * outputScale);
-        const int dstY = clampedIntFromDouble((logicalPart.y - targetGeometry.y) * outputScale);
-        const int dstWidth = positiveRoundedIntFromDouble(logicalPart.width * outputScale);
-        const int dstHeight = positiveRoundedIntFromDouble(logicalPart.height * outputScale);
+        auto cached = std::ranges::find_if(g_regionRecordingFramebuffers, [&](const auto& entry) { return entry.first.lock() == monitor; });
+        if (cached == g_regionRecordingFramebuffers.end()) {
+            g_regionRecordingFramebuffers.emplace_back(monitor, SP<CFramebuffer>{});
+            cached = std::prev(g_regionRecordingFramebuffers.end());
+        }
+        const auto readback = renderMonitorReadback(monitor, now, source.x, source.y, source.width, source.height,
+                                                    nullptr, &cached->second, false, includeCursor, true);
+        // Drop the whole frame on a failed intersecting output. A partial
+        // frame would replace that output with black for this sample.
+        if (readback.pixels.empty()) {
+            LOG(Log::WARN, "[HyprCapture] recording readback failed on {}", monitor->m_name);
+            return std::nullopt;
+        }
+
+        const auto [dstX, dstY, dstWidth, dstHeight] = dest;
         blitScaledRgba(readback, frame.rgba, frame.width, frame.height, dstX, dstY, dstWidth, dstHeight);
+        captured = true;
     }
 
-    if (frame.rgba.empty())
+    if (!captured)
         return std::nullopt;
     return frame;
 }
@@ -5006,6 +5012,7 @@ void resetRecordingCaptureState() {
     if (g_pHyprOpenGL)
         g_pHyprOpenGL->makeEGLCurrent();
     resetAsyncPboReadback(g_windowRecordingPboReadback);
+    g_regionRecordingFramebuffers.clear();
     g_realBackgroundRecordingCache.reset();
 }
 

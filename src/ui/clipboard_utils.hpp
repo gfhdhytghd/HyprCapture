@@ -33,9 +33,9 @@ bool saveClipboardSnapshotDataToPath(const ClipboardSnapshotData& snapshot, cons
 QString saveClipboardSnapshot();
 bool copyTextToClipboardDetached(const QString& text);
 bool copyImageToClipboard(const QImage& image);
-bool copyImageToClipboardDetached(const QImage& image);
-bool copyImageFileToClipboardDetached(const QString& path, const QString& mimeType = QStringLiteral("image/png"), bool removeAfterCopy = false);
-bool copyFileUrlToClipboard(const QString& path);
+bool copyImageFileToClipboardDetached(const QString& path, const QString& mimeType = QStringLiteral("image/png"), bool removeAfterCopy = false,
+                                      const QString& snapshotPath = {});
+bool copyFileUrlToClipboard(const QString& path, const QString& snapshotPath = {});
 bool copyPixmapToClipboard(const QPixmap& pixmap);
 void discardClipboardSnapshot(const QString& path);
 void restoreClipboardSnapshot(const QString& path);

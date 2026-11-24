@@ -87,6 +87,8 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-recording-pts-') as folder:
 with tempfile.TemporaryDirectory(prefix="hyprcapture-sdr-color-") as directory:
     output = str(Path(directory) / "color.mp4")
     raw = bytes([128, 64, 32, 255]) * 64 * 64
+    subprocess.run([fixture, '--blocked-pipe'], check=True, timeout=2)
+
     color_filter = run(fixture, '--sdr-filter').decode()
     subprocess.run(['ffmpeg', '-v', 'error', '-f', 'rawvideo', '-pixel_format', 'rgba',
                     '-video_size', '64x64', '-framerate', '1', '-i', 'pipe:0', '-frames:v', '1',

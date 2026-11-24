@@ -853,6 +853,11 @@ void ResultThumbnail::deleteAndClose() {
     close();
 }
 
+void ResultThumbnail::setOutputPath(const QString& path) {
+    m_path = path;
+    m_deleteButton->setVisible(canDeleteThumbnailPath(m_path, m_deleteRoot));
+}
+
 void ResultThumbnail::restoreClipboard() const {
     hyprcapture::ui::restoreClipboardSnapshot(m_restoreClipboardPath);
 }

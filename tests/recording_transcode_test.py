@@ -101,6 +101,26 @@ with SessionLockFixture() as lock, tempfile.TemporaryDirectory(prefix='hc-transc
     assert output.is_file() and output.stat().st_size > 0
     subprocess.run([ffmpeg, '-v', 'error', '-i', str(output), '-f', 'null', '-'], check=True)
 
+    # A pre-existing file and a competing conversion both keep their own output.
+    saved = output.read_bytes()
+    source.write_bytes(original)
+    second = root / 'second.mkv'
+    second.write_bytes(original)
+    second.chmod(0o600)
+    args2 = list(args)
+    args2[args2.index('--recording-transcode-input') + 1] = str(second)
+    with subprocess.Popen(args, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) as first_helper, \
+         subprocess.Popen(args2, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) as second_helper:
+        for child in (first_helper, second_helper):
+            _, stderr = child.communicate(timeout=15)
+            assert child.returncode == 0, stderr
+    assert output.read_bytes() == saved
+    assert not source.exists() and not second.exists()
+    for n in (1, 2):
+        path = root / f'output-{n}.apng'
+        subprocess.run([ffmpeg, '-v', 'error', '-i', str(path), '-f', 'null', '-'], check=True)
+    assert not list(root.glob('.hyprcapture-apng-*'))
+
 # The compositor branch cannot be invoked without loading a live plugin.
 # Guard its recovery contract alongside the real helper integration coverage.
 recording = (Path(__file__).resolve().parents[1] / 'src/plugin/recording.cpp').read_text()

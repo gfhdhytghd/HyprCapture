@@ -63,7 +63,7 @@ void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
                 const QPolygonF unit{QPointF(0,0), QPointF(1,0), QPointF(1,1), QPointF(0,1)};
                 if (!QTransform::quadToQuad(unit, reading, transform)) continue;
             }
-            Run run{begin, int(text.size()), rowIndex, area, transform, {}};
+            Run run{begin, int(text.size()), rowIndex, area, transform, {}, {}};
             std::vector<std::pair<int, double>> boundaries{{0, 0}};
             QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, value);
             double total = 0;
@@ -119,6 +119,9 @@ void LiveTextLayout::setResults(const std::vector<OcrResult>& results) {
                     for (const auto& span : spans) {
                         distribute(cursor, span.first, previous, span.left);
                         distribute(span.first, span.last, span.left, span.right);
+                        if (span.left < span.right)
+                            run.words.push_back({begin + boundaries[span.first].first, begin + boundaries[span.last].first,
+                                                 span.left, span.right});
                         cursor = span.last; previous = span.right;
                     }
                     distribute(cursor, intervals.size(), previous, 1);
@@ -180,20 +183,31 @@ int LiveTextLayout::hit(QPointF point, double tolerance, bool nearest) const {
 bool LiveTextLayout::contains(QPointF point) const {
     return std::ranges::any_of(runs, [&](const auto& run) { return run.area.contains(point); });
 }
-std::pair<int,int> LiveTextLayout::wordAt(int position) const {
-    if (text.isEmpty()) return {0, 0};
-    position = std::clamp(position, 0, int(text.size()) - 1);
-    if (!text[position].isLetterOrNumber() && position && text[position - 1].isLetterOrNumber()) --position;
-    int begin = position, end = position + 1;
-    if (text[position].isLetterOrNumber()) {
-        while (begin && text[begin - 1].isLetterOrNumber()) --begin;
-        while (end < text.size() && text[end].isLetterOrNumber()) ++end;
+std::pair<int,int> LiveTextLayout::wordAt(QPointF point) const {
+    for (const auto& run : runs) {
+        if (!run.area.contains(point)) continue;
+        const double x = run.fromUnit.inverted().map(point).x();
+        for (const auto& word : run.words)
+            if (x >= word.x0 && x < word.x1) return {word.begin, word.end};
+
+        for (const auto& glyph : run.glyphs) {
+            if (x < glyph.x0 || x >= glyph.x1) continue;
+            // Use the glyph under the pointer rather than the nearest caret,
+            // which can sit on the far side of a word boundary.
+            const QString value = text.mid(run.begin, run.end - run.begin);
+            QTextBoundaryFinder finder(QTextBoundaryFinder::Word, value);
+            finder.setPosition(glyph.begin - run.begin);
+            if (!finder.isAtBoundary()) finder.toPreviousBoundary();
+            const int start = finder.position();
+            const auto reasons = finder.boundaryReasons();
+            const int end = finder.toNextBoundary();
+            if (reasons.testFlag(QTextBoundaryFinder::StartOfItem) && end >= 0)
+                return {run.begin + start, run.begin + end};
+            return {glyph.begin, glyph.end};
+        }
+        break;
     }
-    // Do not split surrogate pairs or combining character clusters.
-    QTextBoundaryFinder finder(QTextBoundaryFinder::Grapheme, text);
-    finder.setPosition(begin); if (!finder.isAtBoundary()) begin = finder.toPreviousBoundary();
-    finder.setPosition(end); if (!finder.isAtBoundary()) end = finder.toNextBoundary();
-    return {begin, end};
+    return {-1, -1};
 }
 std::pair<int,int> LiveTextLayout::lineAt(int position) const {
     int row = -1;

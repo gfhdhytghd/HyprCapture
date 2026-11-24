@@ -68,6 +68,19 @@ void unpremultiplyLutMatchesLegacyFormulaForEveryBytePair() {
     }
 }
 
+void fractionalRecordingCropsShareTheirEdges() {
+    using hyprcapture::Rect;
+    using hyprcapture::roundedRgbaCrop;
+    const Rect desktop{-1366, -768, 2902, 864};
+    const auto left = roundedRgbaCrop({-1366, -768, 1366, 768}, desktop, 1.25);
+    const auto right = roundedRgbaCrop({0, -768, 1536, 864}, desktop, 1.25);
+    require(left.x == 0 && left.x + left.width == right.x && right.x == 1708,
+            "1366 logical pixels at 1.25x share one seam");
+    const auto top = roundedRgbaCrop({0, -768, 1536, 2}, desktop, 1.25);
+    const auto bottom = roundedRgbaCrop({0, -766, 1536, 2}, desktop, 1.25);
+    require(top.y + top.height == bottom.y && bottom.y + bottom.height == 5, "vertical edges use the same grid");
+}
+
 void logicalOffscreenReadbackPreservesPhysicalArtifacts() {
     const std::vector<int> inverses{0, 3, 2, 1, 4, 5, 6, 7};
     for (int pixelBytes : {4, 8}) {
@@ -167,6 +180,7 @@ int main() {
                 require(a.pixels[i+c]==b.pixels[i*2+c] && a.pixels[i+c]==b.pixels[i*2+c+4], "both half-float channel pairs preserve orientation");
     }
     unpremultiplyLutMatchesLegacyFormulaForEveryBytePair();
+    fractionalRecordingCropsShareTheirEdges();
     logicalOffscreenReadbackPreservesPhysicalArtifacts();
 
     std::cout << "rgba transform tests passed\n";

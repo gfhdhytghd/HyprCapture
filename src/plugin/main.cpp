@@ -784,7 +784,7 @@ APICALL EXPORT void PLUGIN_EXIT() {
     g_timingTickListener.reset();
     g_configReloadListeners.reset();
     hyprcapture::shutdownSessionLock();
-    hyprcapture::cancelCaptureHelpers();
+    hyprcapture::shutdownCaptureHelpers();
     unregisterLuaFunctions();
     g_registrationManager.reset();
     hyprcapture::shutdownRecording();

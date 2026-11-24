@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <functional>
 #include <spawn.h>
 #include <string>
 #include <sys/types.h>
@@ -21,6 +22,8 @@ struct SupervisedProcess {
 SupervisedProcess spawnSupervisedProcess(const std::string& shell, const std::vector<std::string>& args,
                                         char* const envp[], posix_spawn_file_actions_t& actions, bool ownProcessGroup = false);
 // Consumes statusFd and reaps the supervisor when the caller permits zombies.
-std::optional<int> waitSupervisedProcess(SupervisedProcess& process);
+// For an owned process group, terminate() can end the wait and kill the
+// group. The predicate is checked at least every 50 ms while the child lives.
+std::optional<int> waitSupervisedProcess(SupervisedProcess& process, const std::function<bool()>& terminate = {});
 
 } // namespace hyprcapture

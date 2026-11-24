@@ -12,6 +12,8 @@
 #include "shared/trusted_path.hpp"
 
 #include <hyprland/src/managers/input/InputManager.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopManager.hpp>
+#include <hyprland/src/managers/eventLoop/EventLoopTimer.hpp>
 #include <hyprland/src/state/MonitorState.hpp>
 
 #include <algorithm>
@@ -38,16 +40,41 @@ extern char** environ;
 
 namespace hyprcapture {
 namespace {
-std::vector<std::unique_ptr<SessionStartupChannel>> captureControlChannels;
+struct CaptureControl {
+    std::unique_ptr<SessionStartupChannel> channel;
+    CaptureSession session;
+};
+std::vector<CaptureControl> captureControlChannels;
+SP<CEventLoopTimer> captureCleanupTimer;
 std::string activeShotSocket;
 SessionStartupChannel* activeShotChannel = nullptr;
 
 void pruneCaptureChannels() {
-    std::erase_if(captureControlChannels, [](const auto& channel) {
-        if (!channel->peerClosed()) return false;
-        if (channel.get() == activeShotChannel) { activeShotChannel = nullptr; activeShotSocket.clear(); }
+    std::erase_if(captureControlChannels, [](const auto& capture) {
+        if (!capture.channel->peerClosed()) return false;
+        if (capture.channel.get() == activeShotChannel) { activeShotChannel = nullptr; activeShotSocket.clear(); }
+        cleanupCompositorArtifacts(capture.session);
         return true;
     });
+}
+
+void stopCaptureCleanupTimer() {
+    if (captureCleanupTimer && g_pEventLoopManager)
+        g_pEventLoopManager->removeTimer(captureCleanupTimer);
+    captureCleanupTimer.reset();
+}
+
+void scheduleCaptureCleanup() {
+    if (captureCleanupTimer || !g_pEventLoopManager) return;
+    constexpr auto interval = std::chrono::seconds(1);
+    captureCleanupTimer = makeShared<CEventLoopTimer>(interval, [=](SP<CEventLoopTimer> self, void*) {
+        pruneCaptureChannels();
+        if (captureControlChannels.empty())
+            stopCaptureCleanupTimer();
+        else
+            self->updateTimeout(interval);
+    }, nullptr);
+    g_pEventLoopManager->addTimer(captureCleanupTimer);
 }
 
 constexpr int EXEC_FAILURE_PIPE_TIMEOUT_MS = 2000;
@@ -542,7 +569,8 @@ LaunchResult launchHelper(const LaunchRequest& request) {
         activeShotSocket = request.shotSocket;
         activeShotChannel = startup.get();
     }
-    captureControlChannels.push_back(std::move(startup));
+    captureControlChannels.push_back({std::move(startup), std::move(session)});
+    scheduleCaptureCleanup();
     return {.success = true};
 }
 
@@ -556,8 +584,18 @@ LaunchResult cancelShotHelper(const std::string& socket) {
 LaunchResult cancelCaptureHelpers() {
     pruneCaptureChannels();
     bool delivered = true;
-    for (const auto& channel : captureControlChannels) delivered = channel->cancel() && delivered;
+    for (const auto& channel : captureControlChannels) delivered = channel.channel->cancel() && delivered;
     return {.success = delivered, .error = delivered ? "" : "could not cancel capture helper"};
+}
+
+void shutdownCaptureHelpers() {
+    cancelCaptureHelpers();
+    stopCaptureCleanupTimer();
+    for (const auto& capture : captureControlChannels)
+        cleanupCompositorArtifacts(capture.session);
+    captureControlChannels.clear();
+    activeShotChannel = nullptr;
+    activeShotSocket.clear();
 }
 
 LaunchResult launchRecordingResultHelper(const CaptureDefaults& defaults, const std::string& outputPath, const std::string& pendingSocket) {

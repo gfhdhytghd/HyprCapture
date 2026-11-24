@@ -45,6 +45,7 @@ int main(int argc, char** argv) {
         require(channel.publish(path), "publish while child initializes");
         int status = 0;
         require(waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0, "child receives startup path after exec");
+        require(channel.peerClosed(), "published capture can be reclaimed when the helper exits");
     }
     {
         SessionStartupChannel channel;

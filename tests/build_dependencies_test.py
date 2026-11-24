@@ -42,10 +42,12 @@ if(NOT TARGET PkgConfig::PULSE OR NOT TARGET PkgConfig::FFTW OR
   message(FATAL_ERROR "Dependency results were lost outside the checker")
 endif()
 """)
+    use_system_opencv = "-DHYPRCAPTURE_USE_SYSTEM_OPENCV=ON"
     cases = [
-        ([], []),
-        (["-DCMAKE_DISABLE_FIND_PACKAGE_OpenCV=TRUE"], ["OpenCV core/imgproc", "--needed opencv"]),
-        (["-DCMAKE_DISABLE_FIND_PACKAGE_OpenCV=TRUE",
+        (["-DCMAKE_DISABLE_FIND_PACKAGE_OpenCV=TRUE"], []),  # The default builds its own OpenCV.
+        ([use_system_opencv], []),
+        ([use_system_opencv, "-DCMAKE_DISABLE_FIND_PACKAGE_OpenCV=TRUE"], ["OpenCV core/imgproc", "--needed opencv"]),
+        ([use_system_opencv, "-DCMAKE_DISABLE_FIND_PACKAGE_OpenCV=TRUE",
           "-DCMAKE_DISABLE_FIND_PACKAGE_LayerShellQt=TRUE"], ["LayerShellQt", "OpenCV core/imgproc", "--needed layer-shell-qt opencv"]),
         (["-DFIXTURE_MISSING_PKG=PIPEWIRE"], ["libpipewire-0.3 (pkg-config)", "--needed libpipewire"]),
         (["-DFIXTURE_MISSING_QT=Svg"], ["Qt6Svg", "--needed qt6-svg"]),
