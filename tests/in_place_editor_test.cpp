@@ -51,6 +51,7 @@
 #include <QJsonObject>
 #include "shared/hdr_color.hpp"
 #include <cstdio>
+#include <thread>
 #include <pwd.h>
 #include <unistd.h>
 
@@ -675,6 +676,154 @@ class InPlaceEditorTest final : public QObject {
             for (int i = 0; i < 6; ++i)
                 QCOMPARE(logical.pixelColor(i % logical.width(), i / logical.width()), QColor(expected[transform][i], 0, 0));
         }
+    }
+
+    void monitorTransformsPreserveLinearHighlightsAndAlpha() {
+        const int brightPositions[] = {1, 1, 0, 0, 0, 1, 1, 0};
+        QImage linear(2, 1, QImage::Format_RGBA16FPx4);
+        linear.setColorSpace(QColorSpace::SRgbLinear);
+        auto* pixels = reinterpret_cast<qfloat16*>(linear.bits());
+        for (int i = 0; i < 8; ++i) pixels[i] = qfloat16(0.f);
+        pixels[0] = qfloat16(2.5f);
+        pixels[3] = qfloat16(.5f);
+        pixels[4] = qfloat16(4.f);
+        pixels[7] = qfloat16(.75f);
+        for (int transform = 1; transform < 8; ++transform) {
+            hyprcapture::CaptureSession session;
+            session.id = "rotated-hdr-test";
+            hyprcapture::MonitorInfo monitor;
+            monitor.transform = transform;
+            monitor.logicalGeometry = {0, 0, transform % 2 ? 1. : 2., transform % 2 ? 2. : 1.};
+            monitor.artifactPath = writeArtifact(linear).toStdString();
+            monitor.artifactFormat = "rgba16f-linear-srgb";
+            monitor.artifactWidth = 2;
+            monitor.artifactHeight = 1;
+            monitor.hdrActive = true;
+            session.monitors.push_back(monitor);
+            CaptureOverlay overlay(session.defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(session)));
+            QCOMPARE(overlay.m_monitorArtifacts.size(), std::size_t(1));
+            const auto& hdr = overlay.m_monitorArtifacts.front().hdrImage;
+            QCOMPARE(hdr.format(), QImage::Format_RGBA16FPx4);
+            const auto get = [&](int position) {
+                const auto* row = reinterpret_cast<const qfloat16*>(hdr.constScanLine(position / hdr.width()));
+                return std::pair{float(row[4 * (position % hdr.width())]), float(row[4 * (position % hdr.width()) + 3])};
+            };
+            QCOMPARE(get(brightPositions[transform]), (std::pair{4.f, .75f}));
+            QCOMPARE(get(1 - brightPositions[transform]), (std::pair{2.5f, .5f}));
+        }
+    }
+
+    void mixedScaleDesktopAndPerMonitorExports() {
+        QTemporaryDir output;
+        QVERIFY(output.isValid());
+        hyprcapture::CaptureSession session;
+        session.id = "mixed-scale-desktop-test";
+        auto& defaults = session.defaults;
+        defaults.mode = hyprcapture::CaptureMode::Fullscreen;
+        defaults.fullscreenScope = hyprcapture::FullscreenScope::PerMonitor;
+        defaults.inPlaceEditToolbar = defaults.clipboard = defaults.showThumbnail = defaults.screenshotNotification = false;
+        defaults.save = true;
+        defaults.saveDir = output.path().toStdString();
+        defaults.filenameTemplate = "monitors.png";
+        session.cursorPosition = hyprcapture::Point{80, 30};
+        for (int n = 0; n < 2; ++n) {
+            const int scale = n + 1;
+            QImage pixels(64 * scale, 48 * scale, QImage::Format_RGBA8888);
+            pixels.fill(Qt::black);
+            QPainter painter(&pixels);
+            painter.fillRect(0, 24 * scale, pixels.width(), 4 * scale, Qt::red);
+            painter.end();
+            hyprcapture::MonitorInfo monitor;
+            monitor.name = "fixture-" + std::to_string(n);
+            monitor.logicalGeometry = {64. * n, 0, 64, 48};
+            monitor.scale = scale;
+            monitor.artifactPath = writeArtifact(pixels).toStdString();
+            monitor.artifactWidth = pixels.width();
+            monitor.artifactHeight = pixels.height();
+            session.monitors.push_back(monitor);
+        }
+        CaptureOverlay overlay(defaults, false, false, false, QString::fromStdString(hyprcapture::encodeSessionJson(session)));
+        const auto stitched = CaptureOverlay::renderDesktopSnapshot({0, 0, 128, 48}, false, overlay.m_monitorArtifacts, false, false);
+        QCOMPARE(stitched.size(), QSize(256, 96));
+        for (int y : {47, 48, 55, 56}) {
+            QCOMPARE(stitched.pixelColor(127, y), stitched.pixelColor(128, y));
+            QCOMPARE(stitched.pixelColor(127, y), QColor(y >= 48 && y < 56 ? Qt::red : Qt::black));
+        }
+        QCOMPARE(overlay.renderResultImage().size(), QSize(128, 96));
+        overlay.renderAndSaveCapture();
+        QTRY_VERIFY_WITH_TIMEOUT(!overlay.m_saveWorker, 3000);
+        QCOMPARE(QImage(output.filePath("monitors.png")).size(), QSize(128, 96));
+        QCOMPARE(QImage(output.filePath("monitors-1.png")).size(), QSize(64, 48));
+
+        const auto* screen = QGuiApplication::primaryScreen();
+        QVERIFY(screen);
+        overlay.m_desktopGeometry = screen->geometry();
+        const auto size = screen->geometry().size() * screen->devicePixelRatio();
+        overlay.m_desktopImage = QImage(size * 2, QImage::Format_RGBA8888);
+        overlay.m_desktopImage.fill(Qt::blue);
+        const auto fallback = overlay.renderFallbackMonitor(screen);
+        QCOMPARE(fallback.size(), size);
+        QCOMPARE(fallback.pixelColor(0, 0), QColor(Qt::blue));
+    }
+
+    void lockedFallbackDiscardsPixelsWithoutWaitingForGrim() {
+        const QString executable = QDir::homePath() + "/.nix-profile/bin/grim";
+        const QString marker = QDir::homePath() + "/grim-started";
+        QFile script(executable);
+        QVERIFY(script.open(QIODevice::WriteOnly | QIODevice::NewOnly));
+        script.write("#!/bin/sh\nprintf x > '" + marker.toUtf8() + "'\nexec sleep 5\n");
+        script.close();
+        QVERIFY(script.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+        auto cleanup = qScopeGuard([&] { QFile::remove(executable); QFile::remove(marker); });
+        QCOMPARE(hyprcapture::ui::trustedSystemProgram("grim"), executable);
+        int sockets[2];
+        QCOMPARE(socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets), 0);
+        hyprcapture::ui::SessionLockGuard lock(sockets[1]);
+        auto closePeer = qScopeGuard([&] { close(sockets[0]); });
+        std::jthread locker([&] {
+            QElapsedTimer deadline;
+            deadline.start();
+            while (deadline.elapsed() < 1000 && !QFile::exists(marker))
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            send(sockets[0], "locked", 6, MSG_NOSIGNAL);
+        });
+        QElapsedTimer timer;
+        timer.start();
+        CaptureOverlay overlay({}, false, false, false, {}, nullptr, &lock);
+        QVERIFY(QFile::exists(marker));
+        QVERIFY(timer.elapsed() < 1000);
+        QVERIFY(lock.cancelled());
+        QVERIFY(overlay.m_desktopImage.isNull());
+        QCoreApplication::removePostedEvents(qApp, QEvent::Quit);
+    }
+
+    void abandonedSaveDoesNotPublishClipboard() {
+        const auto clipboardPath = qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD");
+        QFile::remove(clipboardPath);
+        hyprcapture::CaptureDefaults defaults;
+        defaults.save = defaults.showThumbnail = false;
+        defaults.clipboard = true;
+        auto overlay = std::make_unique<CaptureOverlay>(defaults, false, false, false, sessionJson(defaults, false));
+        const auto image = overlay->m_monitorArtifacts.front().image;
+        overlay->saveImage(image, {}, {}, {}, {}, false, defaults.mode, {});
+        overlay->abortForSessionLock();
+        overlay.reset(); // Joins the save worker and invalidates its queued completion.
+        QCoreApplication::processEvents();
+        QVERIFY(!QFile::exists(clipboardPath));
+    }
+
+    void obsoleteThumbnailDoesNotRestoreClipboard() {
+        auto* clipboard = QApplication::clipboard();
+        const auto clipboardPath = qEnvironmentVariable("HYPRCAPTURE_TEST_CLIPBOARD");
+        QFile::remove(clipboardPath);
+        clipboard->setText(QStringLiteral("before capture"));
+        const auto snapshot = hyprcapture::ui::saveClipboardSnapshot();
+        QVERIFY(!snapshot.isEmpty());
+        clipboard->setText(QStringLiteral("after capture"));
+        hyprcapture::ui::restoreClipboardSnapshot(snapshot);
+        QCOMPARE(clipboard->text(), QStringLiteral("after capture"));
+        QVERIFY(!QFile::exists(clipboardPath));
+        QVERIFY(!QFile::exists(snapshot));
     }
 
     void hdrBaseDoesNotBlockEditorAndDiscardsStaleWork() {

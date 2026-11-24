@@ -29,6 +29,7 @@ class ResultThumbnail final : public QWidget {
     void setSaveCapture(std::shared_ptr<hyprcapture::ui::CaptureSave> capture);
     void refreshSaveActions();
     void setHdrImage(const QImage& image);
+    void setOutputPath(const QString& path);
     void setDragPath(const QString& path) { m_dragPath = path; }
     void setImagePixmap(const QPixmap& pixmap);
     void setTranscodeProgress(double progress);

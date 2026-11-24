@@ -4,6 +4,7 @@
 #include <charconv>
 #include <csignal>
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -85,7 +86,26 @@ SupervisedProcess spawnSupervisedProcess(const std::string& shell, const std::ve
     return {.pid = pid, .statusFd = pipeFds[0]};
 }
 
-std::optional<int> waitSupervisedProcess(SupervisedProcess& process) {
+std::optional<int> waitSupervisedProcess(SupervisedProcess& process, const std::function<bool()>& terminate) {
+    if (terminate && process.statusFd >= 0 && process.pid > 0) {
+        // The supervisor closes its private pipe as it exits. Wait for HUP
+        // even if its short status packet is already readable.
+        pollfd descriptor{process.statusFd, 0, 0};
+        for (;;) {
+            const int ready = poll(&descriptor, 1, 50);
+            if (ready > 0) break;
+            if ((ready < 0 && errno != EINTR) || terminate()) {
+                kill(-process.pid, SIGKILL);
+                close(process.statusFd);
+                process.statusFd = -1;
+                // Hyprland uses SA_NOCLDWAIT. Never wait on a killed child
+                // that might still be stuck in a driver or the kernel.
+                waitpid(process.pid, nullptr, WNOHANG);
+                process.pid = -1;
+                return std::nullopt;
+            }
+        }
+    }
     std::optional<int> result;
     if (process.statusFd >= 0) {
         char buffer[5]{};

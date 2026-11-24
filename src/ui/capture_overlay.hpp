@@ -17,6 +17,7 @@
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <span>
 #include <vector>
 
 class QButtonGroup;
@@ -38,6 +39,7 @@ class AudioMeter;
 class QSlider;
 class QProcess;
 class QThreadPool;
+class QThread;
 class AnnotationEditor;
 
 namespace hyprcapture::ui {
@@ -52,7 +54,8 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     Q_PROPERTY(double overlayOpacity READ overlayOpacity WRITE setOverlayOpacity)
 
   public:
-    explicit CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick, bool record, bool recordActive, QString sessionJson, QWidget* parent = nullptr);
+    explicit CaptureOverlay(hyprcapture::CaptureDefaults defaults, bool quick, bool record, bool recordActive, QString sessionJson, QWidget* parent = nullptr,
+                            hyprcapture::ui::SessionLockGuard* lockGuard = nullptr);
     CaptureOverlay(const CaptureOverlay& source, const QRect& overlayGeometry, bool active, QWidget* parent = nullptr);
     ~CaptureOverlay() override;
     void abortForSessionLock() override;
@@ -159,7 +162,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     void initializeOverlay(const QRect& overlayGeometry);
     bool requestActivation();
     void parseSessionJson(const QString& json);
-    void captureScreensBeforeOverlay();
+    void captureScreensBeforeOverlay(hyprcapture::ui::SessionLockGuard* lockGuard);
     void ensureDesktopImage();
     QRect preferredOverlayLogicalGeometry() const;
     QScreen* screenForOverlayGeometry(const QRect& logicalGeometry) const;
@@ -202,11 +205,12 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
                    hyprcapture::CaptureMode mode,
                    hyprcapture::FilenameMetadata filenameMetadata);
     QImage renderResultImage(bool hdr = false);
+    QImage renderFallbackMonitor(const QScreen* screen) const;
     QImage renderDesktopRectAtDisplayResolution(const QRect& globalRect, bool hdr = false) const;
     void paintDesktop(QPainter& painter, const QRect& target) const;
     static void paintCursorSnapshot(QPainter& painter, const QRect& outputRect, const QRect& globalRect, bool hdr,
                                     const std::vector<MonitorArtifact>& monitors, bool includeCursor);
-    static QImage renderDesktopSnapshot(const QRect& globalRect, bool hdr, const std::vector<MonitorArtifact>& monitors,
+    static QImage renderDesktopSnapshot(const QRect& globalRect, bool hdr, std::span<const MonitorArtifact> monitors,
                                         bool hasHdrScreen, bool includeCursor);
     std::function<QImage()> windowResultRenderer(const WindowArtifact& window, bool hdr) const;
     std::function<QImage()> hdrResultRenderer() const;
@@ -224,6 +228,8 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     QRect normalizedSelection() const;
     QRect captureRectForMode() const;
     QRect fullscreenCaptureRect() const;
+    bool perMonitorScreenshot() const;
+    const MonitorArtifact* fullscreenMonitorArtifact(const QRect& geometry) const;
     hyprcapture::ui::ScreenCornerRadii fullscreenPreviewCornerRadii(const QRect& localRect) const;
     QRect regionCaptureBounds() const;
     QRect localScreenRectAt(const QPoint& localPos) const;
@@ -313,6 +319,8 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     bool                      m_pendingConfirm = false;
     ConfirmDragMode           m_confirmDragMode = ConfirmDragMode::None;
     bool                      m_dragging = false;
+    std::unique_ptr<QThread>  m_saveWorker;
+    bool                      m_captureAborted = false;
     bool                      m_finishing = false;
     bool                      m_editing = false;
     AnnotationEditor*         m_editor = nullptr;
@@ -332,6 +340,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     QPoint                    m_dragEnd;
     QPoint                    m_confirmDragStart;
     QRect                     m_confirmDragStartSelection;
+    QRect                     m_perMonitorGeometry;
     QPoint                    m_cursorLogicalPosition;
     bool                      m_hasCursorLogicalPosition = false;
     bool                      m_recordFormatAuto = true;

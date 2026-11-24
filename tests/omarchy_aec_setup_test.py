@@ -19,6 +19,10 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-optional-aec-') as folder:
     root = pathlib.Path(folder)
     stage = root / 'stage'
     stage.mkdir()
+    build = root / 'build'
+    build.mkdir()
+    license_file = build / 'opencv-LICENSE'
+    license_file.write_text('fixture OpenCV license\n')
     fakebin = root / 'bin'
     fakebin.mkdir()
     cmake = fakebin / 'cmake'
@@ -28,6 +32,7 @@ with tempfile.TemporaryDirectory(prefix='hyprcapture-optional-aec-') as folder:
                  '[[ ${#FILES[@]} == 4 && ${#TARGETS[@]} == 4 ]]', root)
     assert result.returncode == 0, result.stderr
     assert 'AEC components pending' in result.stderr
+    assert (stage / 'licenses/opencv-LICENSE').read_bytes() == license_file.read_bytes()
     assert (stage / 'hyprcapture-install-aec').exists()
     assert (stage / 'hyprcapture-aec-sources.json').read_bytes() == (repo / 'nix/aec-sources.json').read_bytes()
     assert (stage / 'hyprcapture-prepare-aec-sources.cmake').exists()

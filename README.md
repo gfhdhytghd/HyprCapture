@@ -672,7 +672,7 @@ remain subject to `window_background`; no margin is added around its content.
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `default_mode` | string | `region` | Default mode for `hl.plugin.hyprcapture.open()`, `open_editor()`, and `quick()`. Supports `region`, `fullscreen`, and `window`. |
-| `fullscreen_scope` | string | `all` | Fullscreen capture scope. Supports `all`, `current`, and `per-monitor`. |
+| `fullscreen_scope` | string | `all` | Fullscreen capture scope. `all` composes the desktop at a shared resolution. `current` captures the monitor under the cursor. For screenshots, `per-monitor` saves one image per monitor at its own resolution when saving is enabled. The clipboard, thumbnail, editor, and single-image CLI use the monitor under the cursor. Edits apply only to that monitor. |
 | `overlay_scope` | string | `fix` | Overlay monitor behavior. `fix` keeps it on the monitor where capture starts, `focus` moves it to the monitor under the pointer while it is open, and `all` shows it on every monitor. The legacy typo `forcus` is accepted as `focus`. |
 | `window_background` | string | `follow-system` | Background behind transparent window pixels. Supports `follow-system`, `white`, `black`, `real`, and `transparent`. |
 | `window_border` | string | `keep` | Window border policy. Supports `keep` and `remove`. |

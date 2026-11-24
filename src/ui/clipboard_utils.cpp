@@ -7,8 +7,10 @@
 #include <QClipboard>
 #include <QColor>
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -204,7 +206,71 @@ bool copyBytesWithWlCopy(const QByteArray& bytes, const QString& mimeType) {
     return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
 }
 
-bool copyFileWithWlCopyDetached(const QString& path, const QString& mimeType, bool removeAfterCopy) {
+bool writePrivateFile(const QString& path, const QByteArray& bytes);
+
+constexpr qint64 kMaxClipboardSelectionMarkerBytes = 4096;
+
+void saveClipboardSelection(const QString& snapshotPath, const QString& mimeType, const QByteArray& digest) {
+    if (!snapshotPath.isEmpty() && privateRuntimeFileExists(snapshotPath, kMaxClipboardSnapshotBytes))
+        writePrivateFile(snapshotPath + QStringLiteral(".selection"), mimeType.toUtf8() + '\n' + digest.toHex());
+}
+
+QByteArray currentClipboardDigest(const QString& mimeType) {
+    const QString wlPaste = trustedSystemProgramImpl(QStringLiteral("wl-paste"));
+    if (wlPaste.isEmpty()) {
+        const auto* clipboard = QGuiApplication::clipboard();
+        const auto* mime = clipboard ? clipboard->mimeData() : nullptr;
+        if (!mime || !mime->hasFormat(mimeType)) return {};
+        const auto bytes = mime->data(mimeType);
+        if (bytes.isEmpty() || bytes.size() > kMaxClipboardImageBytes) return {};
+        return QCryptographicHash::hash(bytes, QCryptographicHash::Sha256);
+    }
+
+    QProcess process;
+    process.setProgram(wlPaste);
+    process.setArguments({QStringLiteral("--no-newline"), QStringLiteral("--type"), mimeType});
+    process.setProcessEnvironment(trustedProcessEnvironment());
+    process.setStandardErrorFile(QProcess::nullDevice());
+    process.start();
+    if (!process.waitForStarted(1000)) return {};
+
+    QElapsedTimer deadline;
+    deadline.start();
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    qint64 size = 0;
+    for (;;) {
+        const QByteArray bytes = process.readAllStandardOutput();
+        size += bytes.size();
+        const auto remaining = 2500 - deadline.elapsed();
+        if (size > kMaxClipboardImageBytes || remaining <= 0) break;
+        hash.addData(bytes);
+        if (process.state() == QProcess::NotRunning) {
+            if (size > 0 && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0)
+                return hash.result();
+            return {};
+        }
+        process.waitForReadyRead(static_cast<int>(remaining));
+    }
+
+    process.kill();
+    process.waitForFinished(500);
+    return {};
+}
+
+bool clipboardMatchesSnapshotSelection(const QString& path) {
+    const QString selectionPath = path + QStringLiteral(".selection");
+    QFile file(selectionPath);
+    if (!privateRuntimeFileExists(selectionPath, kMaxClipboardSelectionMarkerBytes) || !file.open(QIODevice::ReadOnly))
+        return false;
+    const auto marker = file.read(kMaxClipboardSelectionMarkerBytes);
+    const auto separator = marker.indexOf('\n');
+    if (separator <= 0 || marker.size() - separator - 1 != 64) return false;
+    // Managers can re-offer the same bytes from a different Wayland data
+    // source. Compare the selection's MIME payload instead of the owner PID.
+    return currentClipboardDigest(QString::fromUtf8(marker.first(separator))).toHex() == marker.sliced(separator + 1);
+}
+
+bool copyFileWithWlCopyDetached(const QString& path, const QString& mimeType, bool removeAfterCopy, const QString& snapshotPath = {}) {
     if (path.isEmpty() || !QFileInfo::exists(path) || !savedFileWithinLimit(path, kMaxClipboardImageBytes))
         return false;
     if (removeAfterCopy && !pathIsInPrivateRuntimeRoot(path))
@@ -217,9 +283,21 @@ bool copyFileWithWlCopyDetached(const QString& path, const QString& mimeType, bo
     QProcess process;
     process.setProgram(program);
     process.setArguments({QStringLiteral("--type"), mimeType});
+    process.setWorkingDirectory(QStringLiteral("/"));
+    process.setStandardOutputFile(QProcess::nullDevice());
     process.setProcessEnvironment(trustedProcessEnvironment());
-    process.setStandardInputFile(path);
+    process.setStandardInputFile(QFileInfo(path).absoluteFilePath());
+
+    QByteArray digest;
+    if (!snapshotPath.isEmpty()) {
+        QFile file(path);
+        QCryptographicHash hash(QCryptographicHash::Sha256);
+        if (file.open(QIODevice::ReadOnly) && hash.addData(&file))
+            digest = hash.result();
+    }
     const bool started = process.startDetached();
+    if (started && !digest.isEmpty())
+        saveClipboardSelection(snapshotPath, mimeType, digest);
     if (started && removeAfterCopy)
         QFile::remove(path);
     return started;
@@ -580,25 +658,11 @@ bool copyImageToClipboard(const QImage& image) {
     return copyImageToQtClipboard(image);
 }
 
-bool copyImageToClipboardDetached(const QImage& image) {
-    if (image.isNull())
-        return false;
-
-    const QString path = runtimeFile("clipboard-copy", ".png");
-    if (savePng(image, path)) {
-        if (savedFileWithinLimit(path, kMaxClipboardImageBytes) && copyFileWithWlCopyDetached(path, QStringLiteral("image/png"), true))
-            return true;
-        QFile::remove(path);
-    }
-
-    return false;
+bool copyImageFileToClipboardDetached(const QString& path, const QString& mimeType, bool removeAfterCopy, const QString& snapshotPath) {
+    return copyFileWithWlCopyDetached(path, mimeType, removeAfterCopy, snapshotPath);
 }
 
-bool copyImageFileToClipboardDetached(const QString& path, const QString& mimeType, bool removeAfterCopy) {
-    return copyFileWithWlCopyDetached(path, mimeType, removeAfterCopy);
-}
-
-bool copyFileUrlToClipboard(const QString& path) {
+bool copyFileUrlToClipboard(const QString& path, const QString& snapshotPath) {
     const QFileInfo info(path);
     const QString canonical = info.canonicalFilePath();
     if (canonical.isEmpty() || !info.exists() || !info.isFile())
@@ -606,8 +670,17 @@ bool copyFileUrlToClipboard(const QString& path) {
 
     const QUrl url = QUrl::fromLocalFile(canonical);
     const QByteArray uriList = (url.toString() + QStringLiteral("\r\n")).toUtf8();
-    if (!uriList.isEmpty() && uriList.size() <= kMaxClipboardUrlBytes && copyBytesWithWlCopy(uriList, QStringLiteral("text/uri-list")))
-        return true;
+    if (!uriList.isEmpty() && uriList.size() <= kMaxClipboardUrlBytes) {
+        if (snapshotPath.isEmpty()) {
+            if (copyBytesWithWlCopy(uriList, QStringLiteral("text/uri-list"))) return true;
+        } else {
+            const auto temp = runtimeFile("clipboard-url", ".txt");
+            if (writePrivateFile(temp, uriList)) {
+                if (copyFileWithWlCopyDetached(temp, QStringLiteral("text/uri-list"), true, snapshotPath)) return true;
+                QFile::remove(temp);
+            }
+        }
+    }
 
     auto* clipboard = QGuiApplication::clipboard();
     if (!clipboard)
@@ -615,6 +688,9 @@ bool copyFileUrlToClipboard(const QString& path) {
 
     auto* mime = new QMimeData;
     mime->setUrls({url});
+    const auto mimeType = QStringLiteral("text/uri-list");
+    if (!snapshotPath.isEmpty())
+        saveClipboardSelection(snapshotPath, mimeType, QCryptographicHash::hash(mime->data(mimeType), QCryptographicHash::Sha256));
     clipboard->setMimeData(mime);
     return true;
 }
@@ -628,6 +704,8 @@ bool copyPixmapToClipboard(const QPixmap& pixmap) {
 void discardClipboardSnapshot(const QString& path) {
     if (path.isEmpty())
         return;
+    if (pathIsInPrivateRuntimeRoot(path))
+        QFile::remove(path + QStringLiteral(".selection"));
 
     QFile file(path);
     if (!privateRuntimeFileExists(path, kMaxClipboardSnapshotBytes) || !file.open(QIODevice::ReadOnly)) {
@@ -646,6 +724,11 @@ void discardClipboardSnapshot(const QString& path) {
 void restoreClipboardSnapshot(const QString& path) {
     if (path.isEmpty())
         return;
+    if (!clipboardMatchesSnapshotSelection(path)) {
+        discardClipboardSnapshot(path);
+        return;
+    }
+    QFile::remove(path + QStringLiteral(".selection"));
 
     QFile file(path);
     if (!privateRuntimeFileExists(path, kMaxClipboardSnapshotBytes) || !file.open(QIODevice::ReadOnly))

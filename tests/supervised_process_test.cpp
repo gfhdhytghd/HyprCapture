@@ -2,6 +2,7 @@
 
 #include <cerrno>
 #include <csignal>
+#include <chrono>
 #include <cstdlib>
 #include <fcntl.h>
 #include <iostream>
@@ -163,6 +164,19 @@ int main(int argc, char** argv) {
     // GSR must be signalled as a group without killing the compositor, and the
     // supervisor must still report the child's result under SA_NOCLDWAIT.
     checkGroupStop({shell, "-c", "trap 'exit 0' INT; printf ready; while :; do sleep 1; done"}, SIGINT, 0);
+    {
+        require(posix_spawn_file_actions_init(&actions) == 0, "deadline actions");
+        auto stuck = hyprcapture::spawnSupervisedProcess(shell, {shell, "-c", "trap '' INT TERM; exec sleep 30"},
+                                                        environ, actions, true);
+        posix_spawn_file_actions_destroy(&actions);
+        require(stuck.spawnError == 0, "spawn stuck encoder");
+        const auto started = std::chrono::steady_clock::now();
+        const auto result = hyprcapture::waitSupervisedProcess(stuck, [&] {
+            return std::chrono::steady_clock::now() - started >= std::chrono::milliseconds(100);
+        });
+        require(!result && stuck.statusFd == -1 && stuck.pid == -1, "deadline kills stuck encoder process group");
+        require(std::chrono::steady_clock::now() - started < std::chrono::seconds(2), "bounded encoder wait");
+    }
     // A native child makes success, failure and signal death independent of
     // the test shell's handling of an interrupted sleep or shell builtin.
     for (const int signal : {SIGINT, SIGTERM}) {

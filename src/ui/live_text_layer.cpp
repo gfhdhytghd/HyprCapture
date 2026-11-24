@@ -352,9 +352,8 @@ void LiveTextLayer::mouseReleaseEvent(QMouseEvent* event) {
     event->accept();
 }
 void LiveTextLayer::mouseDoubleClickEvent(QMouseEvent* event) {
-    const int position = m_layout.hit(m_transform.inverted().map(event->position()),0);
-    const auto [begin,end] = m_layout.wordAt(position);
-    if (position>=0) { m_anchor=begin; m_caret=end; m_clickClock.start(); m_clickPosition=event->position(); }
+    const auto [begin,end] = m_layout.wordAt(m_transform.inverted().map(event->position()));
+    if (begin >= 0) { m_anchor=begin; m_caret=end; m_clickClock.start(); m_clickPosition=event->position(); }
     m_selecting=false; repaintImage(); event->accept();
 }
 void LiveTextLayer::wheelEvent(QWheelEvent* event) {
