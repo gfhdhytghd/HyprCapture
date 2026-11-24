@@ -1463,6 +1463,9 @@ RgbaReadback readRgbaFramebufferRegion(CFramebuffer& framebuffer, int cropX, int
         const GLuint readFramebuffer = framebufferId(resolved ? *resolved : framebuffer);
         if (readFramebuffer == 0)
             return {};
+        if (strict) {
+            while (glGetError() != GL_NO_ERROR) {}
+        }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, readFramebuffer);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
 

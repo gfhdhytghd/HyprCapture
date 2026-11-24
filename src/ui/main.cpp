@@ -45,12 +45,12 @@
 #include <QProcess>
 #include <QScreen>
 #include <QTimer>
-#include <QTemporaryDir>
 #include <QWidget>
 
 #include <algorithm>
 #include <cmath>
 #include <cerrno>
+#include <cstdlib>
 #include <fcntl.h>
 #include <linux/fs.h>
 #include <sys/syscall.h>
@@ -410,6 +410,25 @@ bool isTrustedRecordingOutputPath(const QString& path, const hyprcapture::Captur
         (parentCanonical == rootCanonical || parentCanonical.startsWith(rootCanonical + QLatin1Char('/')));
 }
 
+int renameApngOverReservation(const QByteArray& source, const QByteArray& dest) {
+    // A successful exclusive create reserves the name against other
+    // publishers when the filesystem has neither NOREPLACE nor hard links.
+    const int reservation = open(dest.constData(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC, 0600);
+    if (reservation < 0) return -1;
+
+    struct stat reserved {}, current {};
+    const bool stillReserved = fstat(reservation, &reserved) == 0 && lstat(dest.constData(), &current) == 0 &&
+        reserved.st_dev == current.st_dev && reserved.st_ino == current.st_ino;
+    const int status = stillReserved ? rename(source.constData(), dest.constData()) : -1;
+    const int error = stillReserved ? errno : EEXIST;
+    if (status != 0 && stillReserved && lstat(dest.constData(), &current) == 0 &&
+        reserved.st_dev == current.st_dev && reserved.st_ino == current.st_ino)
+        unlink(dest.constData());
+    close(reservation);
+    if (status != 0) errno = error;
+    return status;
+}
+
 QString publishApng(const QString& staging, const QString& requested) {
     const QByteArray source = QFile::encodeName(staging);
     if (chmod(source.constData(), 0600) != 0) return {};
@@ -419,8 +438,11 @@ QString publishApng(const QString& staging, const QString& requested) {
             QStringLiteral("%1-%2.%3").arg(target.completeBaseName()).arg(attempt).arg(target.suffix()));
         const QByteArray dest = QFile::encodeName(path);
         int status = syscall(SYS_renameat2, AT_FDCWD, source.constData(), AT_FDCWD, dest.constData(), RENAME_NOREPLACE);
-        if (status < 0 && (errno == ENOSYS || errno == EINVAL || errno == EOPNOTSUPP))
+        if (status < 0 && (errno == ENOSYS || errno == EINVAL || errno == EOPNOTSUPP)) {
             status = link(source.constData(), dest.constData());
+            if (status < 0 && errno != EEXIST)
+                status = renameApngOverReservation(source, dest);
+        }
         if (status == 0) return path;
         if (errno != EEXIST) break;
     }
@@ -675,7 +697,7 @@ void reportTranscodeFailure(const hyprcapture::CaptureDefaults& defaults, const 
 }
 
 struct TranscodeState {
-    std::unique_ptr<QTemporaryDir> staging;
+    QString stagingPath;
     QProcess* process = nullptr;
     std::unique_ptr<ResultThumbnailCollection> thumbnails;
     QByteArray stdoutBuffer;
@@ -685,6 +707,13 @@ struct TranscodeState {
     QString restoreClipboardPath;
     hyprcapture::CaptureDefaults defaults;
     int durationMs = 1;
+
+    ~TranscodeState() { discardStaging(); }
+
+    void discardStaging() {
+        if (!stagingPath.isEmpty())
+            QFile::remove(std::exchange(stagingPath, {}));
+    }
 };
 
 void updateTranscodeProgress(const std::shared_ptr<TranscodeState>& state) {
@@ -737,12 +766,17 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
     auto state = std::make_shared<TranscodeState>();
     state->inputPath = canonicalInput;
     state->outputPath = cleanOutput;
-    state->staging = std::make_unique<QTemporaryDir>(QFileInfo(cleanOutput).dir().filePath(QStringLiteral(".hyprcapture-apng-XXXXXX")));
-    if (!state->staging->isValid()) {
-        reportTranscodeFailure(defaults, canonicalInput, QStringLiteral("could not create a private transcode directory"));
+    auto stagingName = QFile::encodeName(QFileInfo(cleanOutput).dir().filePath(QStringLiteral(".hyprcapture-apng-XXXXXX.apng")));
+    // Always create a named file. Publishing an anonymous O_TMPFILE would
+    // itself require a hard link before FFmpeg could open the staging path.
+    const int stagingFd = mkostemps(stagingName.data(), sizeof(".apng") - 1, O_CLOEXEC);
+    if (stagingFd < 0) {
+        reportTranscodeFailure(defaults, canonicalInput, QStringLiteral("could not create a private transcode file"));
         return 1;
     }
-    const auto stagingOutput = state->staging->filePath(QStringLiteral("output.apng"));
+    close(stagingFd);
+    state->stagingPath = QFile::decodeName(stagingName);
+    const auto stagingOutput = state->stagingPath;
     state->defaults = defaults;
     state->durationMs = std::max(1, durationMs);
 
@@ -797,7 +831,7 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
         const QFileInfo output(stagingOutput);
         const bool encoded = exitStatus == QProcess::NormalExit && exitCode == 0 && output.isFile() && output.size() > 0;
         const auto published = encoded ? publishApng(stagingOutput, state->outputPath) : QString{};
-        state->staging.reset();
+        state->discardStaging();
 
         if (!published.isEmpty()) {
             state->outputPath = published;
@@ -829,7 +863,7 @@ int showRecordingTranscode(const hyprcapture::CaptureDefaults& defaults, const Q
 
     state->process->start();
     if (!state->process->waitForStarted(1000)) {
-        state->staging.reset();
+        state->discardStaging();
         reportTranscodeFailure(defaults, canonicalInput, state->process->errorString());
         hyprcapture::ui::discardClipboardSnapshot(state->restoreClipboardPath);
         if (state->thumbnails)

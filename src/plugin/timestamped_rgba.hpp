@@ -3,14 +3,12 @@
 #include <memory>
 #include <span>
 #include <stop_token>
-#include <chrono>
 #include <string>
 #include <vector>
 
 namespace hyprcapture {
-// The fd must be nonblocking. The deadline measures lack of write progress.
-int writeRecordingBytes(int fd, std::span<const unsigned char> bytes, std::stop_token stop,
-                        std::chrono::milliseconds stallTimeout = std::chrono::seconds(30));
+// The fd must be nonblocking. Backpressure waits until progress or cancellation.
+int writeRecordingBytes(int fd, std::span<const unsigned char> bytes, std::stop_token stop);
 // Stream raw RGBA with capture timestamps to FFmpeg without synthesizing CFR
 // frames. The descriptor is borrowed; all calls belong to the encoder worker.
 class TimestampedRgbaWriter {

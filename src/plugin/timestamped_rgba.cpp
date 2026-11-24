@@ -11,22 +11,15 @@ extern "C" {
 }
 
 namespace hyprcapture {
-int writeRecordingBytes(int fd, std::span<const unsigned char> bytes, std::stop_token stop, std::chrono::milliseconds stallTimeout) {
-    using Clock = std::chrono::steady_clock;
-    auto deadline = Clock::now() + stallTimeout;
+int writeRecordingBytes(int fd, std::span<const unsigned char> bytes, std::stop_token stop) {
     while (!bytes.empty()) {
         if (stop.stop_requested()) return AVERROR(ECANCELED);
-        if (Clock::now() >= deadline) return AVERROR(ETIMEDOUT);
         const auto n = ::write(fd, bytes.data(), bytes.size());
         if (n > 0) {
             bytes = bytes.subspan(n);
-            deadline = Clock::now() + stallTimeout;
         } else if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             pollfd descriptor{fd, POLLOUT, 0};
-            const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline - Clock::now());
-            const int wait = static_cast<int>(std::clamp(remaining, std::chrono::milliseconds::zero(),
-                                                         std::chrono::milliseconds(50)).count());
-            if (poll(&descriptor, 1, wait) < 0 && errno != EINTR) return AVERROR(errno);
+            if (poll(&descriptor, 1, 50) < 0 && errno != EINTR) return AVERROR(errno);
         } else if (n == 0 || errno != EINTR) {
             return AVERROR(n < 0 ? errno : EIO);
         }

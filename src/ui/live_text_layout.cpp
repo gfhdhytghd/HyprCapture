@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <iterator>
 
 namespace hyprcapture::ui {
 namespace {
@@ -19,6 +20,23 @@ double distance(QPointF p, const QPainterPath& path) {
         best = std::min(best, std::hypot(delta.x(), delta.y()));
     }
     return best;
+}
+
+bool isCjkLetterOrNumber(QStringView text, int index) {
+    char32_t cp = text[index].unicode();
+    if (QChar::isHighSurrogate(cp) && index + 1 < text.size() && text[index + 1].isLowSurrogate())
+        cp = QChar::surrogateToUcs4(text[index], text[index + 1]);
+    if (!QChar::isLetterOrNumber(cp)) return false;
+    switch (QChar::script(cp)) {
+        case QChar::Script_Han:
+        case QChar::Script_Hiragana:
+        case QChar::Script_Katakana:
+        case QChar::Script_Hangul:
+        case QChar::Script_Bopomofo:
+            return true;
+        default:
+            return false;
+    }
 }
 
 }
@@ -187,25 +205,42 @@ std::pair<int,int> LiveTextLayout::wordAt(QPointF point) const {
     for (const auto& run : runs) {
         if (!run.area.contains(point)) continue;
         const double x = run.fromUnit.inverted().map(point).x();
-        for (const auto& word : run.words)
-            if (x >= word.x0 && x < word.x1) return {word.begin, word.end};
+        // Use the glyph under the pointer rather than the nearest caret.
+        auto glyph = std::ranges::find_if(run.glyphs, [x](const auto& cell) {
+            return x >= cell.x0 && x < cell.x1;
+        });
+        if (glyph == run.glyphs.end()) break;
+        if (text[glyph->begin].isSpace() && glyph != run.glyphs.begin())
+            --glyph;
 
-        for (const auto& glyph : run.glyphs) {
-            if (x < glyph.x0 || x >= glyph.x1) continue;
-            // Use the glyph under the pointer rather than the nearest caret,
-            // which can sit on the far side of a word boundary.
-            const QString value = text.mid(run.begin, run.end - run.begin);
-            QTextBoundaryFinder finder(QTextBoundaryFinder::Word, value);
-            finder.setPosition(glyph.begin - run.begin);
-            if (!finder.isAtBoundary()) finder.toPreviousBoundary();
-            const int start = finder.position();
-            const auto reasons = finder.boundaryReasons();
-            const int end = finder.toNextBoundary();
-            if (reasons.testFlag(QTextBoundaryFinder::StartOfItem) && end >= 0)
-                return {run.begin + start, run.begin + end};
-            return {glyph.begin, glyph.end};
+        for (const auto& word : run.words) {
+            if (word.begin <= glyph->begin && glyph->end <= word.end &&
+                (word.begin < glyph->begin || glyph->end < word.end))
+                return {word.begin, word.end};
         }
-        break;
+
+        // OCR may return character boxes, and Qt may split Han text at every
+        // character. Keep adjacent CJK text together when no word box applies.
+        if (isCjkLetterOrNumber(text, glyph->begin)) {
+            auto first = glyph;
+            auto last = std::next(glyph);
+            while (first != run.glyphs.begin() && isCjkLetterOrNumber(text, std::prev(first)->begin))
+                --first;
+            while (last != run.glyphs.end() && isCjkLetterOrNumber(text, last->begin))
+                ++last;
+            return {first->begin, std::prev(last)->end};
+        }
+
+        const QStringView value = QStringView(text).mid(run.begin, run.end - run.begin);
+        QTextBoundaryFinder finder(QTextBoundaryFinder::Word, value);
+        finder.setPosition(glyph->begin - run.begin);
+        if (!finder.isAtBoundary()) finder.toPreviousBoundary();
+        const int start = finder.position();
+        const auto reasons = finder.boundaryReasons();
+        const int end = finder.toNextBoundary();
+        if (reasons.testFlag(QTextBoundaryFinder::StartOfItem) && end >= 0)
+            return {run.begin + start, run.begin + end};
+        return {glyph->begin, glyph->end};
     }
     return {-1, -1};
 }
