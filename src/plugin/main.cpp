@@ -716,7 +716,11 @@ void unregisterLuaFunctions() {
 void requireMatchingABI() {
     const auto abiPrefix = [](std::string version) { return version.substr(0, version.find_last_of('.')); };
     const std::string client = std::string(GIT_COMMIT_HASH) + "_aq_" + abiPrefix(AQUAMARINE_VERSION) + "_hu_" + abiPrefix(HYPRUTILS_VERSION) + "_hg_" +
-        abiPrefix(HYPRGRAPHICS_VERSION) + "_hc_" + abiPrefix(HYPRCURSOR_VERSION);
+        abiPrefix(HYPRGRAPHICS_VERSION) + "_hc_" + abiPrefix(HYPRCURSOR_VERSION)
+#ifdef HYPRLANG_VERSION
+        + "_hlg_" + abiPrefix(HYPRLANG_VERSION)
+#endif
+        ;
     const std::string runtime = __hyprland_api_get_hash();
     if (runtime != client)
         throw std::runtime_error("[HyprCapture] Hyprland header/runtime ABI mismatch: runtime=" + runtime + "; client=" + client);

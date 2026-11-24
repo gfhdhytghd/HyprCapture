@@ -1,7 +1,7 @@
 # HyprCapture
 
 > [!IMPORTANT]
-> This is the `hyprland-master` branch for Hyprland's development `main` (`hyprwm/Hyprland`); `flake.lock` pins the adapted commit (`7a5e469c`).
+> This is the `hyprland-master` branch for Hyprland's development `main` (`hyprwm/Hyprland`); `flake.lock` pins the adapted commit (`df40c0bd2c7c`).
 > Use HyprCapture's `master` branch with the latest official Hyprland release for the stable setup.
 > The compositor and plugin must come from the same Hyprland revision; the plugin refuses to load when its headers do not match the running compositor.
 
@@ -194,12 +194,12 @@ After the rebuild succeeds, run `hyprpm reload`. If it still fails, include `hyp
 
 ### Install on NixOS
 
-The example below pins the supported Hyprland release. Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
+The example below pins the supported Hyprland development revision. Add HyprCapture to the same flake as Hyprland and make its Hyprland input follow yours. Keeping both inputs on the same revision is required because Hyprland plugins are ABI-sensitive:
 
 ```nix
 {
   inputs = {
-    hyprland.url = "github:hyprwm/Hyprland";
+    hyprland.url = "github:hyprwm/Hyprland/df40c0bd2c7c1dfa2cfd77e91c0f561500fdcc01";
     hyprcapture = {
       url = "github:gfhdhytghd/HyprCapture/hyprland-master";
       inputs.hyprland.follows = "hyprland";
@@ -208,7 +208,7 @@ The example below pins the supported Hyprland release. Add HyprCapture to the sa
 }
 ```
 
-After changing the release tag, run `nix flake update hyprland hyprcapture` from your configuration's flake directory and rebuild. Ensure the system's Hyprland package also uses this same input; setting Home Manager's `package = null` does not automatically make the plugin build against the system compositor. Log out and back in after upgrading Hyprland so the running compositor matches the rebuilt plugin.
+After changing the Hyprland revision, run `nix flake update hyprland hyprcapture` from your configuration's flake directory and rebuild. Ensure the system's Hyprland package also uses this same input; setting Home Manager's `package = null` does not automatically make the plugin build against the system compositor. Log out and back in after upgrading Hyprland so the running compositor matches the rebuilt plugin.
 
 With the Home Manager Hyprland module:
 
