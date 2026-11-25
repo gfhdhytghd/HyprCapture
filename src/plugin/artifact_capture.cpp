@@ -3377,7 +3377,7 @@ double shadowRoundingPx(const PHLWINDOW& window, double scale) {
         return 0.0;
 
     const double borderSize = window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
-    const double roundingBase = std::max(0.0F, window->presentation().rounding());
+    const double roundingBase = std::max(0.0F, window->presentation().rounding().max());
     const double roundingPower = std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
     const double correctionOffset = borderSize * (std::sqrt(2.0) - 1.0) * std::max(2.0 - roundingPower, 0.0);
     const double rounding = roundingBase > 0.0 ? (roundingBase + borderSize) - correctionOffset : 0.0;
@@ -3393,7 +3393,7 @@ double shadowBorderPx(const PHLWINDOW& window, double scale) {
 double windowRoundingPx(const PHLWINDOW& window, double scale) {
     if (!window || isMonitorFullscreenWindow(window))
         return 0.0;
-    return std::max(0.0, static_cast<double>(window->presentation().rounding()) * scale);
+    return std::max(0.0, static_cast<double>(window->presentation().rounding().max()) * scale);
 }
 
 int configuredShadowRangePx(double scale) {
@@ -4118,7 +4118,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.fullscreen = isMonitorFullscreenWindow(window);
         info.zIndex = z++;
         const bool dontRound = info.fullscreen;
-        info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding());
+        info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding().max());
         info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
         info.borderSize = dontRound || window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
         const std::string artifactId = pointerId(window.get()) + "-" + std::to_string(info.zIndex);
@@ -4265,7 +4265,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     info.fullscreen = isMonitorFullscreenWindow(window);
     info.zIndex = 0;
     const bool dontRound = info.fullscreen;
-    info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding());
+    info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding().max());
     info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
     info.borderSize = dontRound || window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
     info.visibleGeometry = toRect(renderedWindowGoalMainSurfaceBox(window));
