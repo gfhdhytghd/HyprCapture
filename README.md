@@ -158,6 +158,15 @@ hyprpm enable hyprcapture
 hyprpm reload
 ```
 
+`hyprpm add` builds `master`, which targets the official release. If you run Hyprland built from `main`, or the [gfhdhytghd/Hyprland](https://github.com/gfhdhytghd/Hyprland) fork that follows `main`, add the `hyprland-master` branch instead:
+
+```sh
+hyprpm remove https://github.com/gfhdhytghd/HyprCapture
+hyprpm add https://github.com/gfhdhytghd/HyprCapture origin/hyprland-master
+```
+
+The revision argument stays with the repository, so `hyprpm update` keeps following `hyprland-master`.
+
 If you use Hyprland's permission system, first add the `hyprpm` permission shown in [Install with `hyprpm`](#install-with-hyprpm). The manifest builds the plugin and installs `hyprcapture-ui` to `~/.local/bin`; no separate manual helper installation is needed.
 
 The installer also attempts to prepare the optional DTLN-AEC runtime. If it reports that AEC is pending, normal capture remains available; retry later with `~/.local/bin/hyprcapture-install-aec`.
