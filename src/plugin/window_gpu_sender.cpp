@@ -1,5 +1,4 @@
 #include "window_gpu_sender.hpp"
-#include "window_gpu_wire.hpp"
 #include <cerrno>
 #include <chrono>
 #include <cstring>
@@ -28,7 +27,7 @@ bool waitSocket(int fd, short events, Clock::time_point deadline, std::stop_toke
     return false;
 }
 bool releaseMatches(int fd, const WindowGpuPacket& frame) {
-    std::array<unsigned char, 32> reply{};
+    std::array<unsigned char, gpuwire::HCGR_BYTES> reply{};
     alignas(cmsghdr) std::array<unsigned char, CMSG_SPACE(8 * sizeof(int))> control{};
     iovec io{reply.data(), reply.size()};
     msghdr message{};
@@ -47,8 +46,8 @@ bool releaseMatches(int fd, const WindowGpuPacket& frame) {
             }
         }
     }
-    if (count != 32 || ancillary || (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC))) return false;
-    constexpr unsigned char prefix[]{'H','C','G','R',0,1,0,32};
+    if (count != static_cast<ssize_t>(reply.size()) || ancillary || (message.msg_flags & (MSG_TRUNC | MSG_CTRUNC))) return false;
+    constexpr unsigned char prefix[]{'H','C','G','R',0,1,0,gpuwire::HCGR_BYTES};
     if (std::memcmp(reply.data(), prefix, 8) != 0 ||
         std::memcmp(reply.data() + 8, frame.header.data() + 8, 8) != 0 ||
         std::memcmp(reply.data() + 16, frame.header.data() + 24, 8) != 0) return false;

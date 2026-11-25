@@ -19,12 +19,21 @@
 #include <unistd.h>
 
 using namespace std::chrono_literals;
+using hyprcapture::CornerRadii;
 using hyprcapture::WindowGpuPacket;
 using hyprcapture::WindowGpuSender;
 using hyprcapture::WindowGpuSenderState;
 using hyprcapture::gpuwire::Frame;
+using hyprcapture::gpuwire::HCGF_BYTES;
+using hyprcapture::gpuwire::HCGI_BYTES;
+using hyprcapture::gpuwire::HCGR_BYTES;
+using hyprcapture::gpuwire::InputGeometry;
+using hyprcapture::gpuwire::Release;
 
 namespace {
+constexpr CornerRadii shadowRadii{3, 4, 5, 6};
+constexpr CornerRadii cutoutRadii{0, 1, 0.5, 0.25};
+
 enum class ServerMode { Ack, NoAck, Disconnect, AncillaryRelease, WrongSequence, WrongEpoch, ReservedRelease };
 
 struct Server {
@@ -52,22 +61,42 @@ struct Server {
         assert(listen(listener, 1) == 0);
         int fd = accept(listener, nullptr, nullptr); assert(fd >= 0); close(listener);
         for (int iteration = 0; iteration < (mode == ServerMode::Ack ? 2 : 1); ++iteration) {
-        std::array<unsigned char, 320> header{}; std::array<unsigned char, CMSG_SPACE(2 * sizeof(int))> control{};
-        iovec io{header.data(), header.size()}; msghdr msg{}; msg.msg_iov=&io; msg.msg_iovlen=1; msg.msg_control=control.data(); msg.msg_controllen=control.size();
-        const auto n = recvmsg(fd, &msg, 0); assert(n == (iteration == 1 ? 320 : 232)); assert(!(msg.msg_flags & (MSG_TRUNC|MSG_CTRUNC))); ++frameCount;
-        if (iteration == 1) { hyprcapture::gpuwire::InputGeometry input; assert(hyprcapture::gpuwire::decode(header.data()+232,88,input)); assert(input.surface==2 && input.surfaceWidth==2); }
+        std::array<std::uint8_t, HCGF_BYTES + HCGI_BYTES> datagram{};
+        alignas(cmsghdr) std::array<unsigned char, CMSG_SPACE(2 * sizeof(int))> control{};
+        iovec io{datagram.data(), datagram.size()};
+        msghdr msg{};
+        msg.msg_iov = &io; msg.msg_iovlen = 1; msg.msg_control = control.data(); msg.msg_controllen = control.size();
+        const auto n = recvmsg(fd, &msg, 0);
+        const bool extended = iteration == 1;
+        assert(n == static_cast<ssize_t>(extended ? datagram.size() : HCGF_BYTES));
+        assert(!(msg.msg_flags & (MSG_TRUNC | MSG_CTRUNC)));
+        ++frameCount;
+
+        const auto version = (datagram[4] << 8) | datagram[5];
+        const auto headerSize = static_cast<std::size_t>((datagram[6] << 8) | datagram[7]);
+        assert(version == 2 && headerSize == HCGF_BYTES);
+        Frame frame{};
+        assert(hyprcapture::gpuwire::decode(datagram.data(), headerSize, frame));
+        assert(frame.shadowEnabled == extended);
+        if (extended) {
+            assert(frame.shadow.rounding == shadowRadii && frame.shadow.windowRounding == cutoutRadii);
+            InputGeometry input{};
+            assert(hyprcapture::gpuwire::decode(datagram.data() + headerSize, n - headerSize, input));
+            assert(input.surface == 2 && input.surfaceWidth == 2);
+        }
         int count=0;
         for (auto* c=CMSG_FIRSTHDR(&msg); c; c=CMSG_NXTHDR(&msg,c)) if(c->cmsg_level==SOL_SOCKET&&c->cmsg_type==SCM_RIGHTS){auto bytes=c->cmsg_len-CMSG_LEN(0);for(size_t off=0;off+sizeof(int)<=bytes;off+=sizeof(int)){int receivedFd;std::memcpy(&receivedFd,CMSG_DATA(c)+off,sizeof(receivedFd));assert(fcntl(receivedFd,F_GETFD)>=0);close(receivedFd);++count;}}
         received=true; twoFds=(count==2);
         if (mode == ServerMode::Disconnect) { close(fd); return; }
         if (mode == ServerMode::NoAck) { std::this_thread::sleep_for(700ms); close(fd); return; }
-        std::array<unsigned char,32> reply{}; std::memcpy(reply.data(),"HCGR",4); reply[5]=1; reply[7]=32; std::memcpy(reply.data()+8,header.data()+8,8); std::memcpy(reply.data()+16,header.data()+24,8);
+        std::array<std::uint8_t, HCGR_BYTES> reply{};
+        assert(hyprcapture::gpuwire::encode(Release{frame.sequence, frame.geometryEpoch}, reply));
         if (mode == ServerMode::WrongSequence) reply[15] ^= 1;
         if (mode == ServerMode::WrongEpoch) reply[23] ^= 1;
         if (mode == ServerMode::ReservedRelease) reply[31] = 1;
         iovec rio{reply.data(),reply.size()}; msghdr out{}; out.msg_iov=&rio;out.msg_iovlen=1;
-        if(mode==ServerMode::AncillaryRelease){std::array<unsigned char,CMSG_SPACE(sizeof(int))> c{};out.msg_control=c.data();out.msg_controllen=c.size();auto* h=CMSG_FIRSTHDR(&out);h->cmsg_level=SOL_SOCKET;h->cmsg_type=SCM_RIGHTS;h->cmsg_len=CMSG_LEN(sizeof(int));int extra=open("/dev/null",O_RDONLY);std::memcpy(CMSG_DATA(h),&extra,sizeof(extra));assert(sendmsg(fd,&out,MSG_NOSIGNAL)==32);close(extra);}
-        else assert(sendmsg(fd,&out,MSG_NOSIGNAL)==32);
+        if(mode==ServerMode::AncillaryRelease){std::array<unsigned char,CMSG_SPACE(sizeof(int))> c{};out.msg_control=c.data();out.msg_controllen=c.size();auto* h=CMSG_FIRSTHDR(&out);h->cmsg_level=SOL_SOCKET;h->cmsg_type=SCM_RIGHTS;h->cmsg_len=CMSG_LEN(sizeof(int));int extra=open("/dev/null",O_RDONLY);std::memcpy(CMSG_DATA(h),&extra,sizeof(extra));assert(sendmsg(fd,&out,MSG_NOSIGNAL)==static_cast<ssize_t>(reply.size()));close(extra);}
+        else assert(sendmsg(fd,&out,MSG_NOSIGNAL)==static_cast<ssize_t>(reply.size()));
         }
         // Keep the peer connected long enough that rejection is due to the
         // malformed record, not merely POLLHUP racing the read.
@@ -108,7 +137,10 @@ int main(){
       int badImage,badFence; auto bad=packet(metadata(3,2),badImage,badFence); bad.header[116]=1; assert(!sender.submit(std::move(bad))); bad=WindowGpuPacket{}; assertClosed(badImage); assertClosed(badFence);
       int oldSeqImage,oldSeqFence; auto oldSeq=packet(metadata(1,1),oldSeqImage,oldSeqFence); assert(!sender.submit(std::move(oldSeq))); oldSeq=WindowGpuPacket{}; assertClosed(oldSeqImage); assertClosed(oldSeqFence);
       int oldEpochImage,oldEpochFence; auto oldEpoch=packet(metadata(3,1),oldEpochImage,oldEpochFence); assert(!sender.submit(std::move(oldEpoch))); oldEpoch=WindowGpuPacket{}; assertClosed(oldEpochImage); assertClosed(oldEpochFence);
-      int e,f; auto extended=packet(metadata(2,2),e,f); assert(hyprcapture::gpuwire::encode(hyprcapture::gpuwire::InputGeometry{1,2,3,0,0,2,2,2,2},extended.inputGeometry.emplace())); assert(sender.submit(std::move(extended))); if (!waitState(sender, WindowGpuSenderState::Ready)) { std::fprintf(stderr, "ack second diagnostic state=%d frames=%d received=%d two=%d\n", int(sender.state()), server.frameCount.load(), int(server.received), int(server.twoFds)); std::abort(); } assert(server.received&&server.twoFds); }
+      auto shadowed = metadata(2, 2);
+      shadowed.shadowEnabled = true;
+      shadowed.shadow = {-3, -3, 8, 8, 0, 0, 2, 2, 3, shadowRadii, cutoutRadii, 2, 1, {0, 0, 0, 128}, false};
+      int e,f; auto extended=packet(shadowed,e,f); assert(hyprcapture::gpuwire::encode(hyprcapture::gpuwire::InputGeometry{1,2,3,0,0,2,2,2,2},extended.inputGeometry.emplace())); assert(sender.submit(std::move(extended))); if (!waitState(sender, WindowGpuSenderState::Ready)) { std::fprintf(stderr, "ack second diagnostic state=%d frames=%d received=%d two=%d\n", int(sender.state()), server.frameCount.load(), int(server.received), int(server.twoFds)); std::abort(); } assert(server.received&&server.twoFds); }
     { Server server(ServerMode::NoAck); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"noack initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"noack retire");assertClosed(a);assertClosed(b);int c,d;auto reuse=packet(metadata(2,1),c,d);assert(!sender.submit(std::move(reuse)));reuse=WindowGpuPacket{};assertClosed(c);assertClosed(d); }
     { Server server(ServerMode::AncillaryRelease); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"ancillary initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"ancillary retire");assertClosed(a);assertClosed(b); }
     { Server server(ServerMode::Disconnect); WindowGpuSender sender(server.path); expectState(sender,WindowGpuSenderState::Ready,"disconnect initial");int a,b;assert(sender.submit(packet(metadata(1,1),a,b)));expectState(sender,WindowGpuSenderState::Retired,"disconnect retire");assertClosed(a);assertClosed(b); }

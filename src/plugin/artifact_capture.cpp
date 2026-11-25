@@ -4421,9 +4421,8 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
                 .cutoutWidth = shadow->windowCutoutBox.w,
                 .cutoutHeight = shadow->windowCutoutBox.h,
                 .range = shadow->range,
-                // HCGF v1 is shared with viewflowd and carries one radius; use the largest corner.
-                .rounding = shadow->rounding.max(),
-                .windowRounding = shadow->windowRounding.max(),
+                .rounding = shadow->rounding,
+                .windowRounding = shadow->windowRounding,
                 .roundingPower = shadow->roundingPower,
                 .power = static_cast<std::uint32_t>(shadow->shadowPower),
                 .rgba = {static_cast<std::uint8_t>(color.r), static_cast<std::uint8_t>(color.g), static_cast<std::uint8_t>(color.b), static_cast<std::uint8_t>(color.a)},

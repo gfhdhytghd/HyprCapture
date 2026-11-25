@@ -1,12 +1,15 @@
 #pragma once
 
+#include "shared/corner_radii.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdint>
 
 namespace hyprcapture::gpuwire {
 
-constexpr std::size_t HCGF_BYTES = 232;
+constexpr std::size_t HCGF_V1_BYTES = 232;
+constexpr std::size_t HCGF_BYTES = 280;
 constexpr std::size_t HCGI_BYTES = 88;
 constexpr std::size_t HCGR_BYTES = 32;
 constexpr std::uint32_t HCGF_ABGR8888 = 0x34324241U;
@@ -18,7 +21,9 @@ enum class Error : std::uint8_t {
 struct Shadow {
     double left = 0, top = 0, width = 0, height = 0;
     double cutoutLeft = 0, cutoutTop = 0, cutoutWidth = 0, cutoutHeight = 0;
-    double range = 0, rounding = 0, windowRounding = 0, roundingPower = 0;
+    double range = 0;
+    CornerRadii rounding, windowRounding;
+    double roundingPower = 0;
     std::uint32_t power = 0;
     std::array<std::uint8_t, 4> rgba{};
     bool sharp = false;

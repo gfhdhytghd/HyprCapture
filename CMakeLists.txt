@@ -583,6 +583,8 @@ if(BUILD_TESTING)
   target_include_directories(hyprcapture-window-gpu-wire-test PRIVATE src)
   target_compile_options(hyprcapture-window-gpu-wire-test PRIVATE -UNDEBUG)
   add_test(NAME hyprcapture-window-gpu-wire-test COMMAND hyprcapture-window-gpu-wire-test)
+  add_test(NAME hyprcapture-window-gpu-wire-v1-test COMMAND hyprcapture-window-gpu-wire-test v1)
+  add_test(NAME hyprcapture-window-gpu-wire-strict-test COMMAND hyprcapture-window-gpu-wire-test strict)
 
   add_executable(hyprcapture-window-gpu-sender-test
     tests/window_gpu_sender_test.cpp

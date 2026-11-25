@@ -1,4 +1,7 @@
 #pragma once
+
+#include "plugin/window_gpu_wire.hpp"
+
 #include <array>
 #include <atomic>
 #include <condition_variable>
@@ -10,8 +13,8 @@
 
 namespace hyprcapture {
 struct WindowGpuPacket {
-    std::array<unsigned char, 232> header{};
-    std::optional<std::array<unsigned char, 88>> inputGeometry;
+    std::array<std::uint8_t, gpuwire::HCGF_BYTES> header{};
+    std::optional<std::array<std::uint8_t, gpuwire::HCGI_BYTES>> inputGeometry;
     int imageFd = -1;
     int fenceFd = -1;
     WindowGpuPacket() = default;

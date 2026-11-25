@@ -3,11 +3,14 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <limits>
 
 namespace hyprcapture::gpuwire {
 namespace {
 constexpr std::uint32_t PREMULT = 1, FLIP = 2, SHADOW = 4, KNOWN = 7;
+constexpr std::uint16_t HCGF_VERSION = 2;
+constexpr std::size_t SHADOW_START = 120;
+constexpr std::size_t ROUNDING_POWER_V1 = 208;
+constexpr std::size_t ROUNDING_POWER_V2 = 256;
 void err(Error* out, Error value) { if (out) *out = value; }
 void u32(std::uint8_t* p, std::uint32_t v) { p[0]=v>>24; p[1]=v>>16; p[2]=v>>8; p[3]=v; }
 void u16(std::uint8_t* p, std::uint16_t v) { p[0]=v>>8; p[1]=v; }
@@ -18,6 +21,21 @@ std::uint16_t r16(const std::uint8_t* p) { return std::uint16_t(p[0]<<8|p[1]); }
 std::uint64_t r64(const std::uint8_t* p) { std::uint64_t v=0; for(int i=0;i<8;++i)v=(v<<8)|p[i]; return v; }
 double rf64(const std::uint8_t* p) { const auto bits=r64(p); double v; std::memcpy(&v,&bits,8); return v; }
 bool finite(double v) { return std::isfinite(v); }
+bool validRadii(const CornerRadii& radii) {
+    for (double radius : {radii.topLeft, radii.topRight, radii.bottomRight, radii.bottomLeft})
+        if (!finite(radius) || radius < 0)
+            return false;
+    return true;
+}
+void writeRadii(std::uint8_t* p, const CornerRadii& radii) {
+    f64(p, radii.topLeft);
+    f64(p + 8, radii.topRight);
+    f64(p + 16, radii.bottomRight);
+    f64(p + 24, radii.bottomLeft);
+}
+CornerRadii readRadii(const std::uint8_t* p) {
+    return {rf64(p), rf64(p + 8), rf64(p + 16), rf64(p + 24)};
+}
 bool valid(const Frame& f, Error* e) {
     if (!f.sequence || !f.captureMonotonicNs || !f.geometryEpoch) { err(e,Error::ZeroLineage); return false; }
     if (!finite(f.logicalX)||!finite(f.logicalY)||!finite(f.logicalWidth)||!finite(f.logicalHeight)) { err(e,Error::NonFinite); return false; }
@@ -28,8 +46,8 @@ bool valid(const Frame& f, Error* e) {
     if (!f.cropWidth || !f.cropHeight || f.cropX > f.imageWidth-f.cropWidth || f.cropY > f.imageHeight-f.cropHeight) { err(e,Error::Crop); return false; }
     if (!f.shadowEnabled) return true;
     const Shadow& s=f.shadow;
-    for(double v:{s.left,s.top,s.width,s.height,s.cutoutLeft,s.cutoutTop,s.cutoutWidth,s.cutoutHeight,s.range,s.rounding,s.windowRounding,s.roundingPower}) if(!finite(v)){err(e,Error::Shadow);return false;}
-    if(s.width<=0||s.height<=0||s.cutoutWidth<=0||s.cutoutHeight<=0||s.range<=0||s.rounding<0||s.windowRounding<0||s.roundingPower<1||s.roundingPower>10||s.power<1||s.power>4){err(e,Error::Shadow);return false;}
+    for(double v:{s.left,s.top,s.width,s.height,s.cutoutLeft,s.cutoutTop,s.cutoutWidth,s.cutoutHeight,s.range,s.roundingPower}) if(!finite(v)){err(e,Error::Shadow);return false;}
+    if(s.width<=0||s.height<=0||s.cutoutWidth<=0||s.cutoutHeight<=0||s.range<=0||!validRadii(s.rounding)||!validRadii(s.windowRounding)||s.roundingPower<1||s.roundingPower>10||s.power<1||s.power>4){err(e,Error::Shadow);return false;}
     return true;
 }
 }
@@ -37,12 +55,31 @@ bool valid(const Frame& f, Error* e) {
 bool encode(const Frame& f, std::array<std::uint8_t,HCGF_BYTES>& out, Error* e) {
     if (!valid(f, e))
         return false;
-    out.fill(0); std::memcpy(out.data(), "HCGF", 4); u16(out.data()+4, 1); u16(out.data()+6, HCGF_BYTES);
+    out.fill(0); std::memcpy(out.data(), "HCGF", 4); u16(out.data()+4, HCGF_VERSION); u16(out.data()+6, HCGF_BYTES);
     u64(out.data()+8,f.sequence);u64(out.data()+16,f.captureMonotonicNs);u64(out.data()+24,f.geometryEpoch);
     for(auto [at,v]:{std::pair{32,f.logicalX},std::pair{40,f.logicalY},std::pair{48,f.logicalWidth},std::pair{56,f.logicalHeight}})f64(out.data()+at,v);
     u32(out.data()+64,f.imageWidth);u32(out.data()+68,f.imageHeight);u32(out.data()+72,f.fourcc);u32(out.data()+76,f.stride);u64(out.data()+80,f.modifier);u64(out.data()+88,f.offset);
     u32(out.data()+96,f.cropX);u32(out.data()+100,f.cropY);u32(out.data()+104,f.cropWidth);u32(out.data()+108,f.cropHeight);u32(out.data()+112,PREMULT|(f.flipY?FLIP:0)|(f.shadowEnabled?SHADOW:0));
-    if(f.shadowEnabled){const auto&s=f.shadow;for(auto [at,v]:{std::pair{120,s.left},std::pair{128,s.top},std::pair{136,s.width},std::pair{144,s.height},std::pair{152,s.cutoutLeft},std::pair{160,s.cutoutTop},std::pair{168,s.cutoutWidth},std::pair{176,s.cutoutHeight},std::pair{184,s.range},std::pair{192,s.rounding},std::pair{200,s.windowRounding},std::pair{208,s.roundingPower}})f64(out.data()+at,v);u32(out.data()+216,s.power);std::copy(s.rgba.begin(),s.rgba.end(),out.begin()+220);u32(out.data()+224,s.sharp?1:0);} return true;
+    if (f.shadowEnabled) {
+        const auto& s = f.shadow;
+        auto* b = out.data();
+        f64(b + 120, s.left);
+        f64(b + 128, s.top);
+        f64(b + 136, s.width);
+        f64(b + 144, s.height);
+        f64(b + 152, s.cutoutLeft);
+        f64(b + 160, s.cutoutTop);
+        f64(b + 168, s.cutoutWidth);
+        f64(b + 176, s.cutoutHeight);
+        f64(b + 184, s.range);
+        writeRadii(b + 192, s.rounding);
+        writeRadii(b + 224, s.windowRounding);
+        f64(b + ROUNDING_POWER_V2, s.roundingPower);
+        u32(b + 264, s.power);
+        std::copy(s.rgba.begin(), s.rgba.end(), b + 268);
+        u32(b + 272, s.sharp ? 1 : 0);
+    }
+    return true;
 }
 
 bool encode(const InputGeometry& g, std::array<std::uint8_t,HCGI_BYTES>& out, Error* e) {
@@ -71,7 +108,74 @@ bool decode(const std::uint8_t* b, std::size_t n, InputGeometry& g, Error* e) {
     return true;
 }
 
-bool decode(const std::uint8_t* b,std::size_t n,Frame& f,Error* e){if(n!=HCGF_BYTES){err(e,Error::Length);return false;}if(std::memcmp(b,"HCGF",4)){err(e,Error::Magic);return false;}if(r16(b+4)!=1){err(e,Error::Version);return false;}if(r16(b+6)!=HCGF_BYTES){err(e,Error::HeaderLength);return false;}if(r32(b+112)&~KNOWN||!(r32(b+112)&PREMULT)){err(e,Error::Flags);return false;}if(r32(b+116)||r32(b+228)){err(e,Error::Reserved);return false;}const bool enabled=r32(b+112)&SHADOW;if(!enabled){for(std::size_t i=120;i<232;++i)if(b[i]){err(e,Error::Shadow);return false;}}f={};f.sequence=r64(b+8);f.captureMonotonicNs=r64(b+16);f.geometryEpoch=r64(b+24);f.logicalX=rf64(b+32);f.logicalY=rf64(b+40);f.logicalWidth=rf64(b+48);f.logicalHeight=rf64(b+56);f.imageWidth=r32(b+64);f.imageHeight=r32(b+68);f.fourcc=r32(b+72);f.stride=r32(b+76);f.modifier=r64(b+80);f.offset=r64(b+88);f.cropX=r32(b+96);f.cropY=r32(b+100);f.cropWidth=r32(b+104);f.cropHeight=r32(b+108);f.flipY=r32(b+112)&FLIP;f.shadowEnabled=enabled;if(enabled){auto&s=f.shadow;s.left=rf64(b+120);s.top=rf64(b+128);s.width=rf64(b+136);s.height=rf64(b+144);s.cutoutLeft=rf64(b+152);s.cutoutTop=rf64(b+160);s.cutoutWidth=rf64(b+168);s.cutoutHeight=rf64(b+176);s.range=rf64(b+184);s.rounding=rf64(b+192);s.windowRounding=rf64(b+200);s.roundingPower=rf64(b+208);s.power=r32(b+216);std::copy(b+220,b+224,s.rgba.begin());if(r32(b+224)>1){err(e,Error::Shadow);return false;}s.sharp=r32(b+224); } return valid(f,e);}
+bool decode(const std::uint8_t* b, std::size_t n, Frame& f, Error* e) {
+    if (n != HCGF_V1_BYTES && n != HCGF_BYTES) { err(e, Error::Length); return false; }
+    if (std::memcmp(b, "HCGF", 4)) { err(e, Error::Magic); return false; }
+    const auto version = r16(b + 4);
+    const bool legacy = version == 1;
+    if (!legacy && version != HCGF_VERSION) { err(e, Error::Version); return false; }
+    const auto expected = legacy ? HCGF_V1_BYTES : HCGF_BYTES;
+    if (n != expected) { err(e, Error::Length); return false; }
+    if (r16(b + 6) != expected) { err(e, Error::HeaderLength); return false; }
+
+    const auto flags = r32(b + 112);
+    if ((flags & ~KNOWN) || !(flags & PREMULT)) { err(e, Error::Flags); return false; }
+    if (r32(b + 116) || r32(b + n - 4)) { err(e, Error::Reserved); return false; }
+    const bool shadowEnabled = flags & SHADOW;
+    if (!shadowEnabled && std::any_of(b + SHADOW_START, b + n, [](auto byte) { return byte != 0; })) {
+        err(e, Error::Shadow);
+        return false;
+    }
+
+    f = {};
+    f.sequence = r64(b + 8);
+    f.captureMonotonicNs = r64(b + 16);
+    f.geometryEpoch = r64(b + 24);
+    f.logicalX = rf64(b + 32);
+    f.logicalY = rf64(b + 40);
+    f.logicalWidth = rf64(b + 48);
+    f.logicalHeight = rf64(b + 56);
+    f.imageWidth = r32(b + 64);
+    f.imageHeight = r32(b + 68);
+    f.fourcc = r32(b + 72);
+    f.stride = r32(b + 76);
+    f.modifier = r64(b + 80);
+    f.offset = r64(b + 88);
+    f.cropX = r32(b + 96);
+    f.cropY = r32(b + 100);
+    f.cropWidth = r32(b + 104);
+    f.cropHeight = r32(b + 108);
+    f.flipY = flags & FLIP;
+    f.shadowEnabled = shadowEnabled;
+    if (shadowEnabled) {
+        auto& s = f.shadow;
+        s.left = rf64(b + 120);
+        s.top = rf64(b + 128);
+        s.width = rf64(b + 136);
+        s.height = rf64(b + 144);
+        s.cutoutLeft = rf64(b + 152);
+        s.cutoutTop = rf64(b + 160);
+        s.cutoutWidth = rf64(b + 168);
+        s.cutoutHeight = rf64(b + 176);
+        s.range = rf64(b + 184);
+        if (legacy) {
+            s.rounding = CornerRadii::uniform(rf64(b + 192));
+            s.windowRounding = CornerRadii::uniform(rf64(b + 200));
+        } else {
+            s.rounding = readRadii(b + 192);
+            s.windowRounding = readRadii(b + 224);
+        }
+
+        const auto* tail = b + (legacy ? ROUNDING_POWER_V1 : ROUNDING_POWER_V2);
+        s.roundingPower = rf64(tail);
+        s.power = r32(tail + 8);
+        std::copy_n(tail + 12, s.rgba.size(), s.rgba.begin());
+        const auto sharp = r32(tail + 16);
+        if (sharp > 1) { err(e, Error::Shadow); return false; }
+        s.sharp = sharp == 1;
+    }
+    return valid(f, e);
+}
 
 bool encode(const Release& r,std::array<std::uint8_t,HCGR_BYTES>& out,Error*e){if(!r.sequence||!r.geometryEpoch){err(e,Error::ZeroLineage);return false;}out.fill(0);std::memcpy(out.data(),"HCGR",4);u16(out.data()+4,1);u16(out.data()+6,HCGR_BYTES);u64(out.data()+8,r.sequence);u64(out.data()+16,r.geometryEpoch);return true;}
 bool decode(const std::uint8_t*b,std::size_t n,Release&r,Error*e){if(n!=HCGR_BYTES){err(e,Error::Length);return false;}if(std::memcmp(b,"HCGR",4)){err(e,Error::Magic);return false;}if(r16(b+4)!=1){err(e,Error::Version);return false;}if(r16(b+6)!=HCGR_BYTES){err(e,Error::HeaderLength);return false;}if(r32(b+24)||r64(b+8)==0||r64(b+16)==0){err(e,r32(b+24)?Error::Reserved:Error::ZeroLineage);return false;}r={r64(b+8),r64(b+16)};return true;}
