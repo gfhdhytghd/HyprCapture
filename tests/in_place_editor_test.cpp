@@ -4,6 +4,7 @@
 #include <sys/socket.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <cmath>
 #include "shared/trusted_path.hpp"
 #include "ui/annotation_editor.hpp"
 #include "ui/live_text_layer.hpp"
@@ -957,14 +958,14 @@ class InPlaceEditorTest final : public QObject {
         QCOMPARE(output.size(), (fullscreen ? content.size() : decorated.size()) * 2);
         QCOMPARE(overlay.windowFrameGeometry(window), fullscreen ? content : content.adjusted(-8, -8, 8, 8));
         if (fullscreen) {
-            QCOMPARE(overlay.windowFrameRadius(window, false), 0.0);
+            QCOMPARE(overlay.windowFrameRadii(window, false).max(), 0.0);
             for (const auto& corner : {output.rect().topLeft(), output.rect().topRight(), output.rect().bottomLeft(), output.rect().bottomRight()}) {
                 QCOMPARE(output.pixelColor(corner).alpha(), 255);
                 if (!hdr) QCOMPARE(output.pixelColor(corner), QColor(34, 149, 98));
                 else QVERIFY(output.pixelColor(corner).greenF() > output.pixelColor(corner).redF());
             }
         } else {
-            QVERIFY(overlay.windowFrameRadius(window, false) > 0);
+            QVERIFY(overlay.windowFrameRadii(window, false).max() > 0);
             QCOMPARE(output.pixelColor(0, 0).alpha(), 128);
         }
     }
@@ -1173,7 +1174,7 @@ class InPlaceEditorTest final : public QObject {
         CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
         auto& window = overlay.m_windowArtifacts.front();
         window.visibleGeometry = window.fullGeometry;
-        window.rounding = 0;
+        window.rounding = {};
         overlay.m_selectedWindowIndex = 0;
         window.hdrImage = QImage(window.image.size(), QImage::Format_RGBA16FPx4);
         window.hdrRealBackground = QImage(window.image.size(), QImage::Format_RGBA16FPx4);
@@ -1234,7 +1235,7 @@ class InPlaceEditorTest final : public QObject {
         CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
         QVERIFY(!overlay.m_windowArtifacts.empty());
         auto& window = overlay.m_windowArtifacts.front();
-        window.rounding = 24;
+        window.rounding = {24, 0, 18, 8};
         overlay.m_overlayOpacity = 1.0;
         overlay.m_toolbar->hide();
         QVERIFY(overlay.hoveredWindow() == &window);
@@ -1248,6 +1249,46 @@ class InPlaceEditorTest final : public QObject {
         const QColor dimmed = pixels.pixelColor(frame.topLeft() - QPoint(10, 10));
         QVERIFY(dimmed.blue() < 53);
         QCOMPARE(pixels.pixelColor(frame.topLeft() + QPoint(2, 2)), dimmed);
+        QCOMPARE(pixels.pixelColor(frame.topRight() + QPoint(-2, 2)), QColor(17, 29, 53));
+        QCOMPARE(pixels.pixelColor(frame.bottomRight() - QPoint(2, 2)), dimmed);
+        QCOMPARE(pixels.pixelColor(frame.bottomLeft() + QPoint(5, -5)), QColor(17, 29, 53));
+    }
+
+    void windowBackgroundMaskUsesCornerRadiiAndPower() {
+        hyprcapture::CaptureDefaults defaults;
+        defaults.mode = hyprcapture::CaptureMode::Window;
+        defaults.windowBackground = hyprcapture::WindowBackground::White;
+        CaptureOverlay overlay(defaults, false, false, false, sessionJson(defaults));
+        QVERIFY(!overlay.m_windowArtifacts.empty());
+        auto& window = overlay.m_windowArtifacts.front();
+        overlay.m_selectedWindowIndex = 0;
+        window.rounding = {50, 0, 25, 10};
+        window.borderSize = 10;
+        const auto geometry = window.visibleGeometry;
+        const QImage frame(geometry.size(), QImage::Format_RGBA8888);
+        const QRect pixels = frame.rect();
+
+        const auto circular = overlay.scrollWindowBackground(frame, geometry);
+        QVERIFY(!circular.isNull());
+        QCOMPARE(circular.pixelColor(pixels.topLeft() + QPoint(10, 10)).alpha(), 0);
+        QCOMPARE(circular.pixelColor(pixels.topRight() + QPoint(-2, 2)), QColor(Qt::white));
+        QCOMPARE(circular.pixelColor(pixels.bottomRight() - QPoint(2, 2)).alpha(), 0);
+        QCOMPARE(circular.pixelColor(pixels.bottomLeft() + QPoint(5, -5)), QColor(Qt::white));
+
+        window.roundingPower = 4;
+        const auto superellipse = overlay.scrollWindowBackground(frame, geometry);
+        QCOMPARE(superellipse.pixelColor(pixels.topLeft() + QPoint(10, 10)), QColor(Qt::white));
+        const auto bordered = overlay.windowFrameRadii(window, false);
+        QCOMPARE(bordered.topLeft, 60.0);
+        QCOMPARE(bordered.topRight, 0.0);
+        QCOMPARE(bordered.bottomRight, 35.0);
+        QCOMPARE(bordered.bottomLeft, 20.0);
+
+        window.roundingPower = 1.5;
+        const auto corrected = overlay.windowFrameRadii(window, false);
+        const double correction = 5 * (std::sqrt(2.0) - 1.0);
+        QCOMPARE(corrected.topLeft, 60.0 - correction);
+        QCOMPARE(corrected.topRight, 0.0);
     }
 
     void hdrStartupWaitsForAllBackdropsAndRecoversAfterTimeout_data() {

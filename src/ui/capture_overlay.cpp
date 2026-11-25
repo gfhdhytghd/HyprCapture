@@ -1022,14 +1022,14 @@ void appendSuperellipseCorner(QPainterPath& path,
     }
 }
 
-QPainterPath roundedWindowFramePath(const QRectF& rawRect, double radius, double power) {
+QPainterPath roundedWindowFramePath(const QRectF& rawRect, hyprcapture::CornerRadii radii, double power) {
     const QRectF rect = rawRect.normalized();
     QPainterPath path;
     if (!rect.isValid())
         return path;
 
-    radius = std::clamp(radius, 0.0, std::min(rect.width(), rect.height()) / 2.0);
-    if (radius <= 0.0) {
+    const auto [tl, tr, br, bl] = radii.clamped(rect.width(), rect.height());
+    if (radii.max() <= 0.0) {
         path.addRect(rect);
         return path;
     }
@@ -1040,15 +1040,19 @@ QPainterPath roundedWindowFramePath(const QRectF& rawRect, double radius, double
     const double right = rect.right();
     const double bottom = rect.bottom();
 
-    path.moveTo(left + radius, top);
-    path.lineTo(right - radius, top);
-    appendSuperellipseCorner(path, {right - radius, top + radius}, radius, power, 1.0, -1.0, halfPi, 0.0);
-    path.lineTo(right, bottom - radius);
-    appendSuperellipseCorner(path, {right - radius, bottom - radius}, radius, power, 1.0, 1.0, 0.0, halfPi);
-    path.lineTo(left + radius, bottom);
-    appendSuperellipseCorner(path, {left + radius, bottom - radius}, radius, power, -1.0, 1.0, halfPi, 0.0);
-    path.lineTo(left, top + radius);
-    appendSuperellipseCorner(path, {left + radius, top + radius}, radius, power, -1.0, -1.0, 0.0, halfPi);
+    path.moveTo(left + tl, top);
+    path.lineTo(right - tr, top);
+    if (tr > 0.0)
+        appendSuperellipseCorner(path, {right - tr, top + tr}, tr, power, 1.0, -1.0, halfPi, 0.0);
+    path.lineTo(right, bottom - br);
+    if (br > 0.0)
+        appendSuperellipseCorner(path, {right - br, bottom - br}, br, power, 1.0, 1.0, 0.0, halfPi);
+    path.lineTo(left + bl, bottom);
+    if (bl > 0.0)
+        appendSuperellipseCorner(path, {left + bl, bottom - bl}, bl, power, -1.0, 1.0, halfPi, 0.0);
+    path.lineTo(left, top + tl);
+    if (tl > 0.0)
+        appendSuperellipseCorner(path, {left + tl, top + tl}, tl, power, -1.0, -1.0, 0.0, halfPi);
     path.closeSubpath();
     return path;
 }
@@ -1078,7 +1082,7 @@ bool paintWindowBackground(QImage& background, hyprcapture::WindowBackground bg,
 void clipWindowBackgroundToFrame(QImage& background,
                                  const QRect& capturedLogicalGeometry,
                                  const QRect& visibleLogicalGeometry,
-                                 double rounding,
+                                 hyprcapture::CornerRadii rounding,
                                  double roundingPower) {
     if (background.isNull() || !capturedLogicalGeometry.isValid() || !visibleLogicalGeometry.isValid())
         return;
@@ -1091,7 +1095,7 @@ void clipWindowBackgroundToFrame(QImage& background,
 
     const double scaleX = static_cast<double>(background.width()) / std::max(1, capturedLogicalGeometry.width());
     const double scaleY = static_cast<double>(background.height()) / std::max(1, capturedLogicalGeometry.height());
-    const double radius = std::max(0.0, rounding) * std::min(scaleX, scaleY);
+    const auto radii = rounding * std::min(scaleX, scaleY);
 
     QImage mask = boundedImage(background.size(), QImage::Format_ARGB32_Premultiplied);
     if (mask.isNull()) {
@@ -1102,7 +1106,7 @@ void clipWindowBackgroundToFrame(QImage& background,
     {
         QPainter maskPainter(&mask);
         maskPainter.setRenderHint(QPainter::Antialiasing, true);
-        maskPainter.fillPath(roundedWindowFramePath(QRectF(frame), radius, roundingPower), Qt::white);
+        maskPainter.fillPath(roundedWindowFramePath(QRectF(frame), radii, roundingPower), Qt::white);
     }
 
     QPainter backgroundPainter(&background);
@@ -1785,7 +1789,7 @@ void CaptureOverlay::parseSessionJson(const QString& json) {
         }
         if (info.selectionClipGeometry)
             artifact.selectionClipGeometry = protocolRect(*info.selectionClipGeometry);
-        artifact.rounding = info.rounding;
+        artifact.rounding = info.cornerRadii();
         artifact.roundingPower = info.roundingPower;
         artifact.borderSize = info.borderSize;
         const QString artifactPath = qString(info.artifactPath);
@@ -3434,7 +3438,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
     paintDesktop(painter, rect());
     struct WindowHighlight {
         QRect target;
-        double radius;
+        hyprcapture::CornerRadii radii;
         QRect clip;
     };
     const auto windowHighlight = [this](const WindowArtifact& window, bool outline = false) {
@@ -3442,7 +3446,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
         const QRect geometry = overview || outline ?
             hyprcapture::ui::selectionOutlineGeometry(window.selectionGeometry.isValid() ? window.selectionGeometry : windowFrameGeometry(window),
                                                       window.selectionClipGeometry, m_overlayLogicalGeometry) : windowFrameGeometry(window);
-        return WindowHighlight{globalToLocalRect(geometry), windowFrameRadius(window, true),
+        return WindowHighlight{globalToLocalRect(geometry), windowFrameRadii(window, true),
                                overview ? globalToLocalRect(window.selectionClipGeometry) : QRect{}};
     };
     painter.save();
@@ -3477,7 +3481,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
                     transform.scale(double(canvas.width()) / source.width(), double(canvas.height()) / source.height());
                     transform.translate(-source.x(), -source.y());
                     const auto frame = roundedWindowFramePath(crop ? window->visibleGeometry : windowFrameGeometry(*window),
-                                                              crop ? window->rounding : windowFrameRadius(*window, false),
+                                                              crop ? window->rounding : windowFrameRadii(*window, false),
                                                               window->roundingPower);
                     undimmed = undimmed.intersected(transform.map(frame));
                 }
@@ -3494,7 +3498,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
         if (const auto* window=hoveredWindow()) {
             const auto highlight = windowHighlight(*window);
             if (highlight.target.isValid()) {
-                undimmed = roundedWindowFramePath(highlight.target, highlight.radius, window->roundingPower);
+                undimmed = roundedWindowFramePath(highlight.target, highlight.radii, window->roundingPower);
                 if (highlight.clip.isValid()) {
                     QPainterPath clip;
                     clip.addRect(highlight.clip);
@@ -3562,7 +3566,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
         if (window) {
             const auto highlight = windowHighlight(*window);
             painter.save();
-            painter.setClipPath(roundedWindowFramePath(highlight.target, highlight.radius, window->roundingPower), Qt::IntersectClip);
+            painter.setClipPath(roundedWindowFramePath(highlight.target, highlight.radii, window->roundingPower), Qt::IntersectClip);
             if (highlight.clip.isValid())
                 painter.setClipRect(highlight.clip, Qt::IntersectClip);
             paintDesktop(painter, highlight.target);
@@ -3583,7 +3587,7 @@ void CaptureOverlay::paintEvent(QPaintEvent*) {
             painter.setPen(pen);
             painter.setBrush(Qt::NoBrush);
             const QRectF alignedTarget = QRectF(highlight.target).adjusted(0.5, 0.5, -0.5, -0.5);
-            painter.drawPath(roundedWindowFramePath(alignedTarget, highlight.radius, candidate.roundingPower));
+            painter.drawPath(roundedWindowFramePath(alignedTarget, highlight.radii, candidate.roundingPower));
             painter.restore();
         }
     }
@@ -4252,23 +4256,23 @@ void CaptureOverlay::endHymissionCaptureInputSuppression() {
     (void)runHymissionCaptureInputCommand(QStringLiteral("end"), token);
 }
 
-double CaptureOverlay::windowFrameRadius(const WindowArtifact& window, bool selection) const {
+hyprcapture::CornerRadii CaptureOverlay::windowFrameRadii(const WindowArtifact& window, bool selection) const {
+    if (window.fullscreen)
+        return {};
     if (selection && window.stagePreview && window.selectionRounding)
-        return *window.selectionRounding;
-    if (window.fullscreen || window.rounding <= 0.0)
-        return 0.0;
+        return hyprcapture::CornerRadii::uniform(*window.selectionRounding);
 
     const double power = std::clamp(window.roundingPower, 1.0, 10.0);
     const double border = std::max(0.0, window.borderSize);
     const double correction = border * (std::sqrt(2.0) - 1.0) * std::max(2.0 - power, 0.0);
-    double radius = std::max(0.0, window.rounding + border - correction);
+    auto radii = window.rounding.expanded(border - correction);
     if (selection && window.stagePreview && window.selectionGeometry.isValid() && window.visibleGeometry.isValid()) {
         // Use the un-clipped preview: clipping a card does not change its scale.
         const double scale = std::min(double(window.selectionGeometry.width()) / window.visibleGeometry.width(),
                                       double(window.selectionGeometry.height()) / window.visibleGeometry.height());
-        radius *= scale;
+        radii = radii * scale;
     }
-    return radius;
+    return radii;
 }
 
 int CaptureOverlay::rawHoveredWindowIndex() const {
@@ -4439,7 +4443,7 @@ bool CaptureOverlay::hydrateWindowArtifact(WindowArtifact& window) {
         capturedWindow.selectionRounding = window.selectionRounding;
         capturedWindow.selectionGeometry = window.selectionGeometry;
         capturedWindow.selectionClipGeometry = window.selectionClipGeometry;
-        capturedWindow.rounding = info.rounding;
+        capturedWindow.rounding = info.cornerRadii();
         capturedWindow.roundingPower = info.roundingPower;
         capturedWindow.borderSize = info.borderSize;
 
@@ -4829,7 +4833,7 @@ std::function<QImage()> CaptureOverlay::windowResultRenderer(const WindowArtifac
             clipWindowBackgroundToFrame(background,
                                         logicalSource,
                                         windowArtifact->visibleGeometry,
-                                        windowArtifact->fullscreen ? 0.0 : windowArtifact->rounding,
+                                        windowArtifact->fullscreen ? hyprcapture::CornerRadii{} : windowArtifact->rounding,
                                         windowArtifact->roundingPower); }
             if (hdr) {
                 QImage linearBackground;
@@ -5118,7 +5122,7 @@ QImage CaptureOverlay::scrollWindowBackground(const QImage& frame, const QRect& 
     if (!painted)
         return QImage{};
     clipWindowBackgroundToFrame(background, geometry, window->visibleGeometry,
-                                window->fullscreen ? 0.0 : window->rounding, window->roundingPower);
+                                window->fullscreen ? hyprcapture::CornerRadii{} : window->rounding, window->roundingPower);
     return background;
 }
 

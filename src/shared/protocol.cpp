@@ -433,6 +433,18 @@ bool windowValue(const Json& obj, WindowInfo& out) {
         !boolValue(obj, "selectable", window.selectable, false) || !boolValue(obj, "stagePreview", window.stagePreview, false))
         return false;
 
+    if (const auto corners = obj.find("roundingCorners"); corners != obj.end()) {
+        CornerRadii radii;
+        if (!corners->is_object() ||
+            !doubleValue(*corners, "topLeft", radii.topLeft, 0.0, MAX_LOGICAL_COORDINATE) ||
+            !doubleValue(*corners, "topRight", radii.topRight, 0.0, MAX_LOGICAL_COORDINATE) ||
+            !doubleValue(*corners, "bottomRight", radii.bottomRight, 0.0, MAX_LOGICAL_COORDINATE) ||
+            !doubleValue(*corners, "bottomLeft", radii.bottomLeft, 0.0, MAX_LOGICAL_COORDINATE))
+            return false;
+        window.roundingCorners = radii;
+        window.rounding = radii.max();
+    }
+
     if (window.artifactFormat != "rgba8" && window.artifactFormat != "rgba16f-linear-srgb") return false;
     if (!window.artifactPath.empty() && (window.artifactWidth <= 0 || window.artifactHeight <= 0))
         return false;
@@ -523,6 +535,13 @@ std::string encodeSessionJson(const CaptureSession& session) {
     for (const auto& win : session.windows) {
         if (root["windows"].size() >= MAX_SESSION_WINDOWS)
             break;
+        const auto boundedRadius = [](double value) { return boundedDouble(value, 0.0, MAX_LOGICAL_COORDINATE); };
+        CornerRadii radii;
+        if (win.roundingCorners) {
+            const auto& corners = *win.roundingCorners;
+            radii = {boundedRadius(corners.topLeft), boundedRadius(corners.topRight),
+                     boundedRadius(corners.bottomRight), boundedRadius(corners.bottomLeft)};
+        }
         Json windowJson{
             {"address", boundedString(win.address, MAX_METADATA_STRING_BYTES)},
             {"title", boundedString(win.title, MAX_METADATA_STRING_BYTES)},
@@ -531,7 +550,7 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"fullscreen", win.fullscreen},
             {"visibleGeometry", rectJson(win.visibleGeometry)},
             {"fullGeometry", rectJson(win.fullGeometry)},
-            {"rounding", boundedDouble(win.rounding, 0.0, MAX_LOGICAL_COORDINATE)},
+            {"rounding", win.roundingCorners ? radii.max() : boundedRadius(win.rounding)},
             {"roundingPower", boundedDouble(win.roundingPower, 1.0, 10.0, 2.0)},
             {"borderSize", boundedDouble(win.borderSize, 0.0, MAX_LOGICAL_COORDINATE)},
             {"artifactFormat", win.artifactFormat},
@@ -547,6 +566,9 @@ std::string encodeSessionJson(const CaptureSession& session) {
             {"zIndex", std::clamp(win.zIndex, 0, static_cast<int>(MAX_SESSION_WINDOWS))},
             {"selectable", win.selectable},
         };
+        if (win.roundingCorners)
+            windowJson["roundingCorners"] = {{"topLeft", radii.topLeft}, {"topRight", radii.topRight},
+                                             {"bottomRight", radii.bottomRight}, {"bottomLeft", radii.bottomLeft}};
         if (win.stagePreview)
             windowJson["stagePreview"] = true;
         if (win.selectionRounding)

@@ -3,6 +3,7 @@
 #include <atomic>
 
 #include "shared/config.hpp"
+#include "shared/corner_radii.hpp"
 #include "ui/overlay_paint.hpp"
 #include "ui/scroll_stitcher.hpp"
 #include "ui/session_lock_guard.hpp"
@@ -114,7 +115,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
         std::optional<double> selectionRounding;
         QRect   selectionClipGeometry;
         bool    stagePreview = false;
-        double  rounding = 0.0;
+        hyprcapture::CornerRadii rounding;
         double  roundingPower = 2.0;
         double  borderSize = 0.0;
         QImage  image;
@@ -272,7 +273,7 @@ class CaptureOverlay final : public QMainWindow, public hyprcapture::ui::Session
     bool selectedWindowUsesOverviewSelection() const;
     void beginHymissionCaptureInputSuppression();
     void endHymissionCaptureInputSuppression();
-    double windowFrameRadius(const WindowArtifact& window, bool selection = true) const;
+    hyprcapture::CornerRadii windowFrameRadii(const WindowArtifact& window, bool selection = true) const;
     bool hydrateWindowArtifact(WindowArtifact& window);
     bool windowWheelSelectionEnabled() const;
     std::vector<int> currentMonitorWindowCandidates() const;

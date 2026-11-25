@@ -295,8 +295,8 @@ struct ShadowRenderGeometry {
     CBox   shadowBox;
     CBox   windowCutoutBox;
     double range = 0.0;
-    double rounding = 0.0;
-    double windowRounding = 0.0;
+    CornerRadii rounding;
+    CornerRadii windowRounding;
     double roundingPower = 2.0;
     int    shadowPower = 3;
     bool   sharp = false;
@@ -3300,100 +3300,58 @@ double hyprlandRoundedShadowMultiplier(double x,
                                        double fullWidth,
                                        double fullHeight,
                                        double range,
-                                       double rounding,
+                                       const CornerRadii& rounding,
                                        double roundingPower,
                                        int    shadowPower) {
-    if (range <= 0.0 || fullWidth <= 0.0 || fullHeight <= 0.0)
-        return 0.0;
-
-    const double radius = range + std::max(0.0, rounding);
-    const double left = range + std::max(0.0, rounding);
-    const double top = range + std::max(0.0, rounding);
-    const double right = fullWidth - left;
-    const double bottom = fullHeight - top;
-
-    const auto roundedDistanceMultiplier = [&](double distanceToCorner) {
-        if (distanceToCorner > radius)
-            return 0.0;
-        if (distanceToCorner > radius - range)
-            return std::pow((radius - distanceToCorner) / range, shadowPower);
-        return 1.0;
-    };
-
-    bool   corner = false;
-    double multiplier = 1.0;
-    if (x < left) {
-        if (y < top) {
-            multiplier = roundedDistanceMultiplier(modifiedShadowLength(x - left, y - top, roundingPower));
-            corner = true;
-        } else if (y > bottom) {
-            multiplier = roundedDistanceMultiplier(modifiedShadowLength(x - left, y - bottom, roundingPower));
-            corner = true;
-        }
-    } else if (x > right) {
-        if (y < top) {
-            multiplier = roundedDistanceMultiplier(modifiedShadowLength(x - right, y - top, roundingPower));
-            corner = true;
-        } else if (y > bottom) {
-            multiplier = roundedDistanceMultiplier(modifiedShadowLength(x - right, y - bottom, roundingPower));
-            corner = true;
-        }
+    const double radius = range + rounding.at(x < fullWidth * 0.5, y < fullHeight * 0.5);
+    // Match the shader's corner tests when the falloff extends past the midpoint.
+    const double dx = x < radius ? radius - x : x - (fullWidth - radius);
+    const double dy = y < radius ? radius - y : y - (fullHeight - radius);
+    if (dx > 0.0 && dy > 0.0) {
+        const double distance = modifiedShadowLength(dx, dy, roundingPower);
+        return std::pow(std::clamp((radius - distance) / range, 0.0, 1.0), shadowPower);
     }
 
-    if (!corner) {
-        const double smallest = std::min({y, fullHeight - y, x, fullWidth - x});
-        if (smallest < range)
-            multiplier = std::pow(std::clamp(smallest / range, 0.0, 1.0), shadowPower);
-    }
-
-    return std::clamp(multiplier, 0.0, 1.0);
+    const double edge = std::min({x, fullWidth - x, y, fullHeight - y});
+    return std::pow(std::clamp(edge / range, 0.0, 1.0), shadowPower);
 }
 
-bool hyprlandPointInRoundedRect(double x, double y, double left, double top, double right, double bottom, double radius, double roundingPower) {
+// Callers clamp the radii to the box once before sampling pixels.
+bool hyprlandPointInRoundedRect(double x, double y, double left, double top, double right, double bottom,
+                               const CornerRadii& rounding, double roundingPower) {
     if (x < left || x > right || y < top || y > bottom)
         return false;
 
-    if (radius <= 0.0)
-        return true;
-
-    radius = std::min(radius, std::min((right - left) * 0.5, (bottom - top) * 0.5));
-    const double innerLeft = left + radius;
-    const double innerTop = top + radius;
-    const double innerRight = right - radius;
-    const double innerBottom = bottom - radius;
-
-    if (x >= innerLeft && x <= innerRight)
-        return true;
-    if (y >= innerTop && y <= innerBottom)
-        return true;
-
-    const double dx = x < innerLeft ? innerLeft - x : x - innerRight;
-    const double dy = y < innerTop ? innerTop - y : y - innerBottom;
-    return modifiedShadowLength(dx, dy, roundingPower) <= radius;
+    const bool onLeft = x < (left + right) * 0.5;
+    const bool onTop = y < (top + bottom) * 0.5;
+    const double radius = rounding.at(onLeft, onTop);
+    const double dx = radius - (onLeft ? x - left : right - x);
+    const double dy = radius - (onTop ? y - top : bottom - y);
+    return dx <= 0.0 || dy <= 0.0 || modifiedShadowLength(dx, dy, roundingPower) <= radius;
 }
 
-double shadowRoundingPx(const PHLWINDOW& window, double scale) {
-    if (!window)
-        return 0.0;
+CornerRadii windowRoundingPx(const PHLWINDOW& window, double scale) {
+    if (!window || isMonitorFullscreenWindow(window))
+        return {};
+
+    const auto radii = window->presentation().rounding();
+    return CornerRadii{radii.topLeft, radii.topRight, radii.bottomRight, radii.bottomLeft} * scale;
+}
+
+CornerRadii shadowRoundingPx(const PHLWINDOW& window, double scale) {
+    if (!window || isMonitorFullscreenWindow(window))
+        return {};
 
     const double borderSize = window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
-    const double roundingBase = std::max(0.0F, window->presentation().rounding().max());
     const double roundingPower = std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
     const double correctionOffset = borderSize * (std::sqrt(2.0) - 1.0) * std::max(2.0 - roundingPower, 0.0);
-    const double rounding = roundingBase > 0.0 ? (roundingBase + borderSize) - correctionOffset : 0.0;
-    return std::max(0.0, rounding * scale);
+    return windowRoundingPx(window, 1.0).expanded(borderSize - correctionOffset) * scale;
 }
 
 double shadowBorderPx(const PHLWINDOW& window, double scale) {
     if (!window || window->backend().traits().suggestsNoBorder)
         return 0.0;
     return std::max(0.0, static_cast<double>(std::max(0, window->presentation().borderSize())) * scale);
-}
-
-double windowRoundingPx(const PHLWINDOW& window, double scale) {
-    if (!window || isMonitorFullscreenWindow(window))
-        return 0.0;
-    return std::max(0.0, static_cast<double>(window->presentation().rounding().max()) * scale);
 }
 
 int configuredShadowRangePx(double scale) {
@@ -3472,15 +3430,17 @@ std::optional<ShadowRenderGeometry> shadowRenderGeometry(const RgbaReadback& rea
     CBox windowCutoutBox{visibleLeft - shadowBox.x, visibleTop - shadowBox.y, std::max(1.0, visibleRight - visibleLeft), std::max(1.0, visibleBottom - visibleTop)};
 
     static auto PSHADOWPOWER = CConfigValue<Config::INTEGER>("decoration:shadow:render_power");
+    const bool sharp = configuredShadowSharp();
+    const double falloff = sharp ? 0.0 : range;
     return ShadowRenderGeometry{
         .shadowBox = shadowBox,
         .windowCutoutBox = windowCutoutBox,
         .range = range,
-        .rounding = shadowRoundingPx(window, shadowScale),
-        .windowRounding = windowRoundingPx(window, shadowScale),
+        .rounding = shadowRoundingPx(window, shadowScale).clamped(shadowBox.w - 2.0 * falloff, shadowBox.h - 2.0 * falloff),
+        .windowRounding = windowRoundingPx(window, shadowScale).clamped(windowCutoutBox.w, windowCutoutBox.h),
         .roundingPower = window ? std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0) : 2.0,
         .shadowPower = std::clamp(sc<int>(*PSHADOWPOWER), 1, 4),
-        .sharp = configuredShadowSharp(),
+        .sharp = sharp,
     };
 }
 
@@ -3597,15 +3557,10 @@ void repairTransparentShadow(RgbaReadback& readback, const CBox& artifactBox, co
         if (!shadowColoredPixel && !transparentShadowPadding)
             return;
 
-        const double multiplier = geometry->sharp ? 1.0 :
-                                                    hyprlandRoundedShadowMultiplier(centerX,
-                                                                                   centerY,
-                                                                                   shadowWidth,
-                                                                                   shadowHeight,
-                                                                                   geometry->range,
-                                                                                   geometry->rounding,
-                                                                                   geometry->roundingPower,
-                                                                                   geometry->shadowPower);
+        const double multiplier = geometry->sharp ?
+            hyprlandPointInRoundedRect(centerX, centerY, 0.0, 0.0, shadowWidth, shadowHeight, geometry->rounding, geometry->roundingPower) :
+            hyprlandRoundedShadowMultiplier(centerX, centerY, shadowWidth, shadowHeight, geometry->range,
+                                            geometry->rounding, geometry->roundingPower, geometry->shadowPower);
         int          repairedAlpha = std::clamp(static_cast<int>(std::lround(color.a * multiplier)), 0, color.a);
         if (repairedAlpha <= 0 && existingShadowPixel)
             repairedAlpha = reconstructedShadowAlpha(px, color);
@@ -3641,18 +3596,21 @@ void repairTransparentShadow(RgbaReadback& readback, const CBox& artifactBox, co
     repairRegion(repairLeft, cutoutTop, cutoutLeft, cutoutBottom, false);
     repairRegion(cutoutRight, cutoutTop, repairRight, cutoutBottom, false);
 
-    const int cornerRadius = std::clamp(static_cast<int>(std::ceil(geometry->windowRounding)), 0, std::max(cutoutRight - cutoutLeft, cutoutBottom - cutoutTop));
-    if (cornerRadius <= 0)
-        return;
+    const auto repairCorner = [&](bool left, bool top) {
+        const double radius = geometry->windowRounding.at(left, top);
+        if (radius <= 0.0)
+            return;
 
-    repairRegion(cutoutLeft, cutoutTop, std::min(cutoutLeft + cornerRadius, cutoutRight), std::min(cutoutTop + cornerRadius, cutoutBottom), true);
-    repairRegion(std::max(cutoutRight - cornerRadius, cutoutLeft), cutoutTop, cutoutRight, std::min(cutoutTop + cornerRadius, cutoutBottom), true);
-    repairRegion(cutoutLeft, std::max(cutoutBottom - cornerRadius, cutoutTop), std::min(cutoutLeft + cornerRadius, cutoutRight), cutoutBottom, true);
-    repairRegion(std::max(cutoutRight - cornerRadius, cutoutLeft),
-                 std::max(cutoutBottom - cornerRadius, cutoutTop),
-                 cutoutRight,
-                 cutoutBottom,
-                 true);
+        const int innerX = static_cast<int>(left ? std::ceil(cutoutAbsLeft + radius) : std::floor(cutoutAbsRight - radius));
+        const int innerY = static_cast<int>(top ? std::ceil(cutoutAbsTop + radius) : std::floor(cutoutAbsBottom - radius));
+        const int x = std::clamp(innerX, cutoutLeft, cutoutRight);
+        const int y = std::clamp(innerY, cutoutTop, cutoutBottom);
+        repairRegion(left ? cutoutLeft : x, top ? cutoutTop : y, left ? x : cutoutRight, top ? y : cutoutBottom, true);
+    };
+    repairCorner(true, true);
+    repairCorner(false, true);
+    repairCorner(false, false);
+    repairCorner(true, false);
 }
 
 void compositeWindowOverBackground(RgbaReadback& frame, const RgbaReadback& background) {
@@ -3727,7 +3685,7 @@ void compositeOutsideWindowOverSolidBackground(RgbaReadback& frame,
     if (!std::isfinite(visibleLeft) || !std::isfinite(visibleTop) || !std::isfinite(visibleRight) || !std::isfinite(visibleBottom))
         return;
 
-    const double rounding = windowRoundingPx(window, std::max(scaleX, scaleY));
+    const auto rounding = windowRoundingPx(window, std::max(scaleX, scaleY)).clamped(visibleRight - visibleLeft, visibleBottom - visibleTop);
     const double roundingPower = window ? std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0) : 2.0;
     for (int y = 0; y < frame.height; ++y) {
         for (int x = 0; x < frame.width; ++x) {
@@ -4118,7 +4076,7 @@ CaptureSession captureCompositorArtifacts(const CaptureDefaults& defaults, bool 
         info.fullscreen = isMonitorFullscreenWindow(window);
         info.zIndex = z++;
         const bool dontRound = info.fullscreen;
-        info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding().max());
+        info.roundingCorners = windowRoundingPx(window, 1.0);
         info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
         info.borderSize = dontRound || window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
         const std::string artifactId = pointerId(window.get()) + "-" + std::to_string(info.zIndex);
@@ -4265,7 +4223,7 @@ LaunchResult captureWindowArtifactFromRequestFile(const std::string& path) {
     info.fullscreen = isMonitorFullscreenWindow(window);
     info.zIndex = 0;
     const bool dontRound = info.fullscreen;
-    info.rounding = dontRound ? 0.0 : std::max(0.0F, window->presentation().rounding().max());
+    info.roundingCorners = windowRoundingPx(window, 1.0);
     info.roundingPower = dontRound ? 2.0 : std::clamp(static_cast<double>(window->presentation().roundingPower()), 1.0, 10.0);
     info.borderSize = dontRound || window->backend().traits().suggestsNoBorder ? 0.0 : std::max(0, window->presentation().borderSize());
     info.visibleGeometry = toRect(renderedWindowGoalMainSurfaceBox(window));
@@ -4463,8 +4421,9 @@ bool captureWindowGpuStreamFrame(WindowStreamSession& session, const WindowStrea
                 .cutoutWidth = shadow->windowCutoutBox.w,
                 .cutoutHeight = shadow->windowCutoutBox.h,
                 .range = shadow->range,
-                .rounding = shadow->rounding,
-                .windowRounding = shadow->windowRounding,
+                // HCGF v1 is shared with viewflowd and carries one radius; use the largest corner.
+                .rounding = shadow->rounding.max(),
+                .windowRounding = shadow->windowRounding.max(),
                 .roundingPower = shadow->roundingPower,
                 .power = static_cast<std::uint32_t>(shadow->shadowPower),
                 .rgba = {static_cast<std::uint8_t>(color.r), static_cast<std::uint8_t>(color.g), static_cast<std::uint8_t>(color.b), static_cast<std::uint8_t>(color.a)},

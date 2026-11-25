@@ -458,6 +458,32 @@ int main() {
     require(decoded->monitors.front().singleWorkspaceWindowClass == "Class", "decoded single workspace window class");
     require(decoded->monitors.front().singleWorkspaceWindowTitle == "Title", "decoded single workspace window title");
     require(decoded->windows.front().artifactPath == "/tmp/window.rgba", "decoded artifact path");
+    require(!decoded->windows.front().roundingCorners && decoded->windows.front().rounding == 12,
+            "legacy scalar window rounding decodes");
+    auto cornerSession = session;
+    cornerSession.windows.front().fullscreen = false;
+    cornerSession.windows.front().roundingCorners = CornerRadii{32.5, 0, 12.25, 5};
+    auto cornerJson = nlohmann::json::parse(encodeSessionJson(cornerSession));
+    auto& cornerWindow = cornerJson["windows"][0];
+    require(cornerWindow["rounding"] == 32.5, "legacy radius is the largest corner");
+    require(cornerWindow["roundingCorners"] == nlohmann::json{{"topLeft", 32.5}, {"topRight", 0}, {"bottomRight", 12.25}, {"bottomLeft", 5}},
+            "corner radii use named JSON fields");
+    const auto cornersDecoded = decodeSessionJson(cornerJson.dump());
+    require(cornersDecoded && cornersDecoded->windows.front().cornerRadii() == *cornerSession.windows.front().roundingCorners,
+            "unequal corner radii survive round trip");
+    const auto cornersJson = cornerWindow["roundingCorners"];
+    cornerWindow.erase("roundingCorners");
+    const auto scalarDecoded = decodeSessionJson(cornerJson.dump());
+    require(scalarDecoded && scalarDecoded->windows.front().cornerRadii() == CornerRadii::uniform(32.5),
+            "legacy scalar applies to all corners");
+    for (const auto& badRadius : {nlohmann::json(-1), nlohmann::json(1000001), nlohmann::json("12"), nlohmann::json(nullptr)}) {
+        cornerWindow["roundingCorners"] = cornersJson;
+        cornerWindow["roundingCorners"]["bottomLeft"] = badRadius;
+        require(!decodeSessionJson(cornerJson.dump()), "invalid corner radius is rejected");
+    }
+    cornerWindow["roundingCorners"] = cornersJson;
+    cornerWindow["roundingCorners"].erase("bottomLeft");
+    require(!decodeSessionJson(cornerJson.dump()), "missing corner radius is rejected");
     require(decoded->windows.front().stagePreview, "Stage selection marker survives round trip");
     require(decoded->windows.front().selectionRounding == 17.5, "preview radius round trip");
     require(decoded->windows.front().selectionGeometry.has_value(), "decoded selection geometry exists");

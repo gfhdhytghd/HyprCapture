@@ -1,6 +1,7 @@
 #pragma once
 
 #include "shared/config.hpp"
+#include "shared/corner_radii.hpp"
 
 #include <cstdint>
 #include <optional>
@@ -56,7 +57,13 @@ struct WindowInfo {
     std::optional<Rect> selectionClipGeometry;
     std::optional<double> selectionRounding;
     bool        stagePreview = false;
-    double      rounding = 0.0;
+    double      rounding = 0.0; // Legacy uniform radius or maximum of roundingCorners.
+    std::optional<CornerRadii> roundingCorners;
+
+    CornerRadii cornerRadii() const {
+        return fullscreen ? CornerRadii{} : roundingCorners.value_or(CornerRadii::uniform(rounding));
+    }
+
     double      roundingPower = 2.0;
     double      borderSize = 0.0;
     std::string artifactFormat = "rgba8"; // rgba16f-linear-srgb: 1.0 = 80 nits, straight alpha
