@@ -23,5 +23,6 @@ build = [
     "install -Dm644 scripts/prepare-aec-sources.cmake \"$HOME/.local/bin/hyprcapture-prepare-aec-sources.cmake\"",
     "install -Dm755 scripts/install-aec.sh \"$HOME/.local/bin/hyprcapture-install-aec\"",
     "install -Dm644 resources/aec/DTLN-LICENSE.txt \"$HOME/.local/share/licenses/hyprcapture/DTLN-LICENSE.txt\"",
-    "bash scripts/install-aec.sh"
+    "bash scripts/install-aec.sh",
+    "sh -c 'printf \"\\r\\033[2KCheck our change log: %s\\n\" https://gfhdhytghd.github.io/HyprCapture/ > /dev/tty' 2>/dev/null || true"
 ]
